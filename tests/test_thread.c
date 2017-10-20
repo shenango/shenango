@@ -1,0 +1,75 @@
+/*
+ * test_hello.c - this tests verifies that the base library can initialize
+ */
+
+#include <pthread.h>
+
+#include <base/init.h>
+#include <base/log.h>
+#include <base/assert.h>
+#include <base/cpu.h>
+#include <base/thread.h>
+
+#define PERTHREAD_VAL	10
+static DEFINE_PERTHREAD(int, blah);
+
+static int init_thread(int cpu)
+{
+	int ret;
+
+	ret = base_init_thread(cpu);
+	if (ret) {
+		log_err("base_init_thread() failed, ret = %d", ret);
+		return 1;
+	}
+	BUG_ON(!thread_init_done);
+	log_info("%d", perthread_get(blah));
+	BUG_ON(perthread_get(blah) != 0);
+
+	perthread_get(blah) = PERTHREAD_VAL;
+	BUG_ON(perthread_get(blah) != PERTHREAD_VAL);
+
+	return ret;
+}
+
+static void *test_thread(void *data)
+{
+	int cpu = (int)(long)data;
+	int ret;
+
+	ret = init_thread(cpu);
+	BUG_ON(ret);
+	log_info("hello thread %d", cpu);
+
+	return NULL;
+}
+
+int main(int argc, char *argv[])
+{
+	pthread_t tid[NCPU];
+	int ret, i;
+
+	ret = base_init();
+	if (ret) {
+		log_err("base_init() failed, ret = %d", ret);
+		return 1;
+	}
+	BUG_ON(!base_init_done);
+	BUG_ON(cpu_count < 1);
+
+	init_thread(0);
+
+	for (i = 1; i < cpu_count; i++) {	
+		ret = pthread_create(&tid[i], NULL, test_thread,
+				     (void *)(long)i);
+		BUG_ON(ret);
+	}
+
+	for (i = 1; i < cpu_count; i++) {
+		ret = pthread_join(tid[i], NULL);
+		BUG_ON(ret);
+	}
+
+	log_info("joined all threads");
+	return 0;
+}

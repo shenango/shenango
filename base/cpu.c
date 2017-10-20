@@ -1,0 +1,89 @@
+/*
+ * cpu.c - support for scanning cpu topology.
+ */
+
+#include <unistd.h>
+#include <limits.h>
+#include <stdio.h>
+#include <sys/syscall.h>
+
+#include <base/stddef.h>
+#include <base/log.h>
+#include <base/cpu.h>
+#include <base/sysfs.h>
+#include <base/bitmap.h>
+#include <base/init.h>
+
+#include "init_internal.h"
+
+/* the number of CPU nodes detected */
+int cpu_count;
+/* the number of NUMA nodes detected */
+int numa_count;
+/* a table of information on each CPU */
+struct cpu_info cpu_info_tbl[NCPU];
+
+static int cpu_scan_topology(void)
+{
+	char path[PATH_MAX];
+	DEFINE_BITMAP(numa_mask, NNUMA);
+	int i;
+	uint64_t tmp;
+
+	/* How many NUMA nodes? */
+	if (sysfs_parse_bitlist("/sys/devices/system/node/online",
+			        numa_mask, NNUMA))
+		return -EIO;
+	bitmap_for_each_set(numa_mask, NNUMA, i) {
+		numa_count++;
+		if (numa_count <= i) {
+			log_err("cpu: can't support non-contiguous NUMA mask.");
+			return -EINVAL;
+		}
+	}
+	
+	/* How many CPUs? */
+	cpu_count = sysconf(_SC_NPROCESSORS_CONF);
+	if (cpu_count <= 0 || cpu_count > NCPU)
+		return -EINVAL;
+
+	/* Scan the CPU topology. */
+	for (i = 0; i < cpu_count; i++) {
+		snprintf(path, sizeof(path), SYSFS_CPU_TOPOLOGY_PATH
+			 "/physical_package_id", i);
+		if (sysfs_parse_val(path, &tmp))
+			return -EIO;
+		if (tmp > UINT_MAX)
+			return -ERANGE;
+		cpu_info_tbl[i].package = (int)tmp;
+
+		snprintf(path, sizeof(path), SYSFS_CPU_TOPOLOGY_PATH
+			 "/core_siblings_list", i);
+		if (sysfs_parse_bitlist(path,
+			cpu_info_tbl[i].core_siblings_mask, cpu_count))
+			return -EIO;
+
+		snprintf(path, sizeof(path), SYSFS_CPU_TOPOLOGY_PATH
+			 "/thread_siblings_list", i);
+		if (sysfs_parse_bitlist(path,
+			cpu_info_tbl[i].thread_siblings_mask, cpu_count))
+			return -EIO;
+	}
+
+	return 0;
+}
+
+/**
+ * cpu_init - initializes CPU support
+ *
+ * Returns zero if successful, otherwise fail.
+ */
+int cpu_init(void)
+{
+	int ret = cpu_scan_topology();
+	if (ret)
+		return ret;
+
+	log_info("cpu: detected %d cores, %d nodes", cpu_count, numa_count);
+	return 0;
+}
