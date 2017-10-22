@@ -125,17 +125,18 @@ static inline uint64_t hash_city_two(uint64_t val_a, uint64_t val_b)
 extern uint32_t jenkins_hash(const void *key, size_t length);
 
 /**
- * rand_crc32c - generates a very fast psuedorandom value using crc32c
+ * rand_crc32c - generates a very fast pseudorandom value using crc32c
+ * @seed: a seed-value for the hash
  *
  * WARNING: not a cryptographic hash.
  */
-static inline uint64_t rand_crc32c(void)
+static inline uint64_t rand_crc32c(uint32_t seed)
 {
-	return hash_crc32c_one(0xDEADBEEF, rdtsc());
+	return hash_crc32c_one(seed, rdtsc());
 }
 
 /**
- * rand_city - generates a very fast psuedorandom value using cith hash
+ * rand_city - generates a very fast pseudorandom value using city hash
  *
  * WARNING: not a cryptographic hash.
  */

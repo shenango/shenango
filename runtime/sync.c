@@ -20,7 +20,7 @@ void __mutex_lock(mutex_t *m)
 	thread_t *myth = thread_self();
 
 	spin_lock(&m->waiter_lock);
-	/* was the mutex released just before we acquired the waiter lock? */
+	/* was the mutex released before we acquired the waiter lock? */
 	if (!atomic_read(&m->state)) {
 		if (!atomic_fetch_and_add(&m->state, 1)) {
 			spin_unlock(&m->waiter_lock);
@@ -28,7 +28,7 @@ void __mutex_lock(mutex_t *m)
 		}
 	}
 	list_add_tail(&m->waiters, &myth->link);
-	thread_park_and_unlock(&m->waiter_lock);	
+	thread_park_and_unlock(&m->waiter_lock);
 }
 
 /* handles contended mutex unlocking */
@@ -38,8 +38,12 @@ void __mutex_unlock(mutex_t *m)
 
 	spin_lock(&m->waiter_lock);
 	waketh = list_pop(&m->waiters, thread_t, link);
+	if (!waketh) {
+		atomic_write(&m->state, 0);
+		spin_unlock(&m->waiter_lock);
+		return;
+	}
 	thread_ready(waketh);
-	atomic_write(&m->state, 0);
 	spin_unlock(&m->waiter_lock);
 }
 
@@ -73,6 +77,8 @@ void condvar_wait(condvar_t *cv, mutex_t *m)
 	mutex_unlock(m);
 	list_add_tail(&cv->waiters, &myth->link);
 	thread_park_and_unlock(&cv->waiter_lock);
+
+	mutex_lock(m);
 }
 
 /**

@@ -114,7 +114,7 @@ again:
 		call_thread(th);
 
 	/* then try a random victim */
-	r = qs[rand_city() % nr_qs];
+	r = qs[rand_crc32c((uintptr_t)r) % nr_qs];
 	if (spin_try_lock(&r->lock)) {
 		th = list_pop(&r->runnable, thread_t, link);
 		spin_unlock(&r->lock);
