@@ -76,8 +76,9 @@ struct thread {
 	struct thread_tf	tf;
 	struct list_node	link;
 	struct stack		*stack;
-	int			main_thread:1;
-	int			state;
+	unsigned int		main_thread:1;
+	unsigned int		state;
+	void			*chan_buf; /* for channels */
 };
 
 typedef void (*runtime_fn_t)(unsigned long arg);

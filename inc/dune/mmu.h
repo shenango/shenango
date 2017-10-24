@@ -69,16 +69,16 @@ typedef uint64_t ptent_t;
 #define PTE_G		0x0100		/* Global */
 #define PTE_AVAIL	0x0E00		/* 3 bits not used by hardware */
 #define PTE_PAT_PS	0x1000		/* Page attribute table, in 2MB PTE */
-#define PTE_AVAIL2	UINT64(0x7FF0000000000000) /* 11 bits not used by hardware */
-#define PTE_NX		UINT64(0x8000000000000000) /* No execute */
+#define PTE_AVAIL2	0x7FF0000000000000UL /* 11 bits not used by hardware */
+#define PTE_NX		0x8000000000000000UL /* No execute */
 
 /* OS Specific Flags - Using available bits in PTE */
 #define PTE_PAGE	0x0200		/* backed by a page */
 #define PTE_COW		0x0400		/* copy-on-write */
 
 /* address in page table entry */
-#define PTE_ADDR(pte) ((physaddr_t)(pte) & UINT64(0xffffffffff000))
-#define PTE_FLAGS(pte) ((physaddr_t)(pte) & UINT64(0xfff0000000000fff))
+#define PTE_ADDR(pte) ((physaddr_t)(pte) & 0xffffffffff000UL)
+#define PTE_FLAGS(pte) ((physaddr_t)(pte) & 0xfff0000000000fffUL)
 
 /* Control Register flags */
 #define CR0_PE 0x1		/* Protected mode enable */
