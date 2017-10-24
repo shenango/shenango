@@ -1,5 +1,5 @@
 INC     = -I./inc
-CFLAGS  = -g -Wall -std=gnu11 -D_GNU_SOURCE -O3 $(INC)
+CFLAGS  = -g -Wall -std=gnu11 -D_GNU_SOURCE $(INC)
 LDFLAGS = -T base/base.ld
 LD	= gcc
 CC	= gcc
@@ -9,10 +9,10 @@ SPARSE	= sparse
 CHECKFLAGS = -D__CHECKER__ -Waddress-space
 
 ifneq ($(DEBUG),)
-CFLAGS += -DDEBUG -DCCAN_LIST_DEBUG -rdynamic
+CFLAGS += -DDEBUG -DCCAN_LIST_DEBUG -rdynamic -O0 -ggdb
 LDFLAGS += -rdynamic
 else
-CFLAGS += -DNDEBUG
+CFLAGS += -DNDEBUG -O3
 endif
 
 # handy for debugging
