@@ -1,0 +1,22 @@
+[package]
+name = "shenango"
+version = "0.1.0"
+authors = ["The Shenango Developers"]
+
+[dependencies]
+libc = "0.2"
+
+[build-dependencies]
+bindgen = "0.26.3"
+
+[[bin]]
+name = "runtime_threads"
+path = "src/test_runtime_threads.rs"
+
+[[bin]]
+name = "hello"
+path = "src/test_hello.rs"
+
+[[bin]]
+name = "smalloc"
+path = "src/test_smalloc.rs"
