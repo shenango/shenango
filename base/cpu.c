@@ -27,8 +27,9 @@ static int cpu_scan_topology(void)
 {
 	char path[PATH_MAX];
 	DEFINE_BITMAP(numa_mask, NNUMA);
-	int i;
+	DEFINE_BITMAP(cpu_mask, NCPU);
 	uint64_t tmp;
+	int i;
 
 	/* How many NUMA nodes? */
 	if (sysfs_parse_bitlist("/sys/devices/system/node/online",
@@ -41,11 +42,30 @@ static int cpu_scan_topology(void)
 			return -EINVAL;
 		}
 	}
+
+	if (numa_count <= 0 || numa_count > NNUMA) {
+		log_err("cpu: detected %d NUMA nodes, unsupported count.",
+			numa_count);
+		return -EINVAL;
+	}
 	
 	/* How many CPUs? */
-	cpu_count = sysconf(_SC_NPROCESSORS_CONF);
-	if (cpu_count <= 0 || cpu_count > NCPU)
+	if (sysfs_parse_bitlist("/sys/devices/system/cpu/online",
+			        cpu_mask, NCPU))
+		return -EIO;
+	bitmap_for_each_set(cpu_mask, NCPU, i) {
+		cpu_count++;
+		if (cpu_count <= i) {
+			log_err("cpu: can't support non-contiguous CPU mask.");
+			return -EINVAL;
+		}
+	}
+
+	if (cpu_count <= 0 || cpu_count > NCPU) {
+		log_err("cpu: detected %d CPUs, unsupported count.",
+			cpu_count);
 		return -EINVAL;
+	}
 
 	/* Scan the CPU topology. */
 	for (i = 0; i < cpu_count; i++) {
