@@ -1,5 +1,5 @@
 /*
- * test_hello.c - this tests verifies that the base library can initialize
+ * test_base_hello.c - this tests verifies that the base library can initialize
  */
 
 #include <base/init.h>

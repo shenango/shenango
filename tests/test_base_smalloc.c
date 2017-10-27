@@ -1,5 +1,5 @@
 /*
- * test_hello.c - this tests verifies that the base library can initialize
+ * test_base_smalloc.c - tests the base library allocator
  */
 
 #include <stdlib.h>

@@ -5,25 +5,23 @@
 #include <string.h>
 
 #include <base/lrpc.h>
-#include <base/slab.h>
 
 /* internal use only */
-bool __lrpc_send_slow(struct lrpc_chan *chan, uint32_t cmd,
-		      uint32_t group, void *data)
+bool __lrpc_send_slow(struct lrpc_chan *chan, uint64_t cmd,
+		      void *payload)
 {
 	struct lrpc_msg *dst;
 
-	assert(chan->send_tail - chan->send_head == chan->size);
+	assert(chan->send_head - chan->send_tail == chan->size);
 
-	chan->send_head = load_acquire(chan->recv_head_wb);
-        if (chan->send_tail - chan->send_head == chan->size)
+	chan->send_tail = load_acquire(chan->recv_head_wb);
+        if (chan->send_head - chan->send_tail == chan->size)
                 return false;
 
-	dst = &chan->tbl[chan->send_tail & lrpc_mask(chan)];
-	dst->group = group;
-	dst->data = data;
+	dst = &chan->tbl[chan->send_head & lrpc_mask(chan)];
+	dst->payload = payload;
 
-	cmd |= (chan->send_tail++ & chan->size) ? 0 : LRPC_DONE_PARITY;
+	cmd |= (chan->send_head++ & chan->size) ? 0 : LRPC_DONE_PARITY;
 	store_release(&dst->cmd, cmd);
 	return true;
 }

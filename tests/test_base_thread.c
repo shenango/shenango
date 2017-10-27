@@ -1,5 +1,5 @@
 /*
- * test_hello.c - this tests verifies that the base library can initialize
+ * test_base_thread.c - this base support for threads
  */
 
 #include <pthread.h>
