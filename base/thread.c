@@ -28,13 +28,12 @@ static int thread_init_perthread(int cpu, int numa_node)
 {
 	void *addr;
 	size_t len = __perthread_end - __perthread_start;
-	size_t pages = div_up(len, PGSIZE_4KB);
 
 	/* no perthread data */
-	if (!pages)
+	if (!len)
 		return 0;
 
-	addr = mem_map_anom(NULL, pages, PGSIZE_4KB, numa_node);
+	addr = mem_map_anom(NULL, len, PGSIZE_4KB, numa_node);
 	if (addr == MAP_FAILED)
 		return -ENOMEM;
 

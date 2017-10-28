@@ -114,7 +114,8 @@ mbuf_create_mempool_allocator(size_t mbuf_count, unsigned int head_len,
 		return NULL;
 
 	/* allocate the mempool buffer */
-	buf = mem_map_anom(NULL, nr_pages, PGSIZE_2MB, thread_numa_node);
+	buf = mem_map_anom(NULL, nr_pages * PGSIZE_2MB,
+			   PGSIZE_2MB, thread_numa_node);
 	if (buf == MAP_FAILED)
 		goto fail_buf;
 

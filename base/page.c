@@ -91,7 +91,7 @@ static int lgpage_create(struct page *pg, int numa_node)
 	void *pgaddr = lgpage_to_addr(pg);
 	int ret;
 
-	pgaddr = mem_map_anom(pgaddr, 1, PGSIZE_2MB, numa_node);
+	pgaddr = mem_map_anom(pgaddr, PGSIZE_2MB, PGSIZE_2MB, numa_node);
 	if (pgaddr == MAP_FAILED) {
 		log_err_ratelimited("page: out of 2mb pages\n");
 		return -ENOMEM;
@@ -367,7 +367,7 @@ int page_init(void)
 		node = &lgpage_nodes[i];
 		node->tbl = mem_map_anom(
 			(char *)addr + i * LGPAGE_META_LEN,
-			LGPAGE_META_NR_LGPAGES, PGSIZE_2MB, i);
+			LGPAGE_META_NR_LGPAGES * PGSIZE_2MB, PGSIZE_2MB, i);
 		if (node->tbl == MAP_FAILED)
 			return -ENOMEM;
 

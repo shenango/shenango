@@ -2,13 +2,16 @@
  * mem.c - memory management
  */
 
-#include <sys/mman.h>
 #include <asm/mman.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <signal.h>
 #include <numaif.h>
+#include <sys/types.h>
 #include <sys/syscall.h>
+#include <sys/mman.h>
+#include <sys/ipc.h>
+#include <sys/shm.h>
 
 #include <base/stddef.h>
 #include <base/mem.h>
@@ -16,10 +19,15 @@
 #include <base/limits.h>
 
 #if !defined(MAP_HUGE_2MB) || !defined(MAP_HUGE_1GB)
-#warning "Your system does not support MAP_HUGETLB page sizes"
+#warning "Your system does not support specifying MAP_HUGETLB page sizes"
 #endif
 
-long mbind(void *start, unsigned long len, int mode,
+#if !defined(SHM_HUGE_2MB) || !defined(SHM_HUGE_1GB)
+#warning "Your system does not support specifying SHM_HUGETLB page sizes"
+#endif
+
+
+long mbind(void *start, size_t len, int mode,
 	   const unsigned long *nmask, unsigned long maxnode,
 	   unsigned flags)
 {
@@ -32,19 +40,20 @@ static void sigbus_error(int sig)
 }
 
 static void *
-__mem_map_anom(void *base, int nr, int size,
+__mem_map_anom(void *base, size_t len, size_t pgsize,
 	       unsigned long *mask, int numa_policy)
 {
 	__sighandler_t s;
-	void *vaddr;
+	void *addr;
+	char *pos;
 	int flags = MAP_PRIVATE | MAP_ANONYMOUS | MAP_POPULATE;
-	size_t len = nr * size;
-	int i;
+
+	len = align_up(len, pgsize);
 
 	if (base)
 		flags |= MAP_FIXED;
 
-	switch (size) {
+	switch (pgsize) {
 	case PGSIZE_4KB:
 		break;
 	case PGSIZE_2MB:
@@ -64,12 +73,12 @@ __mem_map_anom(void *base, int nr, int size,
 		return MAP_FAILED;
 	}
 
-	vaddr = mmap(base, len, PROT_READ | PROT_WRITE, flags, -1, 0);
-	if (vaddr == MAP_FAILED)
+	addr = mmap(base, len, PROT_READ | PROT_WRITE, flags, -1, 0);
+	if (addr == MAP_FAILED)
 		return MAP_FAILED;
 
 	BUILD_ASSERT(sizeof(unsigned long) * 8 >= NNUMA);
-	if (mbind(vaddr, len, numa_policy, mask ? mask : NULL,
+	if (mbind(addr, len, numa_policy, mask ? mask : NULL,
 		  mask ? NNUMA : 0, MPOL_MF_STRICT))
 		goto fail;
 
@@ -79,31 +88,30 @@ __mem_map_anom(void *base, int nr, int size,
 	 * on each page to make sure the mapping was successful.
 	 */
 	s = signal(SIGBUS, sigbus_error);
-	for (i = 0; i < nr; i++) {
-		*(uint64_t *)((uintptr_t)vaddr + i * size) = 0;
-	}
+	for (pos = (char *)addr; pos < (char *)addr + len; pos += pgsize)
+		*pos = 0;
 	signal(SIGBUS, s);
 
-	return vaddr;
+	return addr;
 
 fail:
-	munmap(vaddr, len);
+	munmap(addr, len);
 	return MAP_FAILED;
 }
 
 /**
  * mem_map_anom - map anonymous memory pages
  * @base: the base address (or NULL for automatic)
- * @nr: the number of pages
- * @size: the page size
+ * @len: the length of the mapping
+ * @pgsize: the page size
  * @node: the NUMA node
  *
  * Returns the base address, or MAP_FAILED if out of memory
  */
-void *mem_map_anom(void *base, int nr, int size, int node)
+void *mem_map_anom(void *base, size_t len, size_t pgsize, int node)
 {
 	unsigned long mask = (1 << node);
-	return __mem_map_anom(base, nr, size, &mask, MPOL_BIND);
+	return __mem_map_anom(base, len, pgsize, &mask, MPOL_BIND);
 }
 
 /**
@@ -120,6 +128,64 @@ void *mem_map_file(void *base, size_t len, int fd, off_t offset)
 	return mmap(base, len, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, offset);
 }
 
+/**
+ * mem_map_shm - maps a System V shared memory segment
+ * @path: a path to a file that identifies the shared segment
+ * @base: the base address to map the shared segment (or automatic if NULL)
+ * @len: the length of the mapping
+ * @pgsize: the size of each page
+ *
+ * Returns a pointer to the mapping, or NULL if the mapping failed.
+ */
+void *mem_map_shm(const char *path, void *base, size_t len, size_t pgsize)
+{
+	key_t key;
+	int shmid, flags = IPC_CREAT;
+
+	key = ftok(path, 'S');
+	if (key == -1)
+		return MAP_FAILED;
+
+	switch (pgsize) {
+	case PGSIZE_4KB:
+		break;
+	case PGSIZE_2MB:
+		flags |= SHM_HUGETLB;
+#ifdef SHM_HUGE_2MB
+		flags |= SHM_HUGE_2MB;
+#endif
+		break;
+	case PGSIZE_1GB:
+#ifdef SHM_HUGE_1GB
+		flags |= SHM_HUGETLB | SHM_HUGE_1GB;
+#else
+		return MAP_FAILED;
+#endif
+		break;
+	default: /* fail on other sizes */
+		return MAP_FAILED;
+	}
+
+	shmid = shmget(key, len, flags);
+	if (shmid == -1)
+		return MAP_FAILED;
+
+	return shmat(shmid, base, 0);
+}
+
+/**
+ * mem_unmap_shm - detach a shared memory mapping
+ * @addr: the base address of the mapping
+ *
+ * Returns 0 if successful, otherwise fail.
+ */
+int mem_unmap_shm(void *addr)
+{
+	if (shmdt(addr) == -1)
+		return -errno;
+	return 0;
+}
+
 #define PAGEMAP_PGN_MASK	0x7fffffffffffffULL
 #define PAGEMAP_FLAG_PRESENT	(1ULL << 63)
 #define PAGEMAP_FLAG_SWAPPED	(1ULL << 62)
@@ -129,33 +195,35 @@ void *mem_map_file(void *base, size_t len, int fd, off_t offset)
 /**
  * mem_lookup_page_phys_addrs - determines the physical address of pages
  * @addr: a pointer to the start of the pages (must be @size aligned)
- * @nr: the number of pages
- * @size: the page size (4KB, 2MB, or 1GB)
+ * @len: the length of the mapping
+ * @pgsize: the page size (4KB, 2MB, or 1GB)
  * @paddrs: a pointer store the physical addresses (of @nr elements)
  *
  * Returns 0 if successful, otherwise failure.
  */
-int mem_lookup_page_phys_addrs(void *addr, int nr, int size, physaddr_t *paddrs)
+int mem_lookup_page_phys_addrs(void *addr, size_t len,
+			       size_t pgsize, physaddr_t *paddrs)
 {
-	int fd, i, ret = 0;
+	uintptr_t pos;
 	uint64_t tmp;
+	int fd, i = 0, ret = 0;
 
 	/*
 	 * 4 KB pages could be swapped out by the kernel, so it is not
 	 * safe to get a machine address. If we later decide to support
 	 * 4KB pages, then we need to mlock() the page first.
 	 */
-	if (size == PGSIZE_4KB)
+	if (pgsize == PGSIZE_4KB)
 		return -EINVAL;
 
 	fd = open("/proc/self/pagemap", O_RDONLY);
 	if (fd < 0)
 		return -EIO;
 
-	for (i = 0; i < nr; i++) {
-		if (lseek(fd, (((uintptr_t)addr + (i * size)) /
-		    PGSIZE_4KB) * sizeof(uint64_t), SEEK_SET) ==
-		    (off_t) -1) {
+	for (pos = (uintptr_t)addr; pos < (uintptr_t)addr + len;
+	     pos += pgsize) {
+		if (lseek(fd, pos / PGSIZE_4KB * sizeof(uint64_t), SEEK_SET) ==
+		    (off_t)-1) {
 			ret = -EIO;
 			goto out;
 		}
@@ -168,7 +236,7 @@ int mem_lookup_page_phys_addrs(void *addr, int nr, int size, physaddr_t *paddrs)
 			goto out;
 		}
 
-		paddrs[i] = (tmp & PAGEMAP_PGN_MASK) * PGSIZE_4KB;
+		paddrs[i++] = (tmp & PAGEMAP_PGN_MASK) * PGSIZE_4KB;
 	}
 
 out:
