@@ -1,4 +1,5 @@
-test_hello
+test_base_hello
+test_base_lrpc
+test_base_smalloc
+test_base_thread
 test_runtime_threads
-test_smalloc
-test_thread
