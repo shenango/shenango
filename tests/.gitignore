@@ -3,3 +3,4 @@ test_base_lrpc
 test_base_smalloc
 test_base_thread
 test_runtime_threads
+test_runtime_channels
