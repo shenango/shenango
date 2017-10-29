@@ -39,7 +39,7 @@ extern void chan_close(chan_t *c);
  * Returns 0 if successful, -EIO if chan is closed, or -EAGAIN if no messages.
  */
 #define chan_recv(cptr, item, block)			\
-	({assert(sizeof(*item) == cptr->item_size);	\
+	({assert(sizeof(*item) == (cptr)->item_size);	\
 	 __chan_recv(cptr, item, block);})
 
 /**
@@ -52,5 +52,5 @@ extern void chan_close(chan_t *c);
  * Returns 0 if successful or -EAGAIN if no messages.
  */
 #define chan_send(cptr, item, block)			\
-	({assert(sizeof(*item) == cptr->item_size);	\
+	({assert(sizeof(*item) == (cptr)->item_size);	\
 	 __chan_send(cptr, item, block);})

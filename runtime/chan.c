@@ -26,16 +26,16 @@ int __chan_recv(chan_t *c, void *dst, bool block)
 	const void *src;
 
 	spin_lock(&c->lock);
-	if (c->closed) {
-		spin_unlock(&c->lock);
-		return -EIO;
-	}
 
 	if (c->head != c->tail) {
 		/* first try to receive from buffer */
 		int idx = c->tail++ % c->cap;
 		src = chan_buf_pos(c, idx);
-	} else if (!list_empty(&c->send_waiters)) {
+	} else if (c->closed) {
+		/* Buffer is empty and there are no future senders */
+		spin_unlock(&c->lock);
+		return -EIO;
+	}	else if (!list_empty(&c->send_waiters)) {
 		/* then try to receive directly from waiting sender */
 		th = list_pop(&c->send_waiters, thread_t, link);
 		src = th->chan_buf;
