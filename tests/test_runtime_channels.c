@@ -138,7 +138,7 @@ static void *test_multi_send_recv(void)
 	};
 
 	for (i = 0; i < NCORES; i++) {
-		thread_spawn(send_thread, &sender_info);
+		ret = thread_spawn(send_thread, &sender_info);
 		BUG_ON(ret);
 	}
 
@@ -220,6 +220,7 @@ static void *test_multi_recv(void)
 	for (i = 0; i < NCORES; i++) {
 		tgs[i].chan = &chan;
 		tgs[i].wg = &wg;
+		tgs[i].count = 0;
 		ret = thread_spawn(receive_thread, &tgs[i]);
 		BUG_ON(ret);
 	}
