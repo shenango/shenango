@@ -91,7 +91,8 @@ void condvar_signal(condvar_t *cv)
 
 	spin_lock(&cv->waiter_lock);
 	waketh = list_pop(&cv->waiters, thread_t, link);
-	thread_ready(waketh);
+	if (waketh)
+		thread_ready(waketh);
 	spin_unlock(&cv->waiter_lock);
 }
 
