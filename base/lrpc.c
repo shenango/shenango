@@ -7,8 +7,7 @@
 #include <base/lrpc.h>
 
 /* internal use only */
-bool __lrpc_send_slow(struct lrpc_chan *chan, uint64_t cmd,
-		      void *payload)
+bool __lrpc_send(struct lrpc_chan_tx *chan, uint64_t cmd, void *payload)
 {
 	struct lrpc_msg *dst;
 
@@ -18,7 +17,7 @@ bool __lrpc_send_slow(struct lrpc_chan *chan, uint64_t cmd,
         if (chan->send_head - chan->send_tail == chan->size)
                 return false;
 
-	dst = &chan->tbl[chan->send_head & lrpc_mask(chan)];
+	dst = &chan->tbl[chan->send_head & (chan->size - 1)];
 	dst->payload = payload;
 
 	cmd |= (chan->send_head++ & chan->size) ? 0 : LRPC_DONE_PARITY;
@@ -27,16 +26,38 @@ bool __lrpc_send_slow(struct lrpc_chan *chan, uint64_t cmd,
 }
 
 /**
- * lrpc_init - initializes a shared memory channel
+ * lrpc_init_tx - initializes an egress shared memory channel
  * @chan: the channel struct to initialize
  * @tbl: a buffer to store channel messages
  * @size: the number of message elements in the buffer
  * @recv_head_wb: a pointer to the head position of the receiver
  *
- * Returns 0 if successful, or -EINVAL if @size is not a power of two.
+ * returns 0 if successful, or -einval if @size is not a power of two.
  */
-int lrpc_init(struct lrpc_chan *chan, struct lrpc_msg *tbl,
-	      unsigned int size, uint32_t *recv_head_wb)
+int lrpc_init_tx(struct lrpc_chan_tx *chan, struct lrpc_msg *tbl,
+		 unsigned int size, uint32_t *recv_head_wb)
+{
+	if (!is_power_of_two(size))
+		return -EINVAL;
+
+	memset(chan, 0, sizeof(*chan));
+	chan->tbl = tbl;
+	chan->size = size;
+	chan->recv_head_wb = recv_head_wb;
+	return 0;
+}
+
+/**
+ * lrpc_init_rx - initializes an ingress shared memory channel
+ * @chan: the channel struct to initialize
+ * @tbl: a buffer to store channel messages
+ * @size: the number of message elements in the buffer
+ * @recv_head_wb: a pointer to the head position of the receiver
+ *
+ * returns 0 if successful, or -einval if @size is not a power of two.
+ */
+int lrpc_init_rx(struct lrpc_chan_rx *chan, struct lrpc_msg *tbl,
+		 unsigned int size, uint32_t *recv_head_wb)
 {
 	if (!is_power_of_two(size))
 		return -EINVAL;
