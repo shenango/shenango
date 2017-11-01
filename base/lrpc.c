@@ -32,7 +32,7 @@ bool __lrpc_send(struct lrpc_chan_tx *chan, uint64_t cmd, void *payload)
  * @size: the number of message elements in the buffer
  * @recv_head_wb: a pointer to the head position of the receiver
  *
- * returns 0 if successful, or -einval if @size is not a power of two.
+ * returns 0 if successful, or -EINVAL if @size is not a power of two.
  */
 int lrpc_init_tx(struct lrpc_chan_tx *chan, struct lrpc_msg *tbl,
 		 unsigned int size, uint32_t *recv_head_wb)
@@ -54,7 +54,7 @@ int lrpc_init_tx(struct lrpc_chan_tx *chan, struct lrpc_msg *tbl,
  * @size: the number of message elements in the buffer
  * @recv_head_wb: a pointer to the head position of the receiver
  *
- * returns 0 if successful, or -einval if @size is not a power of two.
+ * returns 0 if successful, or -EINVAL if @size is not a power of two.
  */
 int lrpc_init_rx(struct lrpc_chan_rx *chan, struct lrpc_msg *tbl,
 		 unsigned int size, uint32_t *recv_head_wb)

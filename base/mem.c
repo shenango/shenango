@@ -39,13 +39,27 @@ static void sigbus_error(int sig)
 	panic("couldn't map pages");
 }
 
+static void touch_mapping(void *base, size_t len, size_t pgsize)
+{
+	__sighandler_t s;
+	char *pos;
+
+	/*
+	 * Unfortunately mmap() provides no error message if MAP_POPULATE fails
+	 * because of insufficient memory. Therefore, we manually force a write
+	 * on each page to make sure the mapping was successful.
+	 */
+	s = signal(SIGBUS, sigbus_error);
+	for (pos = (char *)base; pos < (char *)base + len; pos += pgsize)
+		*pos = 0;
+	signal(SIGBUS, s);
+} 
+
 static void *
 __mem_map_anom(void *base, size_t len, size_t pgsize,
 	       unsigned long *mask, int numa_policy)
 {
-	__sighandler_t s;
 	void *addr;
-	char *pos;
 	int flags = MAP_PRIVATE | MAP_ANONYMOUS | MAP_POPULATE;
 
 	len = align_up(len, pgsize);
@@ -82,16 +96,7 @@ __mem_map_anom(void *base, size_t len, size_t pgsize,
 		  mask ? NNUMA : 0, MPOL_MF_STRICT))
 		goto fail;
 
-	/*
-	 * Unfortunately mmap() provides no error message if MAP_POPULATE fails
-	 * because of insufficient memory. Therefore, we manually force a write
-	 * on each page to make sure the mapping was successful.
-	 */
-	s = signal(SIGBUS, sigbus_error);
-	for (pos = (char *)addr; pos < (char *)addr + len; pos += pgsize)
-		*pos = 0;
-	signal(SIGBUS, s);
-
+	touch_mapping(addr, len, pgsize);
 	return addr;
 
 fail:
@@ -130,21 +135,21 @@ void *mem_map_file(void *base, size_t len, int fd, off_t offset)
 
 /**
  * mem_map_shm - maps a System V shared memory segment
- * @path: a path to a file that identifies the shared segment
+ * @key: the unique key that identifies the shared region (e.g. use ftok())
  * @base: the base address to map the shared segment (or automatic if NULL)
  * @len: the length of the mapping
  * @pgsize: the size of each page
+ * @exclusive: ensure this call creates the shared segment
  *
  * Returns a pointer to the mapping, or NULL if the mapping failed.
  */
-void *mem_map_shm(const char *path, void *base, size_t len, size_t pgsize)
+void *mem_map_shm(mem_key_t key, void *base, size_t len, size_t pgsize,
+		  bool exclusive)
 {
-	key_t key;
+	void *addr;
 	int shmid, flags = IPC_CREAT;
 
-	key = ftok(path, 'S');
-	if (key == -1)
-		return MAP_FAILED;
+	BUILD_ASSERT(sizeof(mem_key_t) == sizeof(key_t));
 
 	switch (pgsize) {
 	case PGSIZE_4KB:
@@ -166,11 +171,19 @@ void *mem_map_shm(const char *path, void *base, size_t len, size_t pgsize)
 		return MAP_FAILED;
 	}
 
+	if (exclusive)
+		flags |= IPC_EXCL;
+
 	shmid = shmget(key, len, flags);
 	if (shmid == -1)
 		return MAP_FAILED;
 
-	return shmat(shmid, base, 0);
+	addr = shmat(shmid, base, 0);
+	if (addr == MAP_FAILED)
+		return MAP_FAILED;
+
+	touch_mapping(addr, len, pgsize);
+	return addr;
 }
 
 /**

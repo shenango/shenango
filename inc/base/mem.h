@@ -42,15 +42,18 @@ typedef unsigned long virtaddr_t; /* virtual addresses */
 #define MAP_FAILED	((void *)-1)
 #endif
 
+typedef unsigned int mem_key_t;
+
 extern void *mem_map_anom(void *base, size_t len, size_t pgsize, int node);
 extern void *mem_map_file(void *base, size_t len, int fd, off_t offset);
-extern void *mem_map_shm(const char *path, void *base, size_t len,
-			 size_t pgsize);
+extern void *mem_map_shm(mem_key_t key, void *base, size_t len,
+			 size_t pgsize, bool exclusive);
+extern int mem_unmap_shm(void *base);
 extern int mem_lookup_page_phys_addrs(void *addr, size_t len, size_t pgsize,
 				      physaddr_t *maddrs);
 
 static inline int
-mem_lookup_page_phys_addr(void *addr, size_t pgsize, physaddr_t *maddr)
+mem_lookup_page_phys_addr(void *addr, size_t pgsize, physaddr_t *paddr)
 {
-	return mem_lookup_page_phys_addrs(addr, pgsize, pgsize, maddr);
+	return mem_lookup_page_phys_addrs(addr, pgsize, pgsize, paddr);
 }
