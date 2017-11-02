@@ -28,7 +28,7 @@ static void client(struct params *p)
 	double msgs_per_second;
 	uint64_t start_us;
 	uint64_t cmd;
-	void *payload;
+	unsigned long payload;
 	int ret, i;
 
 	ret = lrpc_init_tx(&c_out, p->server_buf, QUEUE_SIZE, p->server_wb);
@@ -37,7 +37,7 @@ static void client(struct params *p)
 	ret = lrpc_init_rx(&c_in, p->client_buf, QUEUE_SIZE, p->client_wb);
 	BUG_ON(ret);
 
-	while (!lrpc_send(&c_out, 0, NULL))
+	while (!lrpc_send(&c_out, 0, 0))
 		cpu_relax();
 
 	while (!lrpc_recv(&c_in, &cmd, &payload))
@@ -47,19 +47,19 @@ static void client(struct params *p)
 	start_us = microtime();
 	
 	for (i = 0; i < N; i++) {
-		while (!lrpc_send(&c_out, i, &start_us))
+		while (!lrpc_send(&c_out, i, start_us))
 			cpu_relax();
 
 		while (!lrpc_recv(&c_in, &cmd, &payload))
 			cpu_relax();
 		BUG_ON(cmd != i);
-		BUG_ON(payload != &start_us);
+		BUG_ON(payload != start_us);
 	}
 
 	msgs_per_second = (double)N / ((microtime() - start_us) * 0.000001);
 	log_info("echoed %f messages / second", msgs_per_second);
 
-	while (!lrpc_send(&c_out, QUIT, NULL))
+	while (!lrpc_send(&c_out, QUIT, 0))
 		cpu_relax();
 }
 
@@ -68,7 +68,7 @@ static void server(struct params *p)
 	struct lrpc_chan_tx c_out;
 	struct lrpc_chan_rx c_in;
 	uint64_t cmd;
-	void *payload;
+	unsigned long payload;
 	int ret;
 
 	ret = lrpc_init_rx(&c_in, p->server_buf, QUEUE_SIZE, p->server_wb);
@@ -93,7 +93,7 @@ static void *test_thread(void *data)
 {
 	int ret;
 
-	ret = base_init_thread(1);
+	ret = base_init_thread();
 	if (ret) {
 		log_err("base_init_thread() failed, ret = %d", ret);
 		BUG();
@@ -117,7 +117,7 @@ int main(int argc, char *argv[])
 	}
 	BUG_ON(!base_init_done);
 
-	ret = base_init_thread(0);
+	ret = base_init_thread();
 	if (ret) {
 		log_err("base_init_thread() failed, ret = %d", ret);
 		BUG();

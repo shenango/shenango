@@ -1,5 +1,5 @@
 /*
- * msg.h - shared memory communication between the IOHUB and clients
+ * shm.h - shared memory communication between the iokernel and clients
  */
 
 #pragma once
@@ -8,7 +8,6 @@
 
 #include <base/stddef.h>
 #include <base/atomic.h>
-#include <base/lrpc.h>
 
 
 /*
@@ -61,64 +60,39 @@ static inline void *shmptr_to_ptr(struct shm_region *r, shmptr_t shmptr)
  * message chains are singly-linked lists of commands passed over shared memory.
  */
 
-struct msg_chain {
+struct shm_chain {
 	unsigned int	type;
 	unsigned int	pad;
 	shmptr_t	next;
 };
 
 /* For performance, we intend for reading the chain to pull in command data */
-BUILD_ASSERT(sizeof(struct msg_chain) <= CACHE_LINE_SIZE);
-
-enum {
-	MSG_CHAIN_TYPE_PACKET = 0,
-	MSG_CHAIN_TYPE_PACKET_COMPLETION,
-};
+BUILD_ASSERT(sizeof(struct shm_chain) <= CACHE_LINE_SIZE);
 
 /**
- * msg_chain_get_next - retrieves the next request in the chain
+ * shm_chain_get_next - retrieves the next request in the chain
  * @r: the shared memory region the chains reside in
  * @c: the current request
  *
  * Returns a request, or NULL if at the end of the chain or invalid.
  */
-static inline struct msg_chain *
-msg_chain_get_next(struct shm_region *r, struct iochain *c)
+static inline struct shm_chain *
+shm_chain_get_next(struct shm_region *r, struct shm_chain *c)
 {
-	return (struct msg_chain *)shmptr_to_ptr(load_acquire(&c->next));
+	return (struct shm_chain *)shmptr_to_ptr(r, load_acquire(&c->next));
 }
 
 /**
- * msg_chain_set_next - appends the next request to the chain
+ * shm_chain_set_next - appends the next request to the chain
  * @r: the shared memory region the chains reside in
  * @c: the current request
  * @next: the next request
  */
 static inline void
-msg_chain_set_next(struct shm_region *r, struct iochain *c,
-		   struct msg_chain *next)
+shm_chain_set_next(struct shm_region *r, struct shm_chain *c,
+		   struct shm_chain *next)
 {
-	shmptr_t shmptr = ptr_to_shmptr(next);
+	shmptr_t shmptr = ptr_to_shmptr(r, next);
 	assert(c->next == SHMPTR_NULL);
-	return store_release(&c->next, shmptr);
+	store_release(&c->next, shmptr);
 }
-
-
-/*
- * Support for LRPC messages between the IOHUB and the client.
- */
-
-struct msg_packet {
-	struct msg_chain chain;		/* chains the next command */
-	unsigned int	len;		/* the length of the payload */
-	unsigned int	rss_hash;	/* the HW RSS 5-tuple hash */
-	unsigned int	csum_type;	/* the type of checksum */
-	unsigned int	csum;		/* 16-bit one's complement */
-	char		payload[];	/* packet data */
-};
-
-/* possible lrpc commands */
-enum {
-	MSG_TYPE_START_CHAIN = 0,
-	MSG_TYPE_COMPLETE_CHAIN,
-};

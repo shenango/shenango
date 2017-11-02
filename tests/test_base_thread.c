@@ -13,11 +13,11 @@
 #define PERTHREAD_VAL	10
 static DEFINE_PERTHREAD(int, blah);
 
-static int init_thread(int cpu)
+static int init_thread(void)
 {
 	int ret;
 
-	ret = base_init_thread(cpu);
+	ret = base_init_thread();
 	if (ret) {
 		log_err("base_init_thread() failed, ret = %d", ret);
 		return 1;
@@ -34,12 +34,11 @@ static int init_thread(int cpu)
 
 static void *test_thread(void *data)
 {
-	int cpu = (int)(long)data;
 	int ret;
 
-	ret = init_thread(cpu);
+	ret = init_thread();
 	BUG_ON(ret);
-	log_info("hello thread %d", cpu);
+	log_info("hello thread %d", thread_id);
 
 	return NULL;
 }
@@ -57,11 +56,10 @@ int main(int argc, char *argv[])
 	BUG_ON(!base_init_done);
 	BUG_ON(cpu_count < 1);
 
-	init_thread(0);
+	init_thread();
 
 	for (i = 1; i < cpu_count; i++) {	
-		ret = pthread_create(&tid[i], NULL, test_thread,
-				     (void *)(long)i);
+		ret = pthread_create(&tid[i], NULL, test_thread, NULL);
 		BUG_ON(ret);
 	}
 

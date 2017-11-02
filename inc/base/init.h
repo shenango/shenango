@@ -25,7 +25,7 @@ struct init_handler {
 #define REGISTER_THREAD_INIT(func)	__REGISTER_INIT_HANDLER(func, t)
 
 extern int base_init(void);
-extern int base_init_thread(unsigned int cpu);
+extern int base_init_thread(void);
 extern void init_shutdown(int status) __noreturn;
 
 extern bool base_init_done;

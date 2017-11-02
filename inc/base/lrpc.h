@@ -14,7 +14,7 @@
 
 struct lrpc_msg {
 	uint64_t	cmd;
-	void		*payload;
+	unsigned long	payload;
 };
 
 #define LRPC_DONE_PARITY	(1UL << 63)
@@ -33,7 +33,8 @@ struct lrpc_chan_tx {
 	uint32_t	size;
 };
 
-extern bool __lrpc_send(struct lrpc_chan_tx *chan, uint64_t cmd, void *payload);
+extern bool __lrpc_send(struct lrpc_chan_tx *chan, uint64_t cmd,
+			unsigned long payload);
 
 /**
  * lrpc_send - sends a message on the channel
@@ -44,7 +45,7 @@ extern bool __lrpc_send(struct lrpc_chan_tx *chan, uint64_t cmd, void *payload);
  * Returns true if successful, otherwise the channel is full.
  */
 static inline bool lrpc_send(struct lrpc_chan_tx *chan, uint64_t cmd,
-			     void *payload)
+			     unsigned long payload)
 {
 	struct lrpc_msg *dst;
 
@@ -113,7 +114,7 @@ struct lrpc_chan_rx {
  * Returns true if successful, otherwise the channel is empty.
  */
 static inline bool lrpc_recv(struct lrpc_chan_rx *chan, uint64_t *cmd_out,
-			     void **payload_out)
+			     unsigned long *payload_out)
 {
         struct lrpc_msg *m = &chan->tbl[chan->recv_head & (chan->size - 1)];
         uint64_t parity = (chan->recv_head & chan->size) ?

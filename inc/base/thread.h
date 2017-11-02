@@ -17,19 +17,20 @@
 #define DECLARE_PERTHREAD(type, name) \
 	extern DEFINE_PERTHREAD(type, name)
 
-extern void *perthread_offsets[NCPU];
+extern void *perthread_offsets[NTHREAD];
 extern __thread void *perthread_ptr;
+extern unsigned int thread_count;
 
 /**
  * perthread_get_remote - get a perthread variable on a specific thread
  * @var: the perthread variable
- * @cpu: the cpu core number
+ * @thread: the thread id
  *
  * Returns a perthread variable.
  */
-#define perthread_get_remote(var, cpu)				\
+#define perthread_get_remote(var, thread)			\
 	(*((__force typeof(__perthread_##var) *)		\
-	 ((uintptr_t)&__perthread_##var + (uintptr_t)perthread_offsets[cpu])))
+	 ((uintptr_t)&__perthread_##var + (uintptr_t)perthread_offsets[thread])))
 
 static inline void *__perthread_get(void __perthread *key)
 {
@@ -47,29 +48,30 @@ static inline void *__perthread_get(void __perthread *key)
 
 /**
  * thread_is_active - is the thread initialized?
- * @cpu: the cpu number
+ * @thread: the thread id
  *
  * Returns true if yes, false if no.
  */
-#define thread_is_active(cpu)					\
-	(perthread_offsets[cpu] != NULL)
+#define thread_is_active(thread)					\
+	(perthread_offsets[thread] != NULL)
 
-static inline int __thread_next_active(int cpu)
+static inline int __thread_next_active(int thread)
 {
-	while (cpu < cpu_count) {
-		if (thread_is_active(++cpu))
-			return cpu;
+	while (thread < thread_count) {
+		if (thread_is_active(++thread))
+			return thread;
 	}
 
-	return cpu;
+	return thread;
 }
 
 /**
  * for_each_thread - iterates over each thread
- * @cpu: an integer to store the cpu
+ * @thread: the thread id
  */
-#define for_each_thread(cpu)					\
-	for ((cpu) = -1; (cpu) = __thread_next_active(cpu), (cpu) < cpu_count;)
+#define for_each_thread(thread)						\
+	for ((thread) = -1; (thread) = __thread_next_active(thread),	\
+			    (thread) < thread_count;)
 
-extern __thread unsigned int thread_cpu_id;
+extern __thread unsigned int thread_id;
 extern __thread unsigned int thread_numa_node;

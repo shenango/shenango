@@ -38,9 +38,7 @@ uintptr_t entry_vdso_base;
 static int dune_fd;
 static bool linux_has_vvar;
 
-static DEFINE_SPINLOCK(entry_lock);
 static struct idtd idt_template[IDT_ENTRIES];
-static struct idtd *idt_node[NNUMA];
 
 static uint64_t gdt_template[GDT_ENTRIES] = {
         0,
@@ -319,6 +317,7 @@ int entry_init(void)
 
 static __thread uint64_t gdt[GDT_ENTRIES] __aligned(CACHE_LINE_SIZE);
 static __thread struct tssd tss __aligned(CACHE_LINE_SIZE);
+static __thread struct idtd idt __aligned(CACHE_LINE_SIZE);
 static __thread struct entry_percpu cpu_entry;
 
 /* FIXME: protect the stacks with guard pages */
@@ -425,7 +424,6 @@ extern int arch_prctl(int code, unsigned long *addr);
 int entry_init_one(void)
 {
 	int ret;
-	int numa_node = thread_numa_node;
 	struct entry_percpu *ent = &cpu_entry;
 	unsigned long fs_base;
 
@@ -442,19 +440,7 @@ int entry_init_one(void)
 	gdt[GD_TSS2 >> 3] = SEG_BASEHI(&tss);
 
 	/* step 3: set up the IDT */
-	spin_lock(&entry_lock);
-	if (!idt_node[numa_node]) {
-		struct page *pg = page_alloc_on_node(PGSIZE_4KB, numa_node);
-		if (!pg) {
-			spin_unlock(&entry_lock);
-			return -ENOMEM;
-		}
-
-		BUILD_ASSERT(sizeof(idt_template) <= PGSIZE_4KB);
-		idt_node[numa_node] = page_to_addr(pg);
-		memcpy(idt_node[numa_node], idt_template, sizeof(idt_template));
-	}
-	spin_unlock(&entry_lock);
+	memcpy(&idt, idt_template, sizeof(idt));
 
 	/* step 4: setup the entry per-cpu structure */
 	if (arch_prctl(ARCH_GET_FS, &fs_base) == -1) {
@@ -471,8 +457,7 @@ int entry_init_one(void)
 		return ret;
 
 	/* step 6: set up architectural state */
-	ret = entry_boot_cpu(ent, (uintptr_t)gdt,
-			     (uintptr_t)idt_node[numa_node]);
+	ret = entry_boot_cpu(ent, (uintptr_t)gdt, (uintptr_t)&idt);
 	if (ret)
 		return ret;
 

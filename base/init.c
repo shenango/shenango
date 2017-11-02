@@ -109,7 +109,7 @@ int base_init(void)
 	return 0;
 }
 
-extern int thread_init_on_core(unsigned int cpu);
+extern int thread_init_perthread(void);
 static const struct init_level init_thread_level = INIT_LEVEL(thread, t);
 
 static int init_thread_internal(void)
@@ -125,15 +125,14 @@ static int init_thread_internal(void)
 
 /**
  * base_init_thread - prepares a thread for use by the base library
- * cpu: the cpu core to bind the thread to
  *
  * Returns 0 if successful, otherwise fail.
  */
-int base_init_thread(unsigned int cpu)
+int base_init_thread(void)
 {
 	int ret;
 
-	ret = thread_init_on_core(cpu);
+	ret = thread_init_perthread();
 	if (ret)
 		return ret;
 

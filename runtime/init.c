@@ -11,11 +11,11 @@
 
 #include "defs.h"
 
-static int runtime_init_thread(int cpu)
+static int runtime_init_thread(void)
 {
 	int ret;
 
-	ret = base_init_thread(cpu);
+	ret = base_init_thread();
 	if (ret) {
 		log_err("base_init_thread() failed, ret = %d", ret);
 		return ret;
@@ -38,10 +38,9 @@ static int runtime_init_thread(int cpu)
 
 static void *pthread_entry(void *data)
 {
-	int cpu = (int)(long)data;
 	int ret;
 
-	ret = runtime_init_thread(cpu);
+	ret = runtime_init_thread();
 	BUG_ON(ret);
 
 	sched_start();
@@ -88,12 +87,11 @@ int runtime_init(thread_fn_t main_fn, void *arg, unsigned int cores)
 	/* point of no return starts here */
 
 	for (i = 1; i < cores; i++) {
-		ret = pthread_create(&tid[i], NULL, pthread_entry,
-				     (void *)(long)i);
+		ret = pthread_create(&tid[i], NULL, pthread_entry, NULL);
 		BUG_ON(ret);
 	}
 
-	ret = runtime_init_thread(0);
+	ret = runtime_init_thread();
 	BUG_ON(ret);
 
 	ret = thread_spawn_main(main_fn, arg);

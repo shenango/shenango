@@ -17,7 +17,7 @@ int main(int argc, char *argv[])
 	}
 	BUG_ON(!base_init_done);
 
-	ret = base_init_thread(0);
+	ret = base_init_thread();
 	if (ret) {
 		log_err("base_init_thread() failed, ret = %d", ret);
 		return 1;

@@ -7,7 +7,7 @@
 #include <base/lrpc.h>
 
 /* internal use only */
-bool __lrpc_send(struct lrpc_chan_tx *chan, uint64_t cmd, void *payload)
+bool __lrpc_send(struct lrpc_chan_tx *chan, uint64_t cmd, unsigned long payload)
 {
 	struct lrpc_msg *dst;
 
