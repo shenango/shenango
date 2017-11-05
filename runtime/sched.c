@@ -319,8 +319,8 @@ int sched_init_thread(void)
 	}
 
 	spin_lock(&qlock);
-	qs[nrqs++] = myq;
 	assert(nrqs < NTHREAD);
+	qs[nrqs++] = myq;
 	spin_unlock(&qlock);
 
 	return 0;

@@ -5,7 +5,7 @@
 #include <runtime/thread.h>
 #include <runtime/sync.h>
 
-#define N		50000
+#define N		20000
 #define ITERS   500000
 #define NCORES	4
 

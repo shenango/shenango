@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <base/bitmap.h>
 #include <base/limits.h>
 #include <iokernel/shm.h>
 
@@ -14,11 +13,10 @@
 enum {
 	QUEUE_TYPE_RX = 0,
 	QUEUE_TYPE_TX_PACKET,
-	QUEUE_TYPE_TX_COMPLETION,
+	QUEUE_TYPE_TX_COMMAND,
 };
 
 struct queue_spec {
-	DEFINE_BITMAP(core_mask, NCPU);
 	unsigned int	type;
 	unsigned int	msg_count;
 	shmptr_t	msg_buf;
@@ -31,10 +29,6 @@ enum {
 	SCHED_PRIORITY_BATCH,      /* low priority, batch processing */
 };
 
-struct control_status {
-	DEFINE_BITMAP(active_core_mask, NCPU);
-} __aligned(CACHE_LINE_SIZE);
-
 struct control_sched_config {
 	unsigned int	sched_priority;
 	unsigned int	sched_max_cores;
@@ -44,7 +38,6 @@ struct control_sched_config {
 
 struct control_hdr {
 	struct control_sched_config sched;
-	struct control_status status;
 	unsigned int	queue_count;
 	unsigned int	pad;
 	struct queue_spec queues[];

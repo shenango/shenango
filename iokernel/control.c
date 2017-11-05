@@ -38,6 +38,7 @@ static void control_destory_proc(struct proc *p)
 
 static void control_add_client(void)
 {
+	struct proc *p;
 	struct ucred ucred;
 	socklen_t len;
 	mem_key_t key;
@@ -68,6 +69,13 @@ static void control_add_client(void)
 		goto fail;
 	}
 
+	p = control_create_proc(key, ucred.pid);
+	if (!p) {
+		log_err("control: failed to create process '%d'", ucred.pid);
+		goto fail;
+	}
+
+	clients[nr_clients] = p;
 	clientfds[nr_clients++] = fd;
 	return;
 

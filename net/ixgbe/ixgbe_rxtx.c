@@ -365,11 +365,11 @@ static int ixgbe_tx_xmit_ctx(struct tx_queue *txq, int txflags, int ctx_idx)
 	type_tucmd_mlhl = IXGBE_ADVTXD_DTYP_CTXT | IXGBE_ADVTXD_DCMD_DEXT;
 
 	/* Checksums */
-	if (txflags & MBUF_TXFLAG_IP_CHKSUM) {
+	if (txflags & OLFLAG_IP_CHKSUM) {
 		type_tucmd_mlhl |= IXGBE_ADVTXD_TUCMD_IPV4;
 	}
 
-	if (txflags & MBUF_TXFLAG_TCP_CHKSUM) {
+	if (txflags & OLFLAG_TCP_CHKSUM) {
 		type_tucmd_mlhl |= IXGBE_ADVTXD_TUCMD_L4T_TCP;
 	}
 
@@ -421,8 +421,8 @@ static int ixgbe_tx_xmit_one(struct tx_queue *txq, struct mbuf *mbuf)
 	 * If flags match context 0 on NIC (IP and TCP chksum), use context
 	 * Otherwise, no context
 	 */
-	if ((mbuf->txflags & MBUF_TXFLAG_IP_CHKSUM) &&
-	    (mbuf->txflags & MBUF_TXFLAG_TCP_CHKSUM)){
+	if ((mbuf->txflags & OLFLAG_IP_CHKSUM) &&
+	    (mbuf->txflags & OLFLAG_TCP_CHKSUM)){
 		olinfo_status |= IXGBE_ADVTXD_POPTS_IXSM;
 		olinfo_status |= IXGBE_ADVTXD_POPTS_TXSM;
 		olinfo_status |= IXGBE_ADVTXD_CC;
@@ -1760,7 +1760,7 @@ void ixgbe_dev_rxtx_start(struct rte_eth_dev *dev)
 		}
 
 		/* setup context descriptor 0 for IP/TCP checksums */
-		ixgbe_tx_xmit_ctx(txq, MBUF_TXFLAG_IP_CHKSUM | MBUF_TXFLAG_TCP_CHKSUM, 0);
+		ixgbe_tx_xmit_ctx(txq, OLFLAG_IP_CHKSUM | OLFLAG_TCP_CHKSUM, 0);
 	}
 
 	for (i = 0; i < dev->data->nb_rx_queues; i++) {

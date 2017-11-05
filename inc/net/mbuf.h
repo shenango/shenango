@@ -13,6 +13,7 @@
 #include <base/assert.h>
 #include <base/mem.h>
 #include <base/kref.h>
+#include <iokernel/queue.h>
 
 struct mempool;
 
@@ -39,31 +40,6 @@ struct mbuf {
 	unsigned long	release_data; /* private data for the release method */
 	void		(*release)(struct mbuf *m); /* frees the mbuf */
 };
-
-/* possible values for mbuf's @csum_type above */
-enum {
-	/*
-	 * Hardware did not provide checksum information.
-	 */
-	CHECKSUM_TYPE_NEEDED = 0,
-
-	/*
-	 * The checksum was verified by hardware and found to be valid.
-	 */
-	CHECKSUM_TYPE_UNNECESSARY,
-
-	/* 
-	 * Hardware provided a 16 bit one's complement sum from after the LL
-	 * header to the end of the packet. VLAN tags (if present) are included
-	 * in the sum. This is the most robust checksum type because it's useful
-	 * even if the NIC can't parse the headers.
-	 */
-	CHECKSUM_TYPE_COMPLETE,
-};
-
-#define MBUF_TXFLAG_IP_CHKSUM	BIT(0)	/* enable IP checksum generation */		
-#define MBUF_TXFLAG_TCP_CHKSUM	BIT(1)	/* enable TCP checksum generation */
-
 
 static inline unsigned char *__mbuf_pull(struct mbuf *m, unsigned int len)
 {

@@ -23,7 +23,6 @@ static int init_thread(void)
 		return 1;
 	}
 	BUG_ON(!thread_init_done);
-	log_info("%d", perthread_get(blah));
 	BUG_ON(perthread_get(blah) != 0);
 
 	perthread_get(blah) = PERTHREAD_VAL;
