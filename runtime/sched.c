@@ -3,12 +3,10 @@
  */
 
 #include <stdlib.h>
-#include <sched.h>
 
 #include <base/stddef.h>
 #include <base/lock.h>
 #include <base/list.h>
-#include <base/cpu.h>
 #include <base/hash.h>
 #include <base/limits.h>
 #include <base/tcache.h>
@@ -33,12 +31,14 @@ struct runqueue {
 	struct list_head	runnable;
 };
 
-/* an array of cache-optimal runqueue pointers for each possible core */
-static struct runqueue *core_to_q[NCPU];
-/* an array of all the runqueues (for work-stealing) */
-static struct runqueue *qs[NCPU];
+/* protects @qs and @nrqs below */
+static DEFINE_SPINLOCK(qlock);
 /* the total number of runqueues (i.e. the size of @qs) */
-static int nr_qs;
+static int nrqs;
+/* an array of all the runqueues (for work-stealing) */
+static struct runqueue *qs[NTHREAD];
+/* the kernel thread-local runqueue */
+static __thread struct runqueue *myq;
 
 /**
  * call_thread - runs a thread, popping its trap frame
@@ -87,14 +87,6 @@ static __noreturn void call_runtime_nosave(runtime_fn_t fn, unsigned long arg)
 	__pop_tf(&tf);
 }
 
-static inline struct runqueue *get_my_runqueue(void)
-{
-	int cpu = sched_getcpu();
-	if (unlikely(cpu < 0))
-		BUG();
-	return core_to_q[cpu];
-}
-
 /* the main scheduler routine, decides what to run next */
 static __noinline void schedule(void)
 {
@@ -106,7 +98,7 @@ static __noinline void schedule(void)
 
 again:
 	/* first try this core's local runqueue */
-	r = get_my_runqueue();
+	r = myq;
 	spin_lock(&r->lock);
 	th = list_pop(&r->runnable, thread_t, link);
 	spin_unlock(&r->lock);
@@ -114,7 +106,7 @@ again:
 		call_thread(th);
 
 	/* then try a random victim */
-	r = qs[rand_crc32c((uintptr_t)r) % nr_qs];
+	r = qs[rand_crc32c((uintptr_t)r) % nrqs];
 	if (spin_try_lock(&r->lock)) {
 		th = list_pop(&r->runnable, thread_t, link);
 		spin_unlock(&r->lock);
@@ -123,7 +115,7 @@ again:
 	}
 
 	/* then try every runqueue */
-	for (i = 0; i < nr_qs; i++) {
+	for (i = 0; i < nrqs; i++) {
 		r = qs[i];
 		if (spin_try_lock(&r->lock)) {
 			th = list_pop(&r->runnable, thread_t, link);
@@ -166,7 +158,7 @@ void thread_park_and_unlock(spinlock_t *lock)
  */
 void thread_ready(thread_t *th)
 {
-	struct runqueue *r = get_my_runqueue();
+	struct runqueue *r = myq;
 
 	assert(th->state == THREAD_STATE_SLEEPING);
 	th->state = THREAD_STATE_RUNNABLE;
@@ -290,6 +282,19 @@ static void runtime_top_of_stack(void)
 	panic("a runtime function returned to the top of the stack");
 }
 
+static struct runqueue *create_runqueue(void)
+{
+	struct runqueue *r;
+
+	r = malloc(sizeof(*r));
+	if (!r)
+		return NULL;
+
+	spin_lock_init(&r->lock);
+	list_head_init(&r->runnable);
+	return r;
+}
+
 /**
  * sched_init_thread - initializes per-thread state for the scheduler
  *
@@ -306,21 +311,19 @@ int sched_init_thread(void)
 		return -ENOMEM;
 
 	runtime_stack = (void *)stack_init_to_rsp(s, runtime_top_of_stack); 
+
+	myq = create_runqueue();
+	if (!myq) {
+		stack_free(s);
+		return -ENOMEM;
+	}
+
+	spin_lock(&qlock);
+	qs[nrqs++] = myq;
+	assert(nrqs < NTHREAD);
+	spin_unlock(&qlock);
+
 	return 0;
-}
-
-static struct runqueue *create_runqueue(void)
-{
-	struct runqueue *r;
-
-	r = malloc(sizeof(*r));
-	if (!r)
-		return NULL;
-
-	spin_lock_init(&r->lock);
-	list_head_init(&r->runnable);
-	qs[nr_qs++] = r;
-	return r;
 }
 
 /**
@@ -330,8 +333,7 @@ static struct runqueue *create_runqueue(void)
  */
 int sched_init(void)
 {
-	struct runqueue *r;
-	int ret, i, pos;
+	int ret;
 
 	/*
 	 * set up allocation routines for threads
@@ -346,28 +348,6 @@ int sched_init(void)
 	if (!thread_tcache) {
 		slab_destroy(&thread_slab);
 		return -ENOMEM;
-	}
-
-	/*
-	 * create runqueues based on CPU topology
-	 * STRATEGY: create a runqueue for each hyperthread pair
-	 */
-	for (i = 0; i < cpu_count; i++) {
-		unsigned long *siblings = cpu_info_tbl[i].thread_siblings_mask;
-		int first = bitmap_find_next_set(siblings, NCPU, 0);
-
-		/* only create a runqueue for the first occurrence */
-		if (i != first) {
-			BUG_ON(!core_to_q[i]);
-			continue;
-		}
-
-		r = create_runqueue();
-		if (!r)
-			return -ENOMEM;
-
-		bitmap_for_each_set(siblings, NCPU, pos)
-			core_to_q[pos] = r;
 	}
 
 	return 0;
