@@ -51,11 +51,13 @@
  * These attributes are defined only with the sparse checker tool.
  */
 #ifdef __CHECKER__
+#define __rcu		__attribute__((noderef, address_space(1)))
 #define __perthread	__attribute__((noderef, address_space(2)))
 #define __force		__attribute__((force))
 #undef __assume_aligned
 #define __assume_aligned(x)
 #else /* __CHECKER__ */
+#define __rcu
 #define __perthread
 #define __force
 #endif /* __CHECKER__ */

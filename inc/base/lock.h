@@ -21,12 +21,23 @@ static inline void spin_lock_init(spinlock_t *l)
 }
 
 /**
+ * spin_lock_held - determines if the lock is held
+ * @l: the spin lock
+ *
+ * Returns true if the lock is held.
+ */
+static inline bool spin_lock_held(spinlock_t *l)
+{
+	return l->locked != 0;
+}
+
+/**
  * assert_spin_lock_held - asserts that the lock is currently held
  * @l: the spin lock
  */
 static inline void assert_spin_lock_held(spinlock_t *l)
 {
-	assert(l->locked);
+	assert(spin_lock_held(l));
 }
 
 /**
