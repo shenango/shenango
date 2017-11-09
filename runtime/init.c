@@ -11,6 +11,8 @@
 
 #include "defs.h"
 
+static pthread_barrier_t init_barrier;
+
 static int runtime_init_thread(void)
 {
 	int ret;
@@ -43,6 +45,7 @@ static void *pthread_entry(void *data)
 	ret = runtime_init_thread();
 	BUG_ON(ret);
 
+	pthread_barrier_wait(&init_barrier);
 	sched_start();
 
 	/* never reached unless things are broken */
@@ -54,17 +57,22 @@ static void *pthread_entry(void *data)
  * runtime_init - starts the runtime
  * @main_fn: the first function to run as a thread
  * @arg: an argument to @main_fn
- * @cores: the number of cores to use
+ * @cores: the number of threads to use
  *
  * Does not return if successful, otherwise return  < 0 if an error.
  */
-int runtime_init(thread_fn_t main_fn, void *arg, unsigned int cores)
+int runtime_init(thread_fn_t main_fn, void *arg, unsigned int threads)
 {
 	pthread_t tid[NCPU];
 	int ret, i;
 
-	if (cores < 1)
+	if (threads < 1)
 		return -EINVAL;
+
+	if (pthread_barrier_init(&init_barrier, NULL, threads) == -1) {
+		log_err("pthread_barrier_init() failed, ret = %d", -errno);
+		return -errno;
+	}
 
 	ret = base_init();
 	if (ret) {
@@ -86,7 +94,7 @@ int runtime_init(thread_fn_t main_fn, void *arg, unsigned int cores)
 
 	/* point of no return starts here */
 
-	for (i = 1; i < cores; i++) {
+	for (i = 1; i < threads; i++) {
 		ret = pthread_create(&tid[i], NULL, pthread_entry, NULL);
 		BUG_ON(ret);
 	}
@@ -97,6 +105,7 @@ int runtime_init(thread_fn_t main_fn, void *arg, unsigned int cores)
 	ret = thread_spawn_main(main_fn, arg);
 	BUG_ON(ret);
 
+	pthread_barrier_wait(&init_barrier);
 	sched_start();
 
 	/* never reached unless things are broken */
