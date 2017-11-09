@@ -57,7 +57,7 @@ static void *pthread_entry(void *data)
  * runtime_init - starts the runtime
  * @main_fn: the first function to run as a thread
  * @arg: an argument to @main_fn
- * @cores: the number of threads to use
+ * @threads: the number of threads to use
  *
  * Does not return if successful, otherwise return  < 0 if an error.
  */
