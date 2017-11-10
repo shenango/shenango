@@ -1,6 +1,8 @@
-INC     = -I./inc
-CFLAGS  = -g -Wall -std=gnu11 -D_GNU_SOURCE $(INC)
+DPDK = dpdk
+INC     = -I./inc -I$(DPDK)/build/include
+CFLAGS  = -g -Wall -std=gnu11 -D_GNU_SOURCE $(INC) -mssse3
 LDFLAGS = -T base/base.ld
+LDLIBS = -L$(DPDK)/build/lib -lnuma -ldl
 LD	= gcc
 CC	= gcc
 AR	= ar
@@ -45,6 +47,21 @@ test_src = $(wildcard tests/*.c)
 test_obj = $(test_src:.c=.o)
 test_targets = $(basename $(test_src))
 
+# dpdk libs
+DPDK_LIBS=
+DPDK_LIBS+=-Wl,-whole-archive -lrte_pmd_e1000 -Wl,-no-whole-archive
+DPDK_LIBS+=-Wl,-whole-archive -lrte_pmd_ixgbe -Wl,-no-whole-archive
+DPDK_LIBS+=-Wl,-whole-archive -lrte_mempool_ring -Wl,-no-whole-archive
+DPDK_LIBS+=-ldpdk
+DPDK_LIBS+=-lrte_eal
+DPDK_LIBS+=-lrte_ethdev
+DPDK_LIBS+=-lrte_hash
+DPDK_LIBS+=-lrte_mbuf
+DPDK_LIBS+=-lrte_mempool
+DPDK_LIBS+=-lrte_mempool
+DPDK_LIBS+=-lrte_mempool_stack
+DPDK_LIBS+=-lrte_ring
+
 # must be first
 all: libbase.a libdune.a libnet.a libruntime.a iokerneld $(test_targets)
 
@@ -61,7 +78,7 @@ libruntime.a: $(runtime_obj)
 	$(AR) rcs $@ $^
 
 iokerneld: $(iokernel_obj) libbase.a libnet.a base/base.ld
-	$(LD) $(LDFLAGS) -o $@ $(iokernel_obj) libbase.a libnet.a -lpthread
+	$(LD) $(LDFLAGS) -o $@ $(iokernel_obj) libbase.a libnet.a $(DPDK_LIBS) $(LDLIBS) -lpthread
 
 $(test_targets): $(test_obj) libbase.a libruntime.a base/base.ld
 	$(LD) $(LDFLAGS) -o $@ $@.o libbase.a libruntime.a -lpthread

@@ -10,6 +10,7 @@
 int main(int argc, char *argv[])
 {
 	int ret;
+	int port = 0;
 
 	ret = base_init();
 	if (ret) {
@@ -23,6 +24,12 @@ int main(int argc, char *argv[])
 		return ret;
 	}
 
-	while (1) {}
+	ret = dpdk_init(port);
+	if (ret) {
+		log_err("dpdk_init() failed, ret = %d", ret);
+		return ret;
+	}
+
+	dpdk_run(port);
 	return 0;
 }

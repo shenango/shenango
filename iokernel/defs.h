@@ -42,3 +42,10 @@ struct proc {
  */
 
 extern int control_init(void);
+extern int dpdk_init(uint8_t port);
+
+/*
+ * DPDK main loop
+ */
+
+extern void dpdk_run(uint8_t port) __noreturn;
