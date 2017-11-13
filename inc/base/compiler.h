@@ -4,8 +4,12 @@
 
 #pragma once
 
+#ifndef likely
 #define likely(x) __builtin_expect(!!(x), 1)
+#endif
+#ifndef unlikely
 #define unlikely(x) __builtin_expect(!!(x), 0)
+#endif
 #define unreachable() __builtin_unreachable()
 
 #define prefetch0(x) __builtin_prefetch((x), 0, 3)

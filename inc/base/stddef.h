@@ -30,11 +30,13 @@
  * Given a pointer to a member of a structure, this macro does pointer
  * subtraction to return the pointer to the enclosing type.
  */
+#ifndef container_of
 #define container_of(member_ptr, containing_type, member)               \
 	((containing_type *)                                            \
 	 ((char *)(member_ptr)                                          \
 	  - offsetof(containing_type, member))                          \
 	  + check_types_match(*(member_ptr), ((containing_type *)0)->member))
+#endif
 
 /**
  * container_of_var - get pointer to enclosing structure using a variable
