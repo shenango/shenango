@@ -33,9 +33,11 @@
 
 #include <stdint.h>
 #include <inttypes.h>
+#include <rte_cycles.h>
 #include <rte_eal.h>
 #include <rte_ethdev.h>
-#include <rte_cycles.h>
+#include <rte_ether.h>
+#include <rte_ip.h>
 #include <rte_lcore.h>
 #include <rte_mbuf.h>
 
@@ -119,6 +121,45 @@ port_init(uint8_t port, struct rte_mempool *mbuf_pool)
 }
 
 /*
+ * Swap source and destination MAC addresses.
+ */
+void swap_ether_src_dest(struct rte_mbuf *buf)
+{
+	struct ether_hdr *ptr_mac_hdr;
+	struct ether_addr src_addr;
+
+	ptr_mac_hdr = rte_pktmbuf_mtod(buf, struct ether_hdr *);
+	ether_addr_copy(&ptr_mac_hdr->s_addr, &src_addr);
+	ether_addr_copy(&ptr_mac_hdr->d_addr, &ptr_mac_hdr->s_addr);
+	ether_addr_copy(&src_addr, &ptr_mac_hdr->d_addr);
+}
+
+/*
+ * Swap source and destination IP addresses.
+ */
+void swap_ip_src_dest(struct rte_mbuf *buf)
+{
+	struct ether_hdr *ptr_mac_hdr;
+	uint16_t ether_type;
+	struct ipv4_hdr *ptr_ipv4_hdr;
+	uint32_t src_addr;
+
+	/* Check that this is IPv4. TODO: support IPv6. */
+	ptr_mac_hdr = rte_pktmbuf_mtod(buf, struct ether_hdr *);
+	ether_type = ptr_mac_hdr->ether_type;
+	if (ether_type != rte_cpu_to_be_16(ETHER_TYPE_IPv4)) {
+		printf("WARNING: ether type %d is not supported\n", ether_type);
+		return;
+	}
+
+	ptr_ipv4_hdr = rte_pktmbuf_mtod_offset(buf, struct ipv4_hdr *,
+										   sizeof(struct ether_hdr));
+	src_addr = ptr_ipv4_hdr->src_addr;
+	ptr_ipv4_hdr->src_addr = ptr_ipv4_hdr->dst_addr;
+	ptr_ipv4_hdr->dst_addr = src_addr;
+}
+
+/*
  * The main thread that does the work, reading from the port and echoing out
  * the same port.
  */
@@ -150,6 +191,13 @@ void dpdk_run(uint8_t port)
 
 		printf("received %d packets on port %d\n", nb_rx, port);
 
+		/* Swap src and dst ether and IP addresses. */
+		uint16_t buf;
+		for (buf = 0; buf < nb_rx; buf++) {
+			swap_ether_src_dest(bufs[buf]);
+			swap_ip_src_dest(bufs[buf]);
+		}
+
 		/* Send burst of TX packets. */
 		const uint16_t nb_tx = rte_eth_tx_burst(port, 0, bufs, nb_rx);
 
@@ -157,7 +205,6 @@ void dpdk_run(uint8_t port)
 
 		/* Free any unsent packets. */
 		if (unlikely(nb_tx < nb_rx)) {
-			uint16_t buf;
 			for (buf = nb_tx; buf < nb_rx; buf++)
 				rte_pktmbuf_free(bufs[buf]);
 		}
