@@ -386,20 +386,20 @@ static int entry_boot_cpu(struct entry_percpu *ent,
                 "lgdt %0\n"
 
                 /* STEP 2: initialize data segements */
-                "mov $" __str(GD_KD) ", %%ax\n"
+                "mov $" __cstr(GD_KD) ", %%ax\n"
                 "mov %%ax, %%ds\n"
                 "mov %%ax, %%es\n"
                 "mov %%ax, %%ss\n"
 
                 /* STEP 3: long jump into the new code segment */
-                "mov $" __str(GD_KT) ", %%rax\n"
+                "mov $" __cstr(GD_KT) ", %%rax\n"
                 "pushq %%rax\n"
                 "pushq $1f\n"
                 "lretq\n"
                 "1: nop\n"
 
                 /* STEP 4: load the task register (for safe stack switching) */
-                "mov $" __str(GD_TSS) ", %%ax\n"
+                "mov $" __cstr(GD_TSS) ", %%ax\n"
                 "ltr %%ax\n"
 
                 /* STEP 5: load the new IDT */

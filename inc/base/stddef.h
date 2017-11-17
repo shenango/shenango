@@ -113,10 +113,10 @@
 #define div_up(x, d) ((((x) + (d) - 1)) / (d))
 
 /**
- * __str - converts a value to a string
+ * __cstr - converts a value to a string
  */
-#define __str_t(x...)	#x
-#define __str(x...)	__str_t(x)
+#define __cstr_t(x...)	#x
+#define __cstr(x...)	__cstr_t(x)
 
 /**
  * BIT - generates a value with one set bit by index

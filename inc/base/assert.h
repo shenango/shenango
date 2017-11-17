@@ -23,7 +23,7 @@ extern void logk_bug(bool fatal, const char *expr,
         do {							\
 		__build_assert_if_constant(cond);		\
 		if (unlikely(!(cond))) {			\
-			logk_bug(true, __str(cond),		\
+			logk_bug(true, __cstr(cond),		\
 				 __FILE__, __LINE__, __func__);	\
 			__builtin_unreachable();		\
 		}						\
@@ -54,7 +54,7 @@ extern void logk_bug(bool fatal, const char *expr,
 	do {							\
 		__build_assert_if_constant(!(cond));		\
 		if (unlikely(cond)) {				\
-           		logk_bug(true, __str(cond),		\
+			logk_bug(true, __cstr(cond),		\
 			         __FILE__, __LINE__, __func__);	\
 			__builtin_unreachable();		\
 		}						\
@@ -74,7 +74,7 @@ extern void logk_bug(bool fatal, const char *expr,
 	do {							\
 		__build_assert_if_constant(!(cond));		\
 		if (unlikely(cond))				\
-			logk_bug(false, __str(cond),		\
+			logk_bug(false, __cstr(cond),		\
 			         __FILE__, __LINE__, __func__);	\
 	} while (0)
 
@@ -88,7 +88,7 @@ extern void logk_bug(bool fatal, const char *expr,
 	__build_assert_if_constant(!(cond));			\
         if (unlikely(!__once && cond)) {			\
 		__once = true;					\
-                logk_bug(false, __str(cond),			\
+                logk_bug(false, __cstr(cond),			\
 			 __FILE__, __LINE__, __func__);		\
 	}							\
 })

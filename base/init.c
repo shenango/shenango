@@ -25,7 +25,7 @@ struct init_level {
 };
 
 #define INIT_LEVEL(name, level)						\
-	{__str(name), &__initcall ## level ## _start,			\
+	{__cstr(name), &__initcall ## level ## _start,			\
 	 &__initcall ## level ## _end}
 
 #define DECLARE_INIT_LEVEL_SYMS(level)					\

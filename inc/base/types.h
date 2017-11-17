@@ -6,11 +6,13 @@
 
 #include <asm/cpu.h>
 
+#ifndef __cplusplus
 #ifndef bool
 typedef int bool;
-#endif
+#endif /* bool */
 #define false 0
 #define true 1
+#endif /* __cplusplus */
 
 typedef unsigned char uint8_t;
 typedef unsigned short uint16_t;

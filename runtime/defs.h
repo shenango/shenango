@@ -127,6 +127,20 @@ static inline void stack_free(struct stack *s)
 	return tcache_free(&stack_pt, (void *)s);
 }
 
+#define RSP_ALIGNMENT	16
+
+static inline void assert_rsp_aligned(uint64_t rsp)
+{
+	/*
+	 * The stack must be 16-byte aligned at process entry according to
+	 * the System V Application Binary Interface (section 3.4.1).
+	 *
+	 * The callee assumes a return address has been pushed on the aligned
+	 * stack by CALL, so we look for an 8 byte offset.
+	 */
+	assert(rsp % RSP_ALIGNMENT == __WORD_SIZE / 8);
+}
+
 /**
  * stack_init_to_rsp - sets up an exit handler and returns the top of the stack
  * @s: the stack to initialize
@@ -140,18 +154,35 @@ static inline uint64_t stack_init_to_rsp(struct stack *s, void (*exit_fn)(void))
 
 	s->usable[STACK_PTR_SIZE - 1] = (uintptr_t)exit_fn;
 	rsp = (uint64_t)&s->usable[STACK_PTR_SIZE - 1];
+	assert_rsp_aligned(rsp);
+	return rsp;
+}
 
-	/*
-	 * The stack must be 16-byte aligned at process entry according to
-	 * the System V Application Binary Interface (section 3.4.1).
-	 *
-	 * The callee assumes a return address has been pushed on the aligned
-	 * stack by CALL, so we look for an 8 byte offset.
-	 *
-	 * In reality, we 32-byte align the stack, anticipating 256-bit YMM
-	 * registers.
-	 */
-	assert(rsp % 16 == 8);
+/**
+ * stack_init_to_rsp_with_buf - sets up an exit handler and returns the top of
+ * the stack, reserving space for a buffer above
+ * @s: the stack to initialize
+ * @buf: a pointer to store the buffer pointer
+ * @buf_len: the length of the buffer to reserve
+ * @exit_fn: exit handler that is called when the top of the call stack returns
+ *
+ * Returns the top of the stack as a stack pointer.
+ */
+static inline uint64_t
+stack_init_to_rsp_with_buf(struct stack *s, void **buf, size_t buf_len,
+			   void (*exit_fn)(void))
+{
+	uint64_t rsp, pos = STACK_PTR_SIZE;
+
+	/* reserve the buffer */
+	pos -= div_up(buf_len, sizeof(uint64_t));
+	pos = align_down(pos, RSP_ALIGNMENT / sizeof(uint64_t));
+	*buf = (void *)&s->usable[pos];
+
+	/* setup for usage as stack */
+	s->usable[--pos] = (uintptr_t)exit_fn;
+	rsp = (uint64_t)&s->usable[pos];
+	assert_rsp_aligned(rsp);
 	return rsp;
 }
 

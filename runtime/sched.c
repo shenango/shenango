@@ -190,36 +190,74 @@ void thread_yield(void)
 	call_runtime(thread_finish_yield, 0);
 }
 
-static int __thread_spawn(thread_fn_t fn, void *arg, bool main)
+static __always_inline thread_t *__thread_create(void)
 {
 	struct thread *th;
 	struct stack *s;
 
 	th = tcache_alloc(&thread_pt);
 	if (unlikely(!th))
-		return -ENOMEM;
+		return NULL;
 
 	s = stack_alloc();
 	if (unlikely(!s)) {
 		tcache_free(&thread_pt, th);
-		return -ENOMEM;
+		return NULL;
 	}
-
-	th->tf.rdi = (uint64_t)arg;
-	th->tf.rbp = (uint64_t)0; /* just in case base pointers are enabled */
-	th->tf.rip = (uint64_t)fn;
-	th->tf.rsp = stack_init_to_rsp(s, thread_exit);
 
 	th->stack = s;
 	th->state = THREAD_STATE_SLEEPING;
-	th->main_thread = main;
-	thread_ready(th);
+	th->main_thread = false;
 
-	return 0;
+	return th;
 }
 
 /**
- * thread_spawn - creates a new thread
+ * thread_create - creates a new thread
+ * @fn: a function pointer to the starting method of the thread
+ * @arg: an argument passed to @fn
+ *
+ * Returns 0 if successful, otherwise -ENOMEM if out of memory.
+ */
+thread_t *thread_create(thread_fn_t fn, void *arg)
+{
+	thread_t *th = __thread_create();
+	if (unlikely(!th))
+		return NULL;
+
+	th->tf.rsp = stack_init_to_rsp(th->stack, thread_exit);
+	th->tf.rdi = (uint64_t)arg;
+	th->tf.rbp = (uint64_t)0; /* just in case base pointers are enabled */
+	th->tf.rip = (uint64_t)fn;
+	return th;
+}
+
+/**
+ * thread_create_with_buf - creates a new thread with space for a buffer on the
+ * stack
+ * @fn: a function pointer to the starting method of the thread
+ * @arg: an argument passed to @fn
+ *
+ * Returns 0 if successful, otherwise -ENOMEM if out of memory.
+ */
+thread_t *thread_create_with_buf(thread_fn_t fn, void **buf, size_t buf_len)
+{
+	void *ptr;
+	thread_t *th = __thread_create();
+	if (unlikely(!th))
+		return NULL;
+
+	th->tf.rsp = stack_init_to_rsp_with_buf(th->stack, &ptr,
+						buf_len, thread_exit);
+	th->tf.rdi = (uint64_t)ptr;
+	th->tf.rbp = (uint64_t)0; /* just in case base pointers are enabled */
+	th->tf.rip = (uint64_t)fn;
+	*buf = ptr;
+	return th;
+}
+
+/**
+ * thread_spawn - creates and launches a new thread
  * @fn: a function pointer to the starting method of the thread
  * @arg: an argument passed to @fn
  *
@@ -227,11 +265,15 @@ static int __thread_spawn(thread_fn_t fn, void *arg, bool main)
  */
 int thread_spawn(thread_fn_t fn, void *arg)
 {
-	return __thread_spawn(fn, arg, false);
+	thread_t *th = thread_create(fn, arg);
+	if (unlikely(!th))
+		return -ENOMEM;
+	thread_ready(th);
+	return 0;
 }
 
 /**
- * thread_spawn_main - creates the main thread
+ * thread_spawn_main - creates and launches the main thread
  * @fn: a function pointer to the starting method of the thread
  * @arg: an argument passed to @fn
  *
@@ -242,9 +284,17 @@ int thread_spawn(thread_fn_t fn, void *arg)
 int thread_spawn_main(thread_fn_t fn, void *arg)
 {
 	static bool called = false;
+	thread_t *th;
+
 	BUG_ON(called);
 	called = true;
-	return __thread_spawn(fn, arg, true);
+
+	th = thread_create(fn, arg);
+	if (!th)
+		return -ENOMEM;
+	th->main_thread = true;
+	thread_ready(th);
+	return 0;
 }
 
 static void thread_finish_exit(unsigned long data)
