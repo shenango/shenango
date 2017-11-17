@@ -103,6 +103,9 @@ static struct proc *control_create_proc(mem_key_t key, size_t len, pid_t pid)
 	reg.base = shbuf;
 	reg.len = len;
 	p->region = reg;
+	if (eth_addr_is_multicast(&hdr.mac) || eth_addr_is_zero(&hdr.mac))
+		goto fail_free_proc;
+	p->mac = hdr.mac;
 
 	/* initialize the threads */
 	for (i = 0; i < hdr.thread_count; i++) {

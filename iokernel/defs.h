@@ -6,6 +6,7 @@
 #include <base/lrpc.h>
 #include <base/mem.h>
 #include <iokernel/control.h>
+#include <net/ethernet.h>
 
 
 /*
@@ -29,6 +30,9 @@ struct proc {
 	/* runtime threads */
 	unsigned int		thread_count;
 	struct thread		threads[NCPU];
+
+	/* network data */
+	struct eth_addr		mac;
 };
 
 
