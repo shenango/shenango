@@ -63,7 +63,7 @@ static void *pthread_entry(void *data)
  */
 int runtime_init(thread_fn_t main_fn, void *arg, unsigned int threads)
 {
-	pthread_t tid[NCPU];
+	pthread_t tid[NTHREAD];
 	int ret, i;
 
 	if (threads < 1)

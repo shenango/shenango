@@ -29,6 +29,7 @@ static inline thread_t *thread_self(void)
 
 extern void thread_yield(void);
 extern int thread_spawn(thread_fn_t fn, void *arg);
+extern int thread_spawn_with_data(thread_fn_t fn, size_t len, void **arg);
 extern void thread_exit(void) __noreturn;
 
 /* main initialization */

@@ -7,7 +7,8 @@
 #include <base/lrpc.h>
 
 /* internal use only */
-bool __lrpc_send(struct lrpc_chan_tx *chan, uint64_t cmd, unsigned long payload)
+bool __lrpc_send(struct lrpc_chan_out *chan, uint64_t cmd,
+		 unsigned long payload)
 {
 	struct lrpc_msg *dst;
 
@@ -26,7 +27,7 @@ bool __lrpc_send(struct lrpc_chan_tx *chan, uint64_t cmd, unsigned long payload)
 }
 
 /**
- * lrpc_init_tx - initializes an egress shared memory channel
+ * lrpc_init_out - initializes an egress shared memory channel
  * @chan: the channel struct to initialize
  * @tbl: a buffer to store channel messages
  * @size: the number of message elements in the buffer
@@ -34,8 +35,8 @@ bool __lrpc_send(struct lrpc_chan_tx *chan, uint64_t cmd, unsigned long payload)
  *
  * returns 0 if successful, or -EINVAL if @size is not a power of two.
  */
-int lrpc_init_tx(struct lrpc_chan_tx *chan, struct lrpc_msg *tbl,
-		 unsigned int size, uint32_t *recv_head_wb)
+int lrpc_init_out(struct lrpc_chan_out *chan, struct lrpc_msg *tbl,
+		  unsigned int size, uint32_t *recv_head_wb)
 {
 	if (!is_power_of_two(size))
 		return -EINVAL;
@@ -48,7 +49,7 @@ int lrpc_init_tx(struct lrpc_chan_tx *chan, struct lrpc_msg *tbl,
 }
 
 /**
- * lrpc_init_rx - initializes an ingress shared memory channel
+ * lrpc_init_in - initializes an ingress shared memory channel
  * @chan: the channel struct to initialize
  * @tbl: a buffer to store channel messages
  * @size: the number of message elements in the buffer
@@ -56,7 +57,7 @@ int lrpc_init_tx(struct lrpc_chan_tx *chan, struct lrpc_msg *tbl,
  *
  * returns 0 if successful, or -EINVAL if @size is not a power of two.
  */
-int lrpc_init_rx(struct lrpc_chan_rx *chan, struct lrpc_msg *tbl,
+int lrpc_init_in(struct lrpc_chan_in *chan, struct lrpc_msg *tbl,
 		 unsigned int size, uint32_t *recv_head_wb)
 {
 	if (!is_power_of_two(size))

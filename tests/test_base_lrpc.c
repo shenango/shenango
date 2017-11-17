@@ -23,18 +23,18 @@ struct params {
 
 static void client(struct params *p)
 {
-	struct lrpc_chan_tx c_out;
-	struct lrpc_chan_rx c_in;
+	struct lrpc_chan_out c_out;
+	struct lrpc_chan_in c_in;
 	double msgs_per_second;
 	uint64_t start_us;
 	uint64_t cmd;
 	unsigned long payload;
 	int ret, i;
 
-	ret = lrpc_init_tx(&c_out, p->server_buf, QUEUE_SIZE, p->server_wb);
+	ret = lrpc_init_out(&c_out, p->server_buf, QUEUE_SIZE, p->server_wb);
 	BUG_ON(ret);
 
-	ret = lrpc_init_rx(&c_in, p->client_buf, QUEUE_SIZE, p->client_wb);
+	ret = lrpc_init_in(&c_in, p->client_buf, QUEUE_SIZE, p->client_wb);
 	BUG_ON(ret);
 
 	while (!lrpc_send(&c_out, 0, 0))
@@ -65,16 +65,16 @@ static void client(struct params *p)
 
 static void server(struct params *p)
 {
-	struct lrpc_chan_tx c_out;
-	struct lrpc_chan_rx c_in;
+	struct lrpc_chan_out c_out;
+	struct lrpc_chan_in c_in;
 	uint64_t cmd;
 	unsigned long payload;
 	int ret;
 
-	ret = lrpc_init_rx(&c_in, p->server_buf, QUEUE_SIZE, p->server_wb);
+	ret = lrpc_init_in(&c_in, p->server_buf, QUEUE_SIZE, p->server_wb);
 	BUG_ON(ret);
 
-	ret = lrpc_init_tx(&c_out, p->client_buf, QUEUE_SIZE, p->client_wb);
+	ret = lrpc_init_out(&c_out, p->client_buf, QUEUE_SIZE, p->client_wb);
 	BUG_ON(ret);
 
 	while (true) {

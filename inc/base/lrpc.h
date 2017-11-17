@@ -25,7 +25,7 @@ struct lrpc_msg {
  * Egress Channel Support
  */
 
-struct lrpc_chan_tx {
+struct lrpc_chan_out {
 	struct lrpc_msg	*tbl;
 	uint32_t	*recv_head_wb;
 	uint32_t	send_head;
@@ -33,7 +33,7 @@ struct lrpc_chan_tx {
 	uint32_t	size;
 };
 
-extern bool __lrpc_send(struct lrpc_chan_tx *chan, uint64_t cmd,
+extern bool __lrpc_send(struct lrpc_chan_out *chan, uint64_t cmd,
 			unsigned long payload);
 
 /**
@@ -44,7 +44,7 @@ extern bool __lrpc_send(struct lrpc_chan_tx *chan, uint64_t cmd,
  *
  * Returns true if successful, otherwise the channel is full.
  */
-static inline bool lrpc_send(struct lrpc_chan_tx *chan, uint64_t cmd,
+static inline bool lrpc_send(struct lrpc_chan_out *chan, uint64_t cmd,
 			     unsigned long payload)
 {
 	struct lrpc_msg *dst;
@@ -72,7 +72,7 @@ static inline bool lrpc_send(struct lrpc_chan_tx *chan, uint64_t cmd,
  *
  * Returns the last known number of slots left available for sending.
  */
-static inline uint32_t lrpc_get_cached_send_window(struct lrpc_chan_tx *chan)
+static inline uint32_t lrpc_get_cached_send_window(struct lrpc_chan_out *chan)
 {
 	return chan->size - chan->send_head + chan->send_tail;
 }
@@ -84,21 +84,21 @@ static inline uint32_t lrpc_get_cached_send_window(struct lrpc_chan_tx *chan)
  *
  * Returns the number of slots left available for sending.
  */
-static inline uint32_t lrpc_get_send_window(struct lrpc_chan_tx *chan)
+static inline uint32_t lrpc_get_send_window(struct lrpc_chan_out *chan)
 {
 	chan->send_tail = load_acquire(chan->recv_head_wb);
 	return lrpc_get_cached_send_window(chan);
 }
 
-extern int lrpc_init_tx(struct lrpc_chan_tx *chan, struct lrpc_msg *tbl,
-			unsigned int size, uint32_t *recv_head_wb);
+extern int lrpc_init_out(struct lrpc_chan_out *chan, struct lrpc_msg *tbl,
+			 unsigned int size, uint32_t *recv_head_wb);
 
 
 /*
  * Ingress Channel Support
  */
 
-struct lrpc_chan_rx {
+struct lrpc_chan_in {
 	struct lrpc_msg	*tbl;
 	uint32_t	*recv_head_wb;
 	uint32_t	recv_head;
@@ -113,7 +113,7 @@ struct lrpc_chan_rx {
  *
  * Returns true if successful, otherwise the channel is empty.
  */
-static inline bool lrpc_recv(struct lrpc_chan_rx *chan, uint64_t *cmd_out,
+static inline bool lrpc_recv(struct lrpc_chan_in *chan, uint64_t *cmd_out,
 			     unsigned long *payload_out)
 {
         struct lrpc_msg *m = &chan->tbl[chan->recv_head & (chan->size - 1)];
@@ -132,5 +132,5 @@ static inline bool lrpc_recv(struct lrpc_chan_rx *chan, uint64_t *cmd_out,
 	return true;
 }
 
-extern int lrpc_init_rx(struct lrpc_chan_rx *chan, struct lrpc_msg *tbl,
+extern int lrpc_init_in(struct lrpc_chan_in *chan, struct lrpc_msg *tbl,
 			unsigned int size, uint32_t *recv_head_wb);
