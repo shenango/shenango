@@ -8,7 +8,7 @@ extern void logk_bug(bool fatal, const char *expr,
 		     const char *file, int line, const char *func);
 
 /* this helper trys to check a run-time assertion at built-time if possible */
-#ifndef __CHECKER__
+#if !defined(__CHECKER__) && !defined(__cplusplus)
 #define __build_assert_if_constant(cond)			\
 	_Static_assert(__builtin_choose_expr(__builtin_constant_p(cond), \
 		       (cond), true),				\

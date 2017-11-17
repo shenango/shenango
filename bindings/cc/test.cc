@@ -4,31 +4,40 @@ extern "C" {
 }
 
 #include <string>
-#include <thread.h>
+#include "thread.h"
 
 namespace {
 
 constexpr int kTestValue = 10;
 
 void foo(int arg) {
-  if (arg != kTestValue) exit(EXIT_FAILURE);
+  if (arg != kTestValue) BUG();
 }
 
 void MainHandler(void *arg) {
   std::string str = "captured!";
   int i = kTestValue;
+  int j = kTestValue;
 
   rt::ThreadSpawn([=]{
-    log_info("hello! '%s'", str.c_str());
+    log_info("hello from ThreadSpawn()! '%s'", str.c_str());
     foo(i);
   });
 
   rt::ThreadSpawn([&]{
-    log_info("hello! '%s'", str.c_str());
+    log_info("hello from ThreadSpawn()! '%s'", str.c_str());
     foo(i);
+    j *= 2;
   });
 
   rt::ThreadYield();
+  if (j != kTestValue * 2) BUG();
+
+  auto th = rt::Thread([&]{
+    log_info("hello from rt::Thread! '%s'", str.c_str());
+    foo(i);
+  });
+  th.Join();
 }
 
 } // anonymous namespace
@@ -36,7 +45,7 @@ void MainHandler(void *arg) {
 int main(int argc, char *argv[]) {
   int ret;
 
-  ret = runtime_init(MainHandler, NULL, 2);
+  ret = runtime_init(MainHandler, NULL, 1);
   if (ret) {
     log_err("failed to start runtime");
     return ret;

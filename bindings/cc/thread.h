@@ -2,14 +2,37 @@
 
 extern "C" {
 #include <base/assert.h>
+#include <base/lock.h>
 #include <runtime/thread.h>
 }
 
 #include <functional>
 
+#include "macros.h"
+
 namespace rt {
 namespace thread_internal {
+
+struct join_data {
+  join_data(std::function<void()>&& func)
+  : done_(false), waiter_(nullptr), func_(std::move(func)) {
+    spin_lock_init(&lock_);
+  }
+  join_data(const std::function<void()>& func)
+  : done_(false), waiter_(nullptr), func_(func) {
+    spin_lock_init(&lock_);
+  }
+  DISALLOW_COPY_AND_ASSIGN(join_data);
+
+  spinlock_t		lock_;
+  bool			done_;
+  thread_t		*waiter_;
+  std::function<void()>	func_;
+};
+
 extern void ThreadTrampoline(void *arg);
+extern void ThreadTrampolineWithJoin(void *arg);
+
 } // namespace thread_internal
 
 // Spawns a new thread by copying.
@@ -41,5 +64,37 @@ static inline void ThreadExit(void) {
 static inline void ThreadYield(void) {
   thread_yield();
 }
+
+// A C++11 style thread class
+class Thread {
+ public:
+  // boilerplate constructors.
+  Thread() : join_data_(nullptr) {}
+  DISALLOW_COPY_AND_ASSIGN(Thread);
+  ~Thread();
+
+  // Move support.
+  Thread(Thread&& t) : join_data_(t.join_data_) {t.join_data_ = nullptr;}
+  Thread& operator=(Thread&& t) {
+    join_data_ = t.join_data_;
+    t.join_data_ = nullptr;
+    return *this;
+  }
+
+  // Spawns a thread by copying a std::function.
+  Thread(const std::function<void()>& func);
+
+  // Spawns a thread by moving a std::function.
+  Thread(std::function<void()>&& func);
+
+  // Waits for the thread to exit.
+  void Join();
+
+  // Detaches the thread, indicating it won't be joined in the future.
+  void Detach();
+
+ private:
+  thread_internal::join_data *join_data_;
+};
 
 } // namespace rt
