@@ -1,7 +1,6 @@
 #pragma once
 
 extern "C" {
-#include <errno.h>
 #include <base/assert.h>
 #include <runtime/thread.h>
 }
