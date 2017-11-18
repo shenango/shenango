@@ -77,14 +77,14 @@ static inline bool atomic_dec_and_test(atomic_t *a)
 	return (atomic_sub_and_fetch(a, 1) == 0);
 }
 
-static inline bool atomic_cmpxchg(atomic_t *a, int old, int new)
+static inline bool atomic_cmpxchg(atomic_t *a, int oldv, int newv)
 {
-	return __sync_bool_compare_and_swap(&a->cnt, old, new);
+	return __sync_bool_compare_and_swap(&a->cnt, oldv, newv);
 }
 
-static inline int atomic_cmpxchg_val(atomic_t *a, int old, int new)
+static inline int atomic_cmpxchg_val(atomic_t *a, int oldv, int newv)
 {
-	return __sync_val_compare_and_swap(&a->cnt, old, new);
+	return __sync_val_compare_and_swap(&a->cnt, oldv, newv);
 }
 
 static inline long atomic64_read(const atomic64_t *a)
@@ -152,12 +152,12 @@ static inline bool atomic64_dec_and_test(atomic64_t *a)
 	return (atomic64_sub_and_fetch(a, 1) == 0);
 }
 
-static inline bool atomic64_cmpxchg(atomic64_t *a, long old, long new)
+static inline bool atomic64_cmpxchg(atomic64_t *a, long oldv, long newv)
 {
-	return __sync_bool_compare_and_swap(&a->cnt, old, new);
+	return __sync_bool_compare_and_swap(&a->cnt, oldv, newv);
 }
 
-static inline long atomic64_cmpxchg_val(atomic64_t *a, long old, long new)
+static inline long atomic64_cmpxchg_val(atomic64_t *a, long oldv, long newv)
 {
-	return __sync_val_compare_and_swap(&a->cnt, old, new);
+	return __sync_val_compare_and_swap(&a->cnt, oldv, newv);
 }
