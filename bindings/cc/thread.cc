@@ -12,8 +12,13 @@ void ThreadTrampolineWithJoin(void *arg) {
   d->func_();
   spin_lock(&d->lock_);
   d->done_ = true;
-  if (d->waiter_) thread_ready(d->waiter_);
-  spin_unlock(&d->lock_);
+  if (d->waiter_) {
+    spin_unlock(&d->lock_);
+    thread_ready(d->waiter_);
+    return;
+  }
+  d->waiter_ = thread_self();
+  thread_park_and_unlock(&d->lock_);
 }
 } // namespace thread_internal
 
@@ -53,6 +58,7 @@ void Thread::Join() {
   spin_lock(&join_data_->lock_);
   if (join_data_->done_) {
     spin_unlock(&join_data_->lock_);
+    thread_ready(join_data_->waiter_);
     join_data_ = nullptr;
     return;
   }
