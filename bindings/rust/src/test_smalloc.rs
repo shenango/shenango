@@ -41,7 +41,7 @@ fn main() {
     let mut tsc_elapsed;
 
     shenango::base_init().unwrap();
-    shenango::base_init_thread(0).unwrap();
+    shenango::base_init_thread().unwrap();
 
     let mut ptrs = vec![ptr::null_mut(); N];
 

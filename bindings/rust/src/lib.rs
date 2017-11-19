@@ -3,7 +3,8 @@
 #![allow(non_snake_case)]
 #![feature(asm)]
 
-use std::os::raw::{c_int, c_uint, c_void};
+use std::os::raw::{c_int, c_void};
+use std::{mem, panic};
 
 pub mod ffi {
     include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
@@ -20,8 +21,8 @@ fn convert_error(ret: c_int) -> Result<(), i32> {
 pub fn base_init() -> Result<(), i32> {
     convert_error(unsafe { ffi::base_init() })
 }
-pub fn base_init_thread(cpu: u32) -> Result<(), i32> {
-    convert_error(unsafe { ffi::base_init_thread(cpu as c_uint) })
+pub fn base_init_thread() -> Result<(), i32> {
+    convert_error(unsafe { ffi::base_init_thread() })
 }
 
 pub fn delay_us(microseconds: u64) {
@@ -34,19 +35,19 @@ pub fn thread_yield() {
 pub fn rdtsc() -> u64 {
     let a: u32;
     let d: u32;
-    unsafe { asm!("rdtsc" : "={eax}"(a), "={edx}"(d) : : : "volatile" )};
+    unsafe { asm!("rdtsc" : "={eax}"(a), "={edx}"(d) : : : "volatile" ) };
     (a as u64) | ((d as u64) << 32)
 }
 pub fn rdtscp() -> (u64, u32) {
     let a: u32;
     let d: u32;
     let c: u32;
-	unsafe { asm!("rdtscp" : "={eax}"(a), "={edx}"(d), "={ecx}"(c) : : : "volatile") };
+    unsafe { asm!("rdtscp" : "={eax}"(a), "={edx}"(d), "={ecx}"(c) : : : "volatile") };
 
-	((a as u64) | ((d as u64) << 32), c)
+    ((a as u64) | ((d as u64) << 32), c)
 }
 pub fn cpu_serialize() {
-	unsafe {asm!("cpuid" : : : "rax", "rbx", "rcx", "rdx": "volatile") }
+    unsafe { asm!("cpuid" : : : "rax", "rbx", "rcx", "rdx": "volatile") }
 }
 
 
@@ -54,13 +55,62 @@ pub fn microtime() -> u64 {
     unsafe { (rdtsc() - ffi::start_tsc as u64) / ffi::cycles_per_us as u64 }
 }
 
-pub type ThreadSpawnFn = unsafe extern "C" fn(arg: *mut c_void);
-pub fn thread_spawn<T: Sync>(f: ThreadSpawnFn, arg: &T) -> Result<(), i32> {
-    convert_error(unsafe { ffi::thread_spawn(Some(f), &*arg as *const T as *mut c_void) })
+extern "C" fn trampoline<F>(arg: *mut c_void)
+where
+    F: FnOnce(),
+    F: Send + 'static,
+{
+    let f = arg as *mut F;
+    let f: F = unsafe { mem::transmute_copy(&*f as &F) };
+    let _result = panic::catch_unwind(panic::AssertUnwindSafe(move || f()));
 }
-pub fn runtime_init<T: Sync>(f: ThreadSpawnFn, arg: *const T, ncores: u32) -> Result<(), i32> {
+
+extern "C" fn box_trampoline<F>(arg: *mut c_void)
+where
+    F: FnOnce(),
+    F: Send + 'static,
+{
+    let f = unsafe { Box::from_raw(arg as *mut F) };
+    let _result = panic::catch_unwind(panic::AssertUnwindSafe(move || f()));
+}
+
+pub fn thread_spawn<F>(mut f: F)
+where
+    F: FnOnce(),
+    F: Send + 'static,
+{
+    let mut buf: *mut F = ::std::ptr::null_mut();
+    let th = unsafe {
+        ffi::thread_create_with_buf(
+            Some(trampoline::<F>),
+            &mut buf as *mut *mut F as *mut *mut c_void,
+            mem::size_of::<F>(),
+        )
+    };
+    assert!(!th.is_null());
+    assert!(!buf.is_null());
+    unsafe {
+        ffi::memcpy(
+            buf as *mut c_void,
+            &mut f as *mut F as *mut c_void,
+            mem::size_of::<F>(),
+        );
+        mem::forget(f);
+        ffi::thread_ready(th)
+    };
+}
+
+pub fn runtime_init<F>(f: F, ncores: u32) -> Result<(), i32>
+where
+    F: FnOnce(),
+    F: Send + 'static,
+{
     convert_error(unsafe {
-        ffi::runtime_init(Some(f), arg as *mut c_void, ncores)
+        ffi::runtime_init(
+            Some(box_trampoline::<F>),
+            Box::into_raw(Box::new(f)) as *mut c_void,
+            ncores,
+        )
     })
 }
 
