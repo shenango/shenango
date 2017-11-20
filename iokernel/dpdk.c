@@ -60,8 +60,7 @@ static const struct rte_eth_conf port_conf_default = {
  * Initializes a given port using global settings and with the RX buffers
  * coming from the mbuf_pool passed as a parameter.
  */
-static inline int
-port_init(uint8_t port, struct rte_mempool *mbuf_pool)
+static inline int port_init(uint8_t port, struct rte_mempool *mbuf_pool)
 {
 	struct rte_eth_conf port_conf = port_conf_default;
 	const uint16_t rx_rings = 1, tx_rings = 1;
@@ -85,8 +84,7 @@ port_init(uint8_t port, struct rte_mempool *mbuf_pool)
 	/* Allocate and set up 1 RX queue per Ethernet port. */
 	for (q = 0; q < rx_rings; q++) {
 		retval = rte_eth_rx_queue_setup(port, q, nb_rxd,
-                                        rte_eth_dev_socket_id(port), NULL,
-                                        mbuf_pool);
+				rte_eth_dev_socket_id(port), NULL, mbuf_pool);
 		if (retval < 0)
 			return retval;
 	}
@@ -94,7 +92,7 @@ port_init(uint8_t port, struct rte_mempool *mbuf_pool)
 	/* Allocate and set up 1 TX queue per Ethernet port. */
 	for (q = 0; q < tx_rings; q++) {
 		retval = rte_eth_tx_queue_setup(port, q, nb_txd,
-                                        rte_eth_dev_socket_id(port), NULL);
+				rte_eth_dev_socket_id(port), NULL);
 		if (retval < 0)
 			return retval;
 	}
@@ -108,7 +106,7 @@ port_init(uint8_t port, struct rte_mempool *mbuf_pool)
 	struct ether_addr addr;
 	rte_eth_macaddr_get(port, &addr);
 	printf("Port %u MAC: %02" PRIx8 " %02" PRIx8 " %02" PRIx8
-			   " %02" PRIx8 " %02" PRIx8 " %02" PRIx8 "\n",
+			" %02" PRIx8 " %02" PRIx8 " %02" PRIx8 "\n",
 			(unsigned)port,
 			addr.addr_bytes[0], addr.addr_bytes[1],
 			addr.addr_bytes[2], addr.addr_bytes[3],
@@ -153,7 +151,7 @@ void swap_ip_src_dest(struct rte_mbuf *buf)
 	}
 
 	ptr_ipv4_hdr = rte_pktmbuf_mtod_offset(buf, struct ipv4_hdr *,
-										   sizeof(struct ether_hdr));
+			sizeof(struct ether_hdr));
 	src_addr = ptr_ipv4_hdr->src_addr;
 	ptr_ipv4_hdr->src_addr = ptr_ipv4_hdr->dst_addr;
 	ptr_ipv4_hdr->dst_addr = src_addr;
@@ -169,10 +167,10 @@ void dpdk_run(uint8_t port)
 	 * Check that the port is on the same NUMA node as the polling thread
 	 * for best performance.
 	 */
-	if (rte_eth_dev_socket_id(port) > 0 &&
-        rte_eth_dev_socket_id(port) != (int)rte_socket_id())
-        printf("WARNING, port %u is on remote NUMA node to polling thread.\n\t"
-               "Performance will not be optimal.\n", port);
+	if (rte_eth_dev_socket_id(port) > 0
+			&& rte_eth_dev_socket_id(port) != (int) rte_socket_id())
+		printf("WARNING, port %u is on remote NUMA node to polling thread.\n\t"
+				"Performance will not be optimal.\n", port);
 
 	printf("\nCore %u echoing packets. [Ctrl+C to quit]\n", rte_lcore_id());
 
@@ -218,7 +216,7 @@ int dpdk_init(uint8_t port)
 {
 	struct rte_mempool *mbuf_pool;
 	unsigned nb_ports;
-    char *argv[] = {"./iokerneld", "-l", "1"};
+	char *argv[] = { "./iokerneld", "-l", "1", "--socket-mem=128" };
 
 	/* Initialize the Environment Abstraction Layer (EAL). */
 	int ret = rte_eal_init(sizeof(argv) / sizeof(argv[0]), argv);
@@ -232,17 +230,17 @@ int dpdk_init(uint8_t port)
 
 	/* Creates a new mempool in memory to hold the mbufs. */
 	mbuf_pool = rte_pktmbuf_pool_create("MBUF_POOL", NUM_MBUFS * nb_ports,
-		MBUF_CACHE_SIZE, 0, RTE_MBUF_DEFAULT_BUF_SIZE, rte_socket_id());
+			MBUF_CACHE_SIZE, 0, RTE_MBUF_DEFAULT_BUF_SIZE, rte_socket_id());
 
 	if (mbuf_pool == NULL)
 		rte_exit(EXIT_FAILURE, "Cannot create mbuf pool\n");
 
 	/* Initialize port. */
 	if (port_init(port, mbuf_pool) != 0)
-        rte_exit(EXIT_FAILURE, "Cannot init port %"PRIu8 "\n", port);
+		rte_exit(EXIT_FAILURE, "Cannot init port %"PRIu8 "\n", port);
 
 	if (rte_lcore_count() > 1)
 		printf("\nWARNING: Too many lcores enabled. Only 1 used.\n");
 
-    return 0;
+	return 0;
 }
