@@ -189,9 +189,20 @@ void dpdk_run(uint8_t port)
 
 		printf("received %d packets on port %d\n", nb_rx, port);
 
-		/* Swap src and dst ether and IP addresses. */
+		/* Parse dst ether addr, swap src and dst ether and IP addresses. */
 		uint16_t buf;
 		for (buf = 0; buf < nb_rx; buf++) {
+			struct ether_hdr *ptr_mac_hdr;
+			struct ether_addr *ptr_dst_addr;
+
+			ptr_mac_hdr = rte_pktmbuf_mtod(bufs[buf], struct ether_hdr *);
+			ptr_dst_addr = &ptr_mac_hdr->d_addr;
+			printf("Packet to MAC: %02" PRIx8 " %02" PRIx8 " %02" PRIx8
+					" %02" PRIx8 " %02" PRIx8 " %02" PRIx8 "\n",
+					ptr_dst_addr->addr_bytes[0], ptr_dst_addr->addr_bytes[1],
+					ptr_dst_addr->addr_bytes[2], ptr_dst_addr->addr_bytes[3],
+					ptr_dst_addr->addr_bytes[4], ptr_dst_addr->addr_bytes[5]);
+
 			swap_ether_src_dest(bufs[buf]);
 			swap_ip_src_dest(bufs[buf]);
 		}
@@ -216,7 +227,7 @@ int dpdk_init(uint8_t port)
 {
 	struct rte_mempool *mbuf_pool;
 	unsigned nb_ports;
-	char *argv[] = { "./iokerneld", "-l", "1", "--socket-mem=128" };
+	char *argv[] = { "./iokerneld", "-l", "2", "--socket-mem=128" };
 
 	/* Initialize the Environment Abstraction Layer (EAL). */
 	int ret = rte_eal_init(sizeof(argv) / sizeof(argv[0]), argv);
