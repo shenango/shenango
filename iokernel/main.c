@@ -30,6 +30,6 @@ int main(int argc, char *argv[])
 		return ret;
 	}
 
-	dpdk_run(port);
+	dpdk_loop(port);
 	return 0;
 }

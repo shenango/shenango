@@ -31,6 +31,10 @@
  *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+/*
+ * dpdk.c - the data-plane for the I/O kernel
+ */
+
 #include <stdint.h>
 #include <inttypes.h>
 #include <rte_cycles.h>
@@ -40,6 +44,10 @@
 #include <rte_ip.h>
 #include <rte_lcore.h>
 #include <rte_mbuf.h>
+
+#include <base/log.h>
+#include <base/mem.h>
+#include <iokernel/shm.h>
 
 #include "defs.h"
 
@@ -53,14 +61,91 @@
 static const struct rte_eth_conf port_conf_default = {
 	.rxmode = { .max_rx_pkt_len = ETHER_MAX_LEN }
 };
+static struct shm_region ingress_mbuf_region;
 
-/* dpdk.c: Basic DPDK echo server. */
+/*
+ * Callback to unmap the shared memory used by a mempool when destroying it.
+ */
+static void dpdk_mempool_memchunk_free(struct rte_mempool_memhdr *memhdr,
+		void *opaque)
+{
+	mem_unmap_shm(opaque);
+}
+
+/*
+ * Create and initialize a packet mbuf pool in shared memory, based on
+ * rte_pktmbuf_pool_create.
+ */
+static struct rte_mempool *dpdk_pktmbuf_pool_create_in_shm(const char *name,
+		unsigned n, unsigned cache_size, uint16_t priv_size,
+		uint16_t data_room_size, int socket_id)
+{
+	unsigned elt_size;
+	struct rte_pktmbuf_pool_private mbp_priv;
+	struct rte_mempool *mp;
+	int ret;
+	void *shbuf;
+	size_t total_elt_sz, pg_size, pg_shift, len;
+
+	/* create rte_mempool */
+	if (RTE_ALIGN(priv_size, RTE_MBUF_PRIV_ALIGN) != priv_size) {
+		log_err("dpdk: mbuf priv_size=%u is not aligned\n", priv_size);
+		goto fail;
+	}
+	elt_size = sizeof(struct rte_mbuf) + (unsigned) priv_size
+			+ (unsigned) data_room_size;
+	mbp_priv.mbuf_data_room_size = data_room_size;
+	mbp_priv.mbuf_priv_size = priv_size;
+
+	mp = rte_mempool_create_empty(name, n, elt_size, cache_size,
+			sizeof(struct rte_pktmbuf_pool_private), socket_id, 0);
+	if (mp == NULL)
+		goto fail;
+
+	ret = rte_mempool_set_ops_byname(mp, RTE_MBUF_DEFAULT_MEMPOOL_OPS, NULL);
+	if (ret != 0) {
+		log_err("dpdk: error setting mempool handler\n");
+		goto fail_free_mempool;
+	}
+	rte_pktmbuf_pool_init(mp, &mbp_priv);
+
+	/* determine necessary size and map shared memory */
+	total_elt_sz = mp->header_size + mp->elt_size + mp->trailer_size;
+	pg_size = PGSIZE_2MB;
+	pg_shift = rte_bsf32(pg_size);
+	len = rte_mempool_xmem_size(n, total_elt_sz, pg_shift);
+
+	shbuf = mem_map_shm(INGRESS_MBUF_SHM_KEY, NULL, len, pg_size, false);
+	if (shbuf == MAP_FAILED)
+		goto fail_free_mempool;
+	ingress_mbuf_region.base = shbuf;
+	ingress_mbuf_region.len = len;
+
+	/* populate mempool using shared memory */
+	ret = rte_mempool_populate_virt(mp, shbuf, len, pg_size,
+			dpdk_mempool_memchunk_free, shbuf);
+	if (ret < 0) {
+		log_err("dpdk: error populating mempool\n");
+		goto fail_unmap_memory;
+	}
+
+	rte_mempool_obj_iter(mp, rte_pktmbuf_init, NULL);
+
+	return mp;
+
+fail_unmap_memory:
+	mem_unmap_shm(shbuf);
+fail_free_mempool:
+	rte_mempool_free(mp);
+fail: log_err("dpdk: couldn't create pktmbuf pool %s", name);
+	return NULL;
+}
 
 /*
  * Initializes a given port using global settings and with the RX buffers
  * coming from the mbuf_pool passed as a parameter.
  */
-static inline int port_init(uint8_t port, struct rte_mempool *mbuf_pool)
+static inline int dpdk_port_init(uint8_t port, struct rte_mempool *mbuf_pool)
 {
 	struct rte_eth_conf port_conf = port_conf_default;
 	const uint16_t rx_rings = 1, tx_rings = 1;
@@ -121,7 +206,7 @@ static inline int port_init(uint8_t port, struct rte_mempool *mbuf_pool)
 /*
  * Swap source and destination MAC addresses.
  */
-void swap_ether_src_dest(struct rte_mbuf *buf)
+void dpdk_swap_ether_src_dest(struct rte_mbuf *buf)
 {
 	struct ether_hdr *ptr_mac_hdr;
 	struct ether_addr src_addr;
@@ -135,7 +220,7 @@ void swap_ether_src_dest(struct rte_mbuf *buf)
 /*
  * Swap source and destination IP addresses.
  */
-void swap_ip_src_dest(struct rte_mbuf *buf)
+void dpdk_swap_ip_src_dest(struct rte_mbuf *buf)
 {
 	struct ether_hdr *ptr_mac_hdr;
 	uint16_t ether_type;
@@ -161,7 +246,7 @@ void swap_ip_src_dest(struct rte_mbuf *buf)
  * The main thread that does the work, reading from the port and echoing out
  * the same port.
  */
-void dpdk_run(uint8_t port)
+void dpdk_loop(uint8_t port)
 {
 	/*
 	 * Check that the port is on the same NUMA node as the polling thread
@@ -203,8 +288,8 @@ void dpdk_run(uint8_t port)
 					ptr_dst_addr->addr_bytes[2], ptr_dst_addr->addr_bytes[3],
 					ptr_dst_addr->addr_bytes[4], ptr_dst_addr->addr_bytes[5]);
 
-			swap_ether_src_dest(bufs[buf]);
-			swap_ip_src_dest(bufs[buf]);
+			dpdk_swap_ether_src_dest(bufs[buf]);
+			dpdk_swap_ip_src_dest(bufs[buf]);
 		}
 
 		/* Send burst of TX packets. */
@@ -239,15 +324,16 @@ int dpdk_init(uint8_t port)
 	if (nb_ports < 1)
 		rte_exit(EXIT_FAILURE, "Error: no available ports\n");
 
-	/* Creates a new mempool in memory to hold the mbufs. */
-	mbuf_pool = rte_pktmbuf_pool_create("MBUF_POOL", NUM_MBUFS * nb_ports,
-			MBUF_CACHE_SIZE, 0, RTE_MBUF_DEFAULT_BUF_SIZE, rte_socket_id());
+	/* Creates a new mempool in shared memory to hold the mbufs. */
+	mbuf_pool = dpdk_pktmbuf_pool_create_in_shm("MBUF_POOL",
+			NUM_MBUFS * nb_ports, MBUF_CACHE_SIZE, 0,
+			RTE_MBUF_DEFAULT_BUF_SIZE, rte_socket_id());
 
 	if (mbuf_pool == NULL)
 		rte_exit(EXIT_FAILURE, "Cannot create mbuf pool\n");
 
 	/* Initialize port. */
-	if (port_init(port, mbuf_pool) != 0)
+	if (dpdk_port_init(port, mbuf_pool) != 0)
 		rte_exit(EXIT_FAILURE, "Cannot init port %"PRIu8 "\n", port);
 
 	if (rte_lcore_count() > 1)
