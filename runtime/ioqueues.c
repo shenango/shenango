@@ -2,6 +2,7 @@
  * ioqueues.c
  */
 
+#include <fcntl.h>
 #include <string.h>
 #include <sys/ipc.h>
 #include <sys/socket.h>
@@ -19,6 +20,24 @@
 #define COMMAND_QUEUE_MCOUNT 16
 
 struct iokernel_control iok;
+
+static int generate_random_mac(struct eth_addr *mac)
+{
+	int fd, ret;
+	fd = open("/dev/urandom", O_RDONLY);
+	if (fd < 0)
+		return -1;
+
+	ret = read(fd, mac, sizeof(*mac));
+	close(fd);
+	if (ret != sizeof(*mac))
+		return -1;
+
+	mac->addr[0] &= ~ETH_ADDR_GROUP;
+	mac->addr[0] |= ETH_ADDR_LOCAL_ADMIN;
+
+	return 0;
+}
 
 // Could be a macro really, this is totally static :/
 static size_t calculate_shm_space(unsigned int thread_count)
@@ -64,8 +83,12 @@ static int control_setup(void)
 	struct control_hdr *hdr;
 	struct shm_region *r = &iok.r;
 	char *ptr;
-	int i;
+	int i, ret;
 	size_t shm_len;
+
+	ret = generate_random_mac(&iok.mac);
+	if (ret < 0)
+		return ret;
 
 	shm_len = calculate_shm_space(NCPU);
 
@@ -86,10 +109,8 @@ static int control_setup(void)
 	hdr = r->base;
 	hdr->magic = CONTROL_HDR_MAGIC;
 	hdr->thread_count = NCPU;
+	hdr->mac = iok.mac;
 
-	// TODO: fixme
-	struct eth_addr t1 = {.addr = {0, 0, 0, 0, 0, 1},};
-	hdr->mac = t1;
 	hdr->sched_cfg.priority = SCHED_PRIORITY_NORMAL;
 	hdr->sched_cfg.max_cores = NCPU;
 	hdr->sched_cfg.congestion_latency_us = 0;

@@ -199,6 +199,7 @@ struct iokernel_control {
 	shmptr_t next_free;
 	unsigned int thread_count;
 	struct thread_spec threads[NCPU];
+	struct eth_addr mac;
 };
 
 extern struct iokernel_control iok;
