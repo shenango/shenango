@@ -6,7 +6,9 @@
 
 #include <base/stddef.h>
 #include <base/list.h>
+#include <base/mem.h>
 #include <base/tcache.h>
+#include <iokernel/control.h>
 #include <runtime/thread.h>
 
 /*
@@ -186,11 +188,27 @@ stack_init_to_rsp_with_buf(struct stack *s, void **buf, size_t buf_len,
 	return rsp;
 }
 
+/*
+ * ioqueues
+ */
+
+struct iokernel_control {
+	int fd;
+	mem_key_t key;
+	struct shm_region r;
+	shmptr_t next_free;
+	unsigned int thread_count;
+	struct thread_spec threads[NCPU];
+};
+
+extern struct iokernel_control iok;
+
 
 /*
  * init
  */
 
+extern int ioqueues_init(void);
 extern int stack_init_thread(void);
 extern int stack_init(void);
 extern int sched_init_thread(void);

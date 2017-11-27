@@ -81,7 +81,7 @@ iokerneld: $(iokernel_obj) libbase.a libnet.a base/base.ld
 	-lpthread -lnuma -ldl
 
 $(test_targets): $(test_obj) libbase.a libruntime.a base/base.ld
-	$(LD) $(LDFLAGS) -o $@ $@.o libbase.a libruntime.a -lpthread
+	$(LD) $(LDFLAGS) -o $@ $@.o libruntime.a libbase.a -lpthread
 
 # general build rules for all targets
 src = $(base_src) $(dune_src) $(net_src) $(runtime_src) $(iokernel_src) $(test_src)

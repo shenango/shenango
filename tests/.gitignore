@@ -5,3 +5,4 @@ test_base_thread
 test_runtime_threads
 test_runtime_channels
 test_runtime_mutexes
+test_many_threads

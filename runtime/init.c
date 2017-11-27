@@ -86,6 +86,13 @@ int runtime_init(thread_fn_t main_fn, void *arg, unsigned int threads)
 		return ret;
 	}
 
+	// TODO: consider deferring intialization until a socket is requested
+	ret = ioqueues_init();
+	if (ret) {
+		log_err("ioqueues_init() failed, ret = %d", ret);
+		return ret;
+	}
+
 	ret = sched_init();
 	if (ret) {
 		log_err("sched_init() failed, ret = %d", ret);

@@ -76,6 +76,7 @@ static struct proc *control_create_proc(mem_key_t key, size_t len, pid_t pid)
 	struct control_hdr hdr;
 	struct shm_region reg;
 	struct proc *p;
+	struct thread_spec *threads;
 	void *shbuf;
 	int i, ret;
 
@@ -98,6 +99,12 @@ static struct proc *control_create_proc(mem_key_t key, size_t len, pid_t pid)
 	if (!p)
 		goto fail_unmap;
 
+	threads = malloc(sizeof(*threads) * hdr.thread_count);
+	if (!threads)
+		goto fail_free_just_proc;
+	memcpy(threads, ((struct control_hdr *)shbuf)->threads,
+	       sizeof(*threads) * hdr.thread_count);
+
 	p->thread_count = hdr.thread_count;
 	p->sched_cfg = hdr.sched_cfg;
 	reg.base = shbuf;
@@ -110,7 +117,7 @@ static struct proc *control_create_proc(mem_key_t key, size_t len, pid_t pid)
 	/* initialize the threads */
 	for (i = 0; i < hdr.thread_count; i++) {
 		struct thread *th = &p->threads[i];
-		struct thread_spec *s = &hdr.threads[i];
+		struct thread_spec *s = &threads[i];
 
 		/* attach the RX queue */
 		ret = control_init_lrpc_out(&reg, &s->rxq, &th->rxq);
@@ -128,9 +135,13 @@ static struct proc *control_create_proc(mem_key_t key, size_t len, pid_t pid)
 			goto fail_free_proc;
 	}
 
+	free(threads);
+
 	return p;
 
 fail_free_proc:
+	free(threads);
+fail_free_just_proc:
 	free(p);
 fail_unmap:
 	mem_unmap_shm(shbuf);

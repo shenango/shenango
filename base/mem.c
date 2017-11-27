@@ -182,7 +182,8 @@ void *mem_map_shm(mem_key_t key, void *base, size_t len, size_t pgsize,
 	if (addr == MAP_FAILED)
 		return MAP_FAILED;
 
-	touch_mapping(addr, len, pgsize);
+	if (exclusive)
+		touch_mapping(addr, len, pgsize);
 	return addr;
 }
 
