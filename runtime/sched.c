@@ -85,12 +85,10 @@ static __noreturn void call_runtime_nosave(runtime_fn_t fn, unsigned long arg)
 static void drain_overflow(struct kthread *l)
 {
 	thread_t *th;
-	uint32_t rq_tail;
 
 	assert_spin_lock_held(&l->lock);
 
-	rq_tail = load_acquire(&l->rq_tail);
-	while (l->rq_head - rq_tail < RUNTIME_RQ_SIZE) {
+	while (l->rq_head - l->rq_tail < RUNTIME_RQ_SIZE) {
 		th = list_pop(&l->rq_overflow, thread_t, link);
 		if (!th)
 			break;
@@ -165,6 +163,7 @@ again:
 	}
 
 	/* did not find anything to run */
+	cpu_relax();
 	goto again;
 
 done:
