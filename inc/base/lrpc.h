@@ -31,6 +31,7 @@ struct lrpc_chan_out {
 	uint32_t	send_head;
 	uint32_t	send_tail;
 	uint32_t	size;
+	uint32_t	pad;
 };
 
 extern bool __lrpc_send(struct lrpc_chan_out *chan, uint64_t cmd,

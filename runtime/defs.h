@@ -8,6 +8,7 @@
 #include <base/list.h>
 #include <base/mem.h>
 #include <base/tcache.h>
+#include <base/lrpc.h>
 #include <iokernel/control.h>
 #include <runtime/thread.h>
 
@@ -18,6 +19,7 @@
 #define RUNTIME_MAX_THREADS	100000
 #define RUNTIME_STACK_SIZE	128 * KB
 #define RUNTIME_GUARD_SIZE	128 * KB
+#define RUNTIME_RQ_SIZE		32
 
 
 /*
@@ -203,6 +205,39 @@ struct iokernel_control {
 };
 
 extern struct iokernel_control iok;
+
+
+/*
+ * Per-kernel-thread State
+ */
+
+struct kthread {
+	/* 1st cache-line */
+	spinlock_t		lock;
+	uint32_t		generation;
+	uint32_t		rq_head;
+	uint32_t		rq_tail;
+	struct list_head	rq_overflow;
+	struct lrpc_chan_in	rxq;
+	uint64_t		pad;
+
+	/* 2nd-5th cache-line */
+	thread_t		*rq[RUNTIME_RQ_SIZE];
+
+	/* 6th cache-line */
+	struct lrpc_chan_out	txpktq;
+	struct lrpc_chan_out	txcmdq;
+};
+
+extern __thread struct kthread *mykthread;
+
+/**
+ * myk - returns the per-kernel-thread data
+ */
+static inline struct kthread *myk(void)
+{
+	return mykthread;
+}
 
 
 /*
