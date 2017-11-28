@@ -263,3 +263,10 @@ extern struct mbuf *mbuf_clone(struct mbuf_allocator *a, struct mbuf *m);
 extern struct mbuf_allocator *
 mbuf_create_mempool_allocator(size_t pool_len, unsigned int head_len,
 			      unsigned int reserve_len);
+
+
+extern struct mbuf_allocator tc_allocator;
+extern int mbuf_tcache_allocator_init_thread(void);
+extern int mbuf_tcache_allocator_init(void *buf, size_t buf_size,
+				      size_t mbuf_count, unsigned int head_len,
+				      unsigned int reserve_len);
