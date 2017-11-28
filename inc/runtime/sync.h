@@ -28,12 +28,21 @@ extern void __mutex_unlock(mutex_t *m);
 extern void mutex_init(mutex_t *m);
 
 /**
+ * mutex_held - is the mutex currently held?
+ * @m: the mutex to check
+ */
+static inline bool mutex_held(mutex_t *m)
+{
+	return atomic_read(&m->state) > 0;
+}
+
+/**
  * assert_mutex_held - asserts that a mutex is currently held
  * @m: the mutex that must be held
  */
 static inline void assert_mutex_held(mutex_t *m)
 {
-	assert(atomic_read(&m->state) > 0);
+	assert(mutex_held(m));
 }
 
 /**
