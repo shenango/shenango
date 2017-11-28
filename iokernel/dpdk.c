@@ -47,6 +47,7 @@
 
 #include <base/log.h>
 #include <base/mem.h>
+#include <iokernel/queue.h>
 #include <iokernel/shm.h>
 
 #include "defs.h"
@@ -59,7 +60,10 @@
 #define BURST_SIZE 32
 
 static const struct rte_eth_conf port_conf_default = {
-	.rxmode = { .max_rx_pkt_len = ETHER_MAX_LEN }
+	.rxmode = {
+			.max_rx_pkt_len = ETHER_MAX_LEN,
+			.hw_ip_checksum = 1,
+	}
 };
 static struct shm_region ingress_mbuf_region;
 
@@ -251,11 +255,71 @@ void dpdk_swap_ip_src_dest(struct rte_mbuf *buf)
 }
 
 /*
+ * Prepend preamble to ingress packets.
+ */
+static inline struct rx_net_hdr *dpdk_prepend_rx_preamble(struct rte_mbuf *buf)
+{
+	struct rx_net_hdr *net_hdr;
+	uint64_t masked_ol_flags;
+
+	net_hdr = (struct rx_net_hdr *) rte_pktmbuf_prepend(buf,
+			(uint16_t) sizeof(*net_hdr));
+	RTE_ASSERT(net_hdr != NULL);
+
+	net_hdr->len = rte_pktmbuf_pkt_len(buf) - sizeof(*net_hdr);
+	net_hdr->rss_hash = 0; /* unused for now */
+	masked_ol_flags = buf->ol_flags & PKT_RX_IP_CKSUM_MASK;
+	if (masked_ol_flags == PKT_RX_IP_CKSUM_GOOD)
+		net_hdr->csum_type = CHECKSUM_TYPE_UNNECESSARY;
+	else
+		net_hdr->csum_type = CHECKSUM_TYPE_NEEDED;
+	net_hdr->csum = 0; /* unused for now */
+
+	return net_hdr;
+}
+
+/*
+ * Process a batch of incoming packets.
+ */
+void dpdk_rx_burst(struct rte_mbuf **bufs, const uint16_t nb_rx)
+{
+	uint16_t i;
+	struct rte_mbuf *buf;
+	struct ether_hdr *ptr_mac_hdr;
+	struct ether_addr *ptr_dst_addr;
+	struct rx_net_hdr *net_hdr;
+
+	for (i = 0; i < nb_rx; i++) {
+		/* parse dst ether addr */
+		buf = bufs[i];
+
+		ptr_mac_hdr = rte_pktmbuf_mtod(buf, struct ether_hdr *);
+		ptr_dst_addr = &ptr_mac_hdr->d_addr;
+		printf("Packet to MAC: %02" PRIx8 " %02" PRIx8 " %02" PRIx8
+				" %02" PRIx8 " %02" PRIx8 " %02" PRIx8 "\n",
+				ptr_dst_addr->addr_bytes[0], ptr_dst_addr->addr_bytes[1],
+				ptr_dst_addr->addr_bytes[2], ptr_dst_addr->addr_bytes[3],
+				ptr_dst_addr->addr_bytes[4], ptr_dst_addr->addr_bytes[5]);
+
+		/* swap src and dst ether and IP addresses. TODO: remove this once
+		 * packets are sent up to the runtimes. */
+		dpdk_swap_ether_src_dest(buf);
+		dpdk_swap_ip_src_dest(buf);
+
+		/* prepend ingress preamble */
+		net_hdr = dpdk_prepend_rx_preamble(buf);
+	}
+}
+
+/*
  * The main thread that does the work, reading from the port and echoing out
  * the same port.
  */
 void dpdk_loop(uint8_t port)
 {
+	struct rte_mbuf *bufs[BURST_SIZE];
+	uint16_t nb_rx, nb_tx, i;
+
 	/*
 	 * Check that the port is on the same NUMA node as the polling thread
 	 * for best performance.
@@ -274,41 +338,24 @@ void dpdk_loop(uint8_t port)
 		 */
 
 		/* Get burst of RX packets. */
-		struct rte_mbuf *bufs[BURST_SIZE];
-		const uint16_t nb_rx = rte_eth_rx_burst(port, 0, bufs, BURST_SIZE);
+		nb_rx = rte_eth_rx_burst(port, 0, bufs, BURST_SIZE);
 
 		if (nb_rx == 0)
 			continue;
 
 		printf("received %d packets on port %d\n", nb_rx, port);
 
-		/* Parse dst ether addr, swap src and dst ether and IP addresses. */
-		uint16_t buf;
-		for (buf = 0; buf < nb_rx; buf++) {
-			struct ether_hdr *ptr_mac_hdr;
-			struct ether_addr *ptr_dst_addr;
-
-			ptr_mac_hdr = rte_pktmbuf_mtod(bufs[buf], struct ether_hdr *);
-			ptr_dst_addr = &ptr_mac_hdr->d_addr;
-			printf("Packet to MAC: %02" PRIx8 " %02" PRIx8 " %02" PRIx8
-					" %02" PRIx8 " %02" PRIx8 " %02" PRIx8 "\n",
-					ptr_dst_addr->addr_bytes[0], ptr_dst_addr->addr_bytes[1],
-					ptr_dst_addr->addr_bytes[2], ptr_dst_addr->addr_bytes[3],
-					ptr_dst_addr->addr_bytes[4], ptr_dst_addr->addr_bytes[5]);
-
-			dpdk_swap_ether_src_dest(bufs[buf]);
-			dpdk_swap_ip_src_dest(bufs[buf]);
-		}
+		dpdk_rx_burst(bufs, nb_rx);
 
 		/* Send burst of TX packets. */
-		const uint16_t nb_tx = rte_eth_tx_burst(port, 0, bufs, nb_rx);
+		nb_tx = rte_eth_tx_burst(port, 0, bufs, nb_rx);
 
 		printf("sent %d packets on port %d\n", nb_tx, port);
 
 		/* Free any unsent packets. */
 		if (unlikely(nb_tx < nb_rx)) {
-			for (buf = nb_tx; buf < nb_rx; buf++)
-				rte_pktmbuf_free(bufs[buf]);
+			for (i = nb_tx; i < nb_rx; i++)
+				rte_pktmbuf_free(bufs[i]);
 		}
 	}
 }
