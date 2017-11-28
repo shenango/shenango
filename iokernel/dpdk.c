@@ -89,7 +89,7 @@ static struct rte_mempool *dpdk_pktmbuf_pool_create_in_shm(const char *name,
 
 	/* create rte_mempool */
 	if (RTE_ALIGN(priv_size, RTE_MBUF_PRIV_ALIGN) != priv_size) {
-		log_err("dpdk: mbuf priv_size=%u is not aligned\n", priv_size);
+		log_err("dpdk: mbuf priv_size=%u is not aligned", priv_size);
 		goto fail;
 	}
 	elt_size = sizeof(struct rte_mbuf) + (unsigned) priv_size
@@ -104,20 +104,27 @@ static struct rte_mempool *dpdk_pktmbuf_pool_create_in_shm(const char *name,
 
 	ret = rte_mempool_set_ops_byname(mp, RTE_MBUF_DEFAULT_MEMPOOL_OPS, NULL);
 	if (ret != 0) {
-		log_err("dpdk: error setting mempool handler\n");
+		log_err("dpdk: error setting mempool handler");
 		goto fail_free_mempool;
 	}
 	rte_pktmbuf_pool_init(mp, &mbp_priv);
 
-	/* determine necessary size and map shared memory */
+	/* check necessary size and map shared memory */
 	total_elt_sz = mp->header_size + mp->elt_size + mp->trailer_size;
 	pg_size = PGSIZE_2MB;
 	pg_shift = rte_bsf32(pg_size);
 	len = rte_mempool_xmem_size(n, total_elt_sz, pg_shift);
-
-	shbuf = mem_map_shm(INGRESS_MBUF_SHM_KEY, NULL, len, pg_size, false);
-	if (shbuf == MAP_FAILED)
+	if (len > INGRESS_MBUF_SHM_SIZE) {
+		log_err("dpdk: shared memory is too small for number of mbufs");
 		goto fail_free_mempool;
+	}
+
+	shbuf = mem_map_shm(INGRESS_MBUF_SHM_KEY, NULL, INGRESS_MBUF_SHM_SIZE,
+			pg_size, true);
+	if (shbuf == MAP_FAILED) {
+		log_err("dpdk: mem_map_shm failed");
+		goto fail_free_mempool;
+	}
 	ingress_mbuf_region.base = shbuf;
 	ingress_mbuf_region.len = len;
 
@@ -125,7 +132,7 @@ static struct rte_mempool *dpdk_pktmbuf_pool_create_in_shm(const char *name,
 	ret = rte_mempool_populate_virt(mp, shbuf, len, pg_size,
 			dpdk_mempool_memchunk_free, shbuf);
 	if (ret < 0) {
-		log_err("dpdk: error populating mempool\n");
+		log_err("dpdk: error populating mempool %d", ret);
 		goto fail_unmap_memory;
 	}
 
@@ -137,7 +144,8 @@ fail_unmap_memory:
 	mem_unmap_shm(shbuf);
 fail_free_mempool:
 	rte_mempool_free(mp);
-fail: log_err("dpdk: couldn't create pktmbuf pool %s", name);
+fail:
+	log_err("dpdk: couldn't create pktmbuf pool %s", name);
 	return NULL;
 }
 
