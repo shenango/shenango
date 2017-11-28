@@ -29,6 +29,12 @@ static int runtime_init_thread(void)
 		return ret;
 	}
 
+	ret = ioqueues_init_thread();
+	if (ret) {
+		log_err("ioqueues_init_thread() failed, ret = %d", ret);
+		return ret;
+	}
+
 	ret = sched_init_thread();
 	if (ret) {
 		log_err("sched_init_thread() failed, ret = %d", ret);

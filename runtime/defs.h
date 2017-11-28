@@ -246,6 +246,7 @@ static inline struct kthread *myk(void)
  */
 
 extern int ioqueues_init(void);
+extern int ioqueues_init_thread(void);
 extern int stack_init_thread(void);
 extern int stack_init(void);
 extern int sched_init_thread(void);

@@ -14,6 +14,9 @@
 #include <base/lrpc.h>
 #include <base/mem.h>
 
+#include <net/ethernet.h>
+#include <net/mbuf.h>
+
 #include "defs.h"
 
 #define PACKET_QUEUE_MCOUNT 8192
@@ -61,7 +64,12 @@ static size_t calculate_shm_space(unsigned int thread_count)
 	q += align_up(sizeof(uint32_t), CACHE_LINE_SIZE);
 	ret += q * thread_count;
 
-	ret += 0; // TODO: Calculate space for the actual packets!
+	ret = align_up(ret, PGSIZE_2MB);
+
+	// Egress mbufs
+	q = ETH_MAX_LEN + sizeof(struct mbuf);
+	ret += q * PACKET_QUEUE_MCOUNT;
+	ret = align_up(ret, PGSIZE_2MB);
 
 	return ret;
 }
@@ -194,6 +202,49 @@ fail:
 
 }
 
+static int setup_egress_mbufs(void)
+{
+
+	int ret;
+	void *buf;
+	size_t buf_size;
+
+	buf_size = (ETH_MAX_LEN + sizeof(struct mbuf)) * PACKET_QUEUE_MCOUNT;
+	buf_size = align_up(buf_size, PGSIZE_2MB);
+
+	buf = shmptr_to_ptr(&iok.r, align_up(iok.next_free, PGSIZE_2MB), buf_size);
+	if (buf == NULL)
+		return -ENOMEM;
+
+	ret = mbuf_tcache_allocator_init(buf, buf_size, PACKET_QUEUE_MCOUNT,
+				   ETH_MAX_LEN, 0);
+	if (ret)
+		return ret;
+
+	buf += buf_size;
+	iok.next_free = ptr_to_shmptr(&iok.r, buf, 0);
+
+	return 0;
+
+}
+
+int ioqueues_init_thread(void)
+{
+	int ret;
+
+	// TODO: Attach queues?
+
+	ret = mbuf_tcache_allocator_init_thread();
+	if (ret) {
+		log_err("ioqueues_init_thread: failed to setup tcache mbufs, "
+			"ret = %d",
+			ret);
+		return ret;
+	}
+
+	return 0;
+}
+
 int ioqueues_init(void)
 {
 	int ret;
@@ -207,6 +258,14 @@ int ioqueues_init(void)
 	ret = register_iokernel();
 	if (ret) {
 		log_err("ioqueues_init: register_iokernel() failed, ret = %d", ret);
+		control_cleanup();
+		return ret;
+	}
+
+	ret = setup_egress_mbufs();
+	if (ret) {
+		log_err("ioqueues_init: setup_egress_mbufs() failed, ret = %d", ret);
+		close(iok.fd);
 		control_cleanup();
 		return ret;
 	}
