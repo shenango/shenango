@@ -2,24 +2,28 @@
 
 namespace rt {
 namespace thread_internal {
+
 // A helper to jump from a C function to a C++ std::function.
 void ThreadTrampoline(void *arg) {
   (*static_cast<std::function<void()>*>(arg))();
 }
 
+// A helpter to jump from a C function to a C++ std::function. This variant
+// can wait for the thread to be joined.
 void ThreadTrampolineWithJoin(void *arg) {
   thread_internal::join_data *d = static_cast<thread_internal::join_data*>(arg);
   d->func_();
   spin_lock(&d->lock_);
-  d->done_ = true;
-  if (d->waiter_) {
+  if (d->done_) {
     spin_unlock(&d->lock_);
-    thread_ready(d->waiter_);
+    if (d->waiter_) thread_ready(d->waiter_);
     return;
   }
+  d->done_ = true;
   d->waiter_ = thread_self();
   thread_park_and_unlock(&d->lock_);
 }
+
 } // namespace thread_internal
 
 Thread::~Thread() {
@@ -49,6 +53,19 @@ Thread::Thread(std::function<void()>&& func) {
 }
 
 void Thread::Detach() {
+  if (unlikely(join_data_ == nullptr)) BUG();
+
+  spin_lock(&join_data_->lock_);
+  if (join_data_->done_) {
+    spin_unlock(&join_data_->lock_);
+    assert(join_data_->waiter_ != nullptr);
+    thread_ready(join_data_->waiter_);
+    join_data_ = nullptr;
+    return;
+  }
+  join_data_->done_ = true;
+  join_data_->waiter_ = nullptr;
+  spin_unlock(&join_data_->lock_);
   join_data_ = nullptr;
 }
 
@@ -58,10 +75,12 @@ void Thread::Join() {
   spin_lock(&join_data_->lock_);
   if (join_data_->done_) {
     spin_unlock(&join_data_->lock_);
+    assert(join_data_->waiter_ != nullptr);
     thread_ready(join_data_->waiter_);
     join_data_ = nullptr;
     return;
   }
+  join_data_->done_ = true;
   join_data_->waiter_ = thread_self();
   thread_park_and_unlock(&join_data_->lock_);
   join_data_ = nullptr;
