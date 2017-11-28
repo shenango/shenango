@@ -81,7 +81,7 @@ static void ioqueue_alloc(struct shm_region *r, struct queue_spec *q,
 static int control_setup(void)
 {
 	struct control_hdr *hdr;
-	struct shm_region *r = &iok.r;
+	struct shm_region *r = &iok.r, *ingress_region = &iok.ingress_region;
 	char *ptr;
 	int i, ret;
 	size_t shm_len;
@@ -103,6 +103,15 @@ static int control_setup(void)
 	r->base = mem_map_shm(iok.key, NULL, shm_len, PGSIZE_2MB, true);
 	if (r->base == MAP_FAILED) {
 		log_err("control_setup: mem_map_shm() failed");
+		return -1;
+	}
+
+	ingress_region->base =
+	    mem_map_shm(INGRESS_MBUF_SHM_KEY, NULL, INGRESS_MBUF_SHM_SIZE,
+			PGSIZE_2MB, false);
+	if (ingress_region->base == MAP_FAILED) {
+		log_err("control_setup: failed to map ingress region");
+		mem_unmap_shm(r->base);
 		return -1;
 	}
 
@@ -138,6 +147,7 @@ static int control_setup(void)
 static void control_cleanup(void)
 {
 	mem_unmap_shm(iok.r.base);
+	mem_unmap_shm(iok.ingress_region.base);
 }
 
 

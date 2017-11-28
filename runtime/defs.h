@@ -202,6 +202,7 @@ struct iokernel_control {
 	unsigned int thread_count;
 	struct thread_spec threads[NCPU];
 	struct eth_addr mac;
+	struct shm_region ingress_region;
 };
 
 extern struct iokernel_control iok;
