@@ -147,7 +147,7 @@ void *mem_map_shm(mem_key_t key, void *base, size_t len, size_t pgsize,
 		  bool exclusive)
 {
 	void *addr;
-	int shmid, flags = IPC_CREAT;
+	int shmid, flags = IPC_CREAT | 0777;
 
 	BUILD_ASSERT(sizeof(mem_key_t) == sizeof(key_t));
 
