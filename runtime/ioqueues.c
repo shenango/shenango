@@ -100,12 +100,8 @@ static int control_setup(void)
 
 	shm_len = calculate_shm_space(NCPU);
 
-	// TODO: fixme (argv[0]?)
-	iok.key = ftok(__FILE__, getpid());
-	if (iok.key == -1) {
-		log_err("control_setup: ftok() failed [%s]", strerror(errno));
-		return -errno;
-	}
+	BUILD_ASSERT(sizeof(iok.mac) >= sizeof(mem_key_t));
+	iok.key = *(mem_key_t*)(&iok.mac);
 
 	r->len = shm_len;
 	r->base = mem_map_shm(iok.key, NULL, shm_len, PGSIZE_2MB, true);
