@@ -1,3 +1,5 @@
+// thread.h - Support for creating and managing threads
+
 #pragma once
 
 extern "C" {

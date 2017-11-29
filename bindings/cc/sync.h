@@ -1,3 +1,4 @@
+// sync.h - support for synchronization primitives
 
 #pragma once
 
@@ -13,8 +14,14 @@ class Spin {
   Spin() { spin_lock_init(&lock_); }
   ~Spin() { assert(!spin_lock_held(&lock_)); }
 
+  // Locks the spin lock.
   void Lock() { spin_lock(&lock_); }
+
+  // Unlocks the spin lock.
   void Unlock() { spin_unlock(&lock_); }
+
+  // Locks the spin lock only if it is currently unlocked. Returns true if
+  // successful.
   bool TryLock() { return spin_try_lock(&lock_); }
 
  private:
@@ -32,8 +39,14 @@ class Mutex {
   Mutex() { mutex_init(&mu_); }
   ~Mutex() { assert(!mutex_held(&mu_)); }
 
+  // Locks the mutex.
   void Lock() { mutex_lock(&mu_); }
+
+  // Unlocks the mutex.
   void Unlock() { mutex_unlock(&mu_); }
+
+  // Locks the mutex only if it is currently unlocked. Returns true if
+  // successful.
   bool TryLock() { return mutex_try_lock(&mu_); }
 
  private:
@@ -64,8 +77,14 @@ class CondVar {
   CondVar() { condvar_init(&cv_); };
   ~CondVar() {}
 
+  // Block until the condition variable is signaled. Recheck the condition
+  // after wakeup, as no guarantees are made about preventing spurious wakeups.
   void Wait(Mutex *mu) { condvar_wait(&cv_, &mu->mu_); }
+
+  // Wake up one waiter.
   void Signal() { condvar_signal(&cv_); }
+
+  // Wake up all waiters.
   void SignalAll() { condvar_broadcast(&cv_); }
 
  private:
@@ -78,15 +97,24 @@ class CondVar {
 // Golang-like waitgroup support.
 class WaitGroup {
  public:
+  // initializes a waitgroup with zero jobs.
   WaitGroup() { waitgroup_init(&wg_); };
+
+  // Initializes a waitgroup with @count jobs.
   WaitGroup(int count) {
     waitgroup_init(&wg_);
     waitgroup_add(&wg_, count);
   }
+
   ~WaitGroup() { assert(wg_.cnt == 0); };
 
+  // Changes the number of jobs (can be negative).
   void Add(int count) { waitgroup_add(&wg_, count); }
+
+  // Decrements the number of jobs by one.
   void Done() { Add(-1); }
+
+  // Block until the number of jobs reaches zero.
   void Wait() { waitgroup_wait(&wg_); }
 
  private:
