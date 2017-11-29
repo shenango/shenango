@@ -19,12 +19,14 @@
 
 #include "defs.h"
 
-#define CONTROL_MAX_PROC	1024
-
 static int controlfd;
-static int clientfds[CONTROL_MAX_PROC];
-static struct proc *clients[CONTROL_MAX_PROC];
+static int clientfds[IOKERNEL_MAX_PROC];
+static struct proc *clients[IOKERNEL_MAX_PROC];
 static int nr_clients;
+struct lrpc_params lrpc_control_to_data_params;
+struct lrpc_params lrpc_data_to_control_params;
+static struct lrpc_chan_out lrpc_control_to_data;
+static struct lrpc_chan_in lrpc_data_to_control;
 
 static int control_init_lrpc_in(struct shm_region *r, struct queue_spec *s,
 				struct lrpc_chan_in *c)
@@ -110,6 +112,7 @@ static struct proc *control_create_proc(mem_key_t key, size_t len, pid_t pid)
 	reg.base = shbuf;
 	reg.len = len;
 	p->region = reg;
+	p->removed = false;
 	if (eth_addr_is_multicast(&hdr.mac) || eth_addr_is_zero(&hdr.mac))
 		goto fail_free_proc;
 	p->mac = hdr.mac;
@@ -172,7 +175,7 @@ static void control_add_client(void)
 		return;
 	}
 
-	if (nr_clients >= CONTROL_MAX_PROC) {
+	if (nr_clients >= IOKERNEL_MAX_PROC) {
 		log_err("control: hit client process limit");
 		goto fail;
 	}
@@ -203,15 +206,24 @@ static void control_add_client(void)
 		goto fail;
 	}
 
+	if (!lrpc_send(&lrpc_control_to_data, DATAPLANE_ADD_CLIENT,
+			(unsigned long) p)) {
+		log_err("control: failed to inform dataplane of new client '%d'",
+				ucred.pid);
+		goto fail_destroy_proc;
+	}
+
 	clients[nr_clients] = p;
 	clientfds[nr_clients++] = fd;
 	return;
 
+fail_destroy_proc:
+	control_destroy_proc(p);
 fail:
 	close(fd);
 }
 
-static void control_remove_client(int fd)
+static void control_instruct_dataplane_to_remove_client(int fd)
 {
 	int i;
 
@@ -225,17 +237,42 @@ static void control_remove_client(int fd)
 		return;
 	}
 
-	control_destroy_proc(clients[i]);
+	clients[i]->removed = true;
+	if (!lrpc_send(&lrpc_control_to_data, DATAPLANE_REMOVE_CLIENT,
+			(unsigned long) clients[i])) {
+		log_err("control: failed to inform dataplane of removed client");
+	}
+}
+
+static void control_remove_client(struct proc *p)
+{
+	int i;
+
+	for (i = 0; i < nr_clients; i++) {
+		if (clients[i] == p)
+			break;
+	}
+
+	if (i == nr_clients) {
+		WARN();
+		return;
+	}
+
+	control_destroy_proc(p);
 	clients[i] = clients[nr_clients - 1];
+
+	close(clientfds[i]);
 	clientfds[i] = clientfds[nr_clients - 1];
 	nr_clients--;
-	close(fd);
 }
 
 static void control_loop(void)
 {
 	fd_set readset;
 	int maxfd, i, nrdy;
+	uint64_t cmd;
+	unsigned long payload;
+	struct proc *p;
 
 	while (1) {
 		maxfd = controlfd;
@@ -243,6 +280,9 @@ static void control_loop(void)
 		FD_SET(controlfd, &readset);
 
 		for (i = 0; i < nr_clients; i++) {
+			if (clients[i]->removed)
+				continue;
+
 			FD_SET(clientfds[i], &readset);
 			maxfd = (clientfds[i] > maxfd) ? clientfds[i] : maxfd;
 		}
@@ -259,14 +299,22 @@ static void control_loop(void)
 				continue;
 
 			if (i == controlfd) {
-				/* accept a new conection */
+				/* accept a new connection */
 				control_add_client();
 			} else {
 				/* close an existing connection */
-				control_remove_client(i);
+				control_instruct_dataplane_to_remove_client(i);
 			}
 
 			nrdy--;
+		}
+
+		while (lrpc_recv(&lrpc_data_to_control, &cmd, &payload)) {
+			p = (struct proc *) payload;
+			assert(cmd == CONTROL_PLANE_REMOVE_CLIENT);
+
+			/* it is now safe to remove data structures for this client */
+			control_remove_client(p);
 		}
 	}
 }
@@ -277,11 +325,71 @@ static void *control_thread(void *data)
 	return NULL;
 }
 
+/*
+ * Initialize channels for communicating with the I/O kernel dataplane.
+ */
+static int control_init_dataplane_comm(void)
+{
+	int ret;
+	struct lrpc_msg *buffer_out, *buffer_in;
+	uint32_t *wb_out, *wb_in;
+
+	buffer_out = malloc(sizeof(struct lrpc_msg) *
+			CONTROL_DATAPLANE_QUEUE_SIZE);
+	if (!buffer_out)
+		goto fail;
+	wb_out = malloc(CACHE_LINE_SIZE);
+	if (!wb_out)
+		goto fail_free_buffer_out;
+
+	lrpc_control_to_data_params.buffer = buffer_out;
+	lrpc_control_to_data_params.wb = wb_out;
+
+	ret = lrpc_init_out(&lrpc_control_to_data,
+			lrpc_control_to_data_params.buffer, CONTROL_DATAPLANE_QUEUE_SIZE,
+			lrpc_control_to_data_params.wb);
+	if (ret < 0) {
+		log_err("control: initializing LRPC to dataplane failed");
+		goto fail_free_wb_out;
+	}
+
+	buffer_in = malloc(sizeof(struct lrpc_msg) * CONTROL_DATAPLANE_QUEUE_SIZE);
+	if (!buffer_in)
+		goto fail_free_wb_out;
+	wb_in = malloc(CACHE_LINE_SIZE);
+	if (!wb_in)
+		goto fail_free_buffer_in;
+
+	lrpc_data_to_control_params.buffer = buffer_in;
+	lrpc_data_to_control_params.wb = wb_in;
+
+	ret = lrpc_init_in(&lrpc_data_to_control,
+			lrpc_data_to_control_params.buffer, CONTROL_DATAPLANE_QUEUE_SIZE,
+			lrpc_data_to_control_params.wb);
+	if (ret < 0) {
+		log_err("control: initializing LRPC from dataplane failed");
+		goto fail_free_wb_in;
+	}
+
+	return 0;
+
+fail_free_wb_in:
+	free(wb_in);
+fail_free_buffer_in:
+	free(buffer_in);
+fail_free_wb_out:
+	free(wb_out);
+fail_free_buffer_out:
+	free(buffer_out);
+fail:
+	return -1;
+}
+
 int control_init(void)
 {
 	struct sockaddr_un addr;
 	pthread_t tid;
-	int sfd;
+	int sfd, ret;
 
 	BUILD_ASSERT(strlen(CONTROL_SOCK_PATH) <= sizeof(addr.sun_path) - 1);
 
@@ -306,6 +414,12 @@ int control_init(void)
 		log_err("control: listen() failed[%s]", strerror(errno));
 		close(sfd);
 		return -errno;
+	}
+
+	ret = control_init_dataplane_comm();
+	if (ret < 0) {
+		log_err("control: cannot initialize communication with dataplane");
+		return ret;
 	}
 
 	log_info("control: spawning control thread");

@@ -57,7 +57,9 @@
 
 #define NUM_MBUFS 8191
 #define MBUF_CACHE_SIZE 250
-#define BURST_SIZE 32
+#define PKT_BURST_SIZE 32
+
+#define CONTROL_BURST_SIZE 8
 
 static const struct rte_eth_conf port_conf_default = {
 	.rxmode = {
@@ -66,6 +68,10 @@ static const struct rte_eth_conf port_conf_default = {
 	}
 };
 static struct shm_region ingress_mbuf_region;
+static struct lrpc_chan_out lrpc_data_to_control;
+static struct lrpc_chan_in lrpc_control_to_data;
+static struct proc *clients[IOKERNEL_MAX_PROC];
+static int nr_clients = 0;
 
 /*
  * Callback to unmap the shared memory used by a mempool when destroying it.
@@ -312,12 +318,78 @@ void dpdk_rx_burst(struct rte_mbuf **bufs, const uint16_t nb_rx)
 }
 
 /*
+ * Add a new client.
+ */
+static inline void dpdk_add_client(struct proc *p)
+{
+	clients[nr_clients++] = p;
+}
+
+/*
+ * Remove a client. Notify control plane once removal is complete so that it
+ * can delete its data structures.
+ */
+static inline void dpdk_remove_client(struct proc *p)
+{
+	int i;
+
+	for (i = 0; i < nr_clients; i++) {
+		if (clients[i] == p)
+			break;
+	}
+
+	if (i == nr_clients) {
+		WARN();
+		return;
+	}
+
+	clients[i] = clients[nr_clients - 1];
+	nr_clients--;
+
+	/* TODO: free queued packets/commands? */
+
+	if (!lrpc_send(&lrpc_data_to_control, CONTROL_PLANE_REMOVE_CLIENT,
+			(unsigned long) p))
+		log_err("dpdk: failed to inform control of client removal");
+}
+
+/*
+ * Process a batch of messages from the control plane.
+ */
+static void dpdk_rx_control_lrpcs(void)
+{
+	uint64_t cmd;
+	unsigned long payload;
+	uint16_t n_rx = 0;
+	struct proc *p;
+
+	while (lrpc_recv(&lrpc_control_to_data, &cmd, &payload)
+			&& n_rx < CONTROL_BURST_SIZE) {
+		p = (struct proc *) payload;
+
+		switch (cmd)
+		{
+		case DATAPLANE_ADD_CLIENT:
+			dpdk_add_client(p);
+			break;
+		case DATAPLANE_REMOVE_CLIENT:
+			dpdk_remove_client(p);
+			break;
+		default:
+			log_err("dpdk: received unrecognized command %lu", cmd);
+		}
+
+		n_rx++;
+	}
+}
+
+/*
  * The main thread that does the work, reading from the port and echoing out
  * the same port.
  */
 void dpdk_loop(uint8_t port)
 {
-	struct rte_mbuf *bufs[BURST_SIZE];
+	struct rte_mbuf *bufs[PKT_BURST_SIZE];
 	uint16_t nb_rx, nb_tx, i;
 
 	/*
@@ -338,26 +410,54 @@ void dpdk_loop(uint8_t port)
 		 */
 
 		/* Get burst of RX packets. */
-		nb_rx = rte_eth_rx_burst(port, 0, bufs, BURST_SIZE);
+		nb_rx = rte_eth_rx_burst(port, 0, bufs, PKT_BURST_SIZE);
 
-		if (nb_rx == 0)
-			continue;
+		if (nb_rx != 0) {
+			printf("received %d packets on port %d\n", nb_rx, port);
 
-		printf("received %d packets on port %d\n", nb_rx, port);
+			dpdk_rx_burst(bufs, nb_rx);
 
-		dpdk_rx_burst(bufs, nb_rx);
+			/* Send burst of TX packets. */
+			nb_tx = rte_eth_tx_burst(port, 0, bufs, nb_rx);
 
-		/* Send burst of TX packets. */
-		nb_tx = rte_eth_tx_burst(port, 0, bufs, nb_rx);
+			printf("sent %d packets on port %d\n", nb_tx, port);
 
-		printf("sent %d packets on port %d\n", nb_tx, port);
-
-		/* Free any unsent packets. */
-		if (unlikely(nb_tx < nb_rx)) {
-			for (i = nb_tx; i < nb_rx; i++)
-				rte_pktmbuf_free(bufs[i]);
+			/* Free any unsent packets. */
+			if (unlikely(nb_tx < nb_rx)) {
+				for (i = nb_tx; i < nb_rx; i++)
+					rte_pktmbuf_free(bufs[i]);
+			}
 		}
+
+		/* Handle control messages */
+		dpdk_rx_control_lrpcs();
 	}
+}
+
+/*
+ * Initialize channels for communicating with the I/O kernel control plane.
+ */
+static int dpdk_init_control_comm(void)
+{
+	int ret;
+
+	ret = lrpc_init_in(&lrpc_control_to_data,
+			lrpc_control_to_data_params.buffer, CONTROL_DATAPLANE_QUEUE_SIZE,
+			lrpc_control_to_data_params.wb);
+	if (ret < 0) {
+		log_err("dpdk: initializing LRPC from control plane failed");
+		return -1;
+	}
+
+	ret = lrpc_init_out(&lrpc_data_to_control,
+			lrpc_data_to_control_params.buffer, CONTROL_DATAPLANE_QUEUE_SIZE,
+			lrpc_data_to_control_params.wb);
+	if (ret < 0) {
+		log_err("dpdk: initializing LRPC to control plane failed");
+		return -1;
+	}
+
+	return 0;
 }
 
 /*
@@ -393,6 +493,10 @@ int dpdk_init(uint8_t port)
 
 	if (rte_lcore_count() > 1)
 		printf("\nWARNING: Too many lcores enabled. Only 1 used.\n");
+
+	if (dpdk_init_control_comm() < 0)
+		rte_exit(EXIT_FAILURE,
+				"Cannot initialize communication with control plane");
 
 	return 0;
 }

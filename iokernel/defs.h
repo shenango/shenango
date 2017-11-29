@@ -12,6 +12,7 @@
 /*
  * Process Support
  */
+#define IOKERNEL_MAX_PROC 1024
 
 struct thread {
 	struct lrpc_chan_out	rxq;
@@ -23,6 +24,7 @@ struct proc {
 	pid_t			pid;
 	mem_key_t		key;
 	struct shm_region	region;
+	bool			removed;
 
 	/* scheduler data */
 	struct sched_spec	sched_cfg;
@@ -35,6 +37,33 @@ struct proc {
 	struct eth_addr		mac;
 };
 
+/*
+ * Communication between control plane and data-plane in the I/O kernel
+ */
+#define CONTROL_DATAPLANE_QUEUE_SIZE	128
+struct lrpc_params {
+	struct lrpc_msg *buffer;
+	uint32_t *wb;
+};
+extern struct lrpc_params lrpc_control_to_data_params;
+extern struct lrpc_params lrpc_data_to_control_params;
+
+/*
+ * Commands from control plane to dataplane.
+ */
+enum {
+	DATAPLANE_ADD_CLIENT,		/* points to a struct proc */
+	DATAPLANE_REMOVE_CLIENT,	/* points to a struct proc */
+	DATAPLANE_NR,			/* number of commands */
+};
+
+/*
+ * Commands from dataplane to control plane.
+ */
+enum {
+	CONTROL_PLANE_REMOVE_CLIENT,	/* points to a struct proc */
+	CONTROL_PLANE_NR,				/* number of commands */
+};
 
 /*
  * Initialization
