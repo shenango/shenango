@@ -41,7 +41,9 @@
 #include <rte_eal.h>
 #include <rte_ethdev.h>
 #include <rte_ether.h>
+#include <rte_hash.h>
 #include <rte_ip.h>
+#include <rte_jhash.h>
 #include <rte_lcore.h>
 #include <rte_mbuf.h>
 
@@ -58,8 +60,8 @@
 #define NUM_MBUFS 8191
 #define MBUF_CACHE_SIZE 250
 #define PKT_BURST_SIZE 32
-
 #define CONTROL_BURST_SIZE 8
+#define MAC_TO_PROC_ENTRIES	128
 
 static const struct rte_eth_conf port_conf_default = {
 	.rxmode = {
@@ -72,6 +74,7 @@ static struct lrpc_chan_out lrpc_data_to_control;
 static struct lrpc_chan_in lrpc_control_to_data;
 static struct proc *clients[IOKERNEL_MAX_PROC];
 static int nr_clients = 0;
+static struct rte_hash *mac_to_proc;
 
 /*
  * Callback to unmap the shared memory used by a mempool when destroying it.
@@ -293,6 +296,9 @@ void dpdk_rx_burst(struct rte_mbuf **bufs, const uint16_t nb_rx)
 	struct rte_mbuf *buf;
 	struct ether_hdr *ptr_mac_hdr;
 	struct ether_addr *ptr_dst_addr;
+	int ret;
+	void *data;
+	struct proc *p;
 	struct rx_net_hdr *net_hdr;
 
 	for (i = 0; i < nb_rx; i++) {
@@ -306,6 +312,23 @@ void dpdk_rx_burst(struct rte_mbuf **bufs, const uint16_t nb_rx)
 				ptr_dst_addr->addr_bytes[0], ptr_dst_addr->addr_bytes[1],
 				ptr_dst_addr->addr_bytes[2], ptr_dst_addr->addr_bytes[3],
 				ptr_dst_addr->addr_bytes[4], ptr_dst_addr->addr_bytes[5]);
+
+		if (is_unicast_ether_addr(ptr_dst_addr)) {
+			/* lookup runtime by MAC in hash table */
+			ret = rte_hash_lookup_data(mac_to_proc,
+					&ptr_dst_addr->addr_bytes[0], &data);
+			if (ret < 0) {
+				log_err("dpdk: received packet for unregistered MAC");
+				continue; /* TODO: free buffer once packets aren't echoed */
+			}
+
+			p = (struct proc *) data;
+		} else {
+			log_err("dpdk: packet with unhandled MAC %x %x %x %x %x %x",
+					ptr_dst_addr->addr_bytes[0], ptr_dst_addr->addr_bytes[1],
+					ptr_dst_addr->addr_bytes[2], ptr_dst_addr->addr_bytes[3],
+					ptr_dst_addr->addr_bytes[4], ptr_dst_addr->addr_bytes[5]);
+		}
 
 		/* swap src and dst ether and IP addresses. TODO: remove this once
 		 * packets are sent up to the runtimes. */
@@ -322,7 +345,13 @@ void dpdk_rx_burst(struct rte_mbuf **bufs, const uint16_t nb_rx)
  */
 static inline void dpdk_add_client(struct proc *p)
 {
+	int ret;
+
 	clients[nr_clients++] = p;
+
+	ret = rte_hash_add_key_data(mac_to_proc, &p->mac.addr[0], p);
+	if (ret < 0)
+		log_err("dpdk: failed to add MAC to hash table in add_client");
 }
 
 /*
@@ -331,7 +360,7 @@ static inline void dpdk_add_client(struct proc *p)
  */
 static inline void dpdk_remove_client(struct proc *p)
 {
-	int i;
+	int i, ret;
 
 	for (i = 0; i < nr_clients; i++) {
 		if (clients[i] == p)
@@ -345,6 +374,10 @@ static inline void dpdk_remove_client(struct proc *p)
 
 	clients[i] = clients[nr_clients - 1];
 	nr_clients--;
+
+	ret = rte_hash_del_key(mac_to_proc, &p->mac.addr[0]);
+	if (ret < 0)
+		log_err("dpdk: failed to remove MAC from hash table in remove client");
 
 	/* TODO: free queued packets/commands? */
 
@@ -468,6 +501,7 @@ int dpdk_init(uint8_t port)
 	struct rte_mempool *mbuf_pool;
 	unsigned nb_ports;
 	char *argv[] = { "./iokerneld", "-l", "2", "--socket-mem=128" };
+	struct rte_hash_parameters hash_params = { 0 };
 
 	/* Initialize the Environment Abstraction Layer (EAL). */
 	int ret = rte_eal_init(sizeof(argv) / sizeof(argv[0]), argv);
@@ -493,6 +527,17 @@ int dpdk_init(uint8_t port)
 
 	if (rte_lcore_count() > 1)
 		printf("\nWARNING: Too many lcores enabled. Only 1 used.\n");
+
+	/* Initialize the hash table for mapping MACs to runtimes. */
+	hash_params.name = "mac_to_proc_hash_table";
+	hash_params.entries = MAC_TO_PROC_ENTRIES;
+	hash_params.key_len = ETHER_ADDR_LEN;
+	hash_params.hash_func = rte_jhash;
+	hash_params.hash_func_init_val = 0;
+	hash_params.socket_id = rte_socket_id();
+	mac_to_proc = rte_hash_create(&hash_params);
+	if (mac_to_proc == NULL)
+		rte_exit(EXIT_FAILURE, "Failed to create MAC to proc hash table");
 
 	if (dpdk_init_control_comm() < 0)
 		rte_exit(EXIT_FAILURE,
