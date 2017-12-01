@@ -288,11 +288,28 @@ static inline struct rx_net_hdr *dpdk_prepend_rx_preamble(struct rte_mbuf *buf)
 }
 
 /*
+ * Send a packet up to a runtime. Return true if successful, false otherwise.
+ */
+static bool dpdk_enqueue_to_runtime(struct rx_net_hdr *net_hdr, struct proc *p)
+{
+	struct thread *t;
+	shmptr_t shmptr;
+
+	/* choose a random thread */
+	t = &p->threads[rand() % p->thread_count];
+	shmptr = ptr_to_shmptr(&ingress_mbuf_region, net_hdr,
+			sizeof(struct rx_net_hdr));
+
+	return lrpc_send(&t->rxq, RX_NET_RECV, shmptr);
+}
+
+/*
  * Process a batch of incoming packets.
  */
-void dpdk_rx_burst(struct rte_mbuf **bufs, const uint16_t nb_rx)
+static void dpdk_rx_burst(uint8_t port)
 {
-	uint16_t i;
+	struct rte_mbuf *bufs[PKT_BURST_SIZE];
+	uint16_t nb_rx, i, j, n_sent;
 	struct rte_mbuf *buf;
 	struct ether_hdr *ptr_mac_hdr;
 	struct ether_addr *ptr_dst_addr;
@@ -300,6 +317,12 @@ void dpdk_rx_burst(struct rte_mbuf **bufs, const uint16_t nb_rx)
 	void *data;
 	struct proc *p;
 	struct rx_net_hdr *net_hdr;
+	bool success;
+
+	/* retrieve packets from NIC queue */
+	nb_rx = rte_eth_rx_burst(port, 0, bufs, PKT_BURST_SIZE);
+	if (nb_rx > 0)
+		log_debug("dpdk: received %d packets on port %d", nb_rx, port);
 
 	for (i = 0; i < nb_rx; i++) {
 		/* parse dst ether addr */
@@ -307,8 +330,8 @@ void dpdk_rx_burst(struct rte_mbuf **bufs, const uint16_t nb_rx)
 
 		ptr_mac_hdr = rte_pktmbuf_mtod(buf, struct ether_hdr *);
 		ptr_dst_addr = &ptr_mac_hdr->d_addr;
-		printf("Packet to MAC: %02" PRIx8 " %02" PRIx8 " %02" PRIx8
-				" %02" PRIx8 " %02" PRIx8 " %02" PRIx8 "\n",
+		log_debug("dpdk: rx packet with MAC %02" PRIx8 " %02" PRIx8 " %02"
+				PRIx8 " %02" PRIx8 " %02" PRIx8 " %02" PRIx8,
 				ptr_dst_addr->addr_bytes[0], ptr_dst_addr->addr_bytes[1],
 				ptr_dst_addr->addr_bytes[2], ptr_dst_addr->addr_bytes[3],
 				ptr_dst_addr->addr_bytes[4], ptr_dst_addr->addr_bytes[5]);
@@ -318,25 +341,42 @@ void dpdk_rx_burst(struct rte_mbuf **bufs, const uint16_t nb_rx)
 			ret = rte_hash_lookup_data(mac_to_proc,
 					&ptr_dst_addr->addr_bytes[0], &data);
 			if (ret < 0) {
-				log_err("dpdk: received packet for unregistered MAC");
-				continue; /* TODO: free buffer once packets aren't echoed */
+				log_warn("dpdk: received packet for unregistered MAC");
+				rte_pktmbuf_free(buf);
+				continue;
 			}
 
 			p = (struct proc *) data;
+			net_hdr = dpdk_prepend_rx_preamble(buf);
+			if (!dpdk_enqueue_to_runtime(net_hdr, p)) {
+				log_warn("dpdk: failed to enqueue unicast packet to runtime");
+				rte_pktmbuf_free(buf);
+			}
+		} else if (is_broadcast_ether_addr(ptr_dst_addr) && nr_clients > 0) {
+			/* forward to all registered runtimes */
+			net_hdr = dpdk_prepend_rx_preamble(buf);
+
+			n_sent = 0;
+			for (j = 0; j < nr_clients; j++) {
+				success = dpdk_enqueue_to_runtime(net_hdr, clients[j]);
+				if (success)
+					n_sent++;
+				else
+					log_warn("dpdk: failed to enqueue broadcast packet to "
+							"runtime");
+			}
+
+			if (n_sent == 0)
+				rte_pktmbuf_free(buf);
+			else
+				rte_mbuf_refcnt_update(buf, n_sent - 1);
 		} else {
-			log_err("dpdk: packet with unhandled MAC %x %x %x %x %x %x",
+			log_warn("dpdk: unhandled packet with MAC %x %x %x %x %x %x",
 					ptr_dst_addr->addr_bytes[0], ptr_dst_addr->addr_bytes[1],
 					ptr_dst_addr->addr_bytes[2], ptr_dst_addr->addr_bytes[3],
 					ptr_dst_addr->addr_bytes[4], ptr_dst_addr->addr_bytes[5]);
+			rte_pktmbuf_free(buf);
 		}
-
-		/* swap src and dst ether and IP addresses. TODO: remove this once
-		 * packets are sent up to the runtimes. */
-		dpdk_swap_ether_src_dest(buf);
-		dpdk_swap_ip_src_dest(buf);
-
-		/* prepend ingress preamble */
-		net_hdr = dpdk_prepend_rx_preamble(buf);
 	}
 }
 
@@ -417,14 +457,11 @@ static void dpdk_rx_control_lrpcs(void)
 }
 
 /*
- * The main thread that does the work, reading from the port and echoing out
- * the same port.
+ * The main thread. Reads packets from ingress queues, sends packets out egress
+ * queues, and handles lrpcs from the control thread.
  */
 void dpdk_loop(uint8_t port)
 {
-	struct rte_mbuf *bufs[PKT_BURST_SIZE];
-	uint16_t nb_rx, nb_tx, i;
-
 	/*
 	 * Check that the port is on the same NUMA node as the polling thread
 	 * for best performance.
@@ -434,35 +471,16 @@ void dpdk_loop(uint8_t port)
 		printf("WARNING, port %u is on remote NUMA node to polling thread.\n\t"
 				"Performance will not be optimal.\n", port);
 
-	printf("\nCore %u echoing packets. [Ctrl+C to quit]\n", rte_lcore_id());
+	printf("\nCore %u running dataplane. [Ctrl+C to quit]\n", rte_lcore_id());
 
 	/* Run until the application is quit or killed. */
 	for (;;) {
-		/*
-		 * Receive packets on the port and echo them out the same port.
-		 */
+		/* handle a burst of ingress packets. */
+		dpdk_rx_burst(port);
 
-		/* Get burst of RX packets. */
-		nb_rx = rte_eth_rx_burst(port, 0, bufs, PKT_BURST_SIZE);
+		/* TODO: poll tx queues for packets to send */
 
-		if (nb_rx != 0) {
-			printf("received %d packets on port %d\n", nb_rx, port);
-
-			dpdk_rx_burst(bufs, nb_rx);
-
-			/* Send burst of TX packets. */
-			nb_tx = rte_eth_tx_burst(port, 0, bufs, nb_rx);
-
-			printf("sent %d packets on port %d\n", nb_tx, port);
-
-			/* Free any unsent packets. */
-			if (unlikely(nb_tx < nb_rx)) {
-				for (i = nb_tx; i < nb_rx; i++)
-					rte_pktmbuf_free(bufs[i]);
-			}
-		}
-
-		/* Handle control messages */
+		/* handle control messages. */
 		dpdk_rx_control_lrpcs();
 	}
 }
