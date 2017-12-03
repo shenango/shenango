@@ -11,6 +11,7 @@
 #include <base/lrpc.h>
 #include <iokernel/control.h>
 #include <runtime/thread.h>
+#include <runtime/rcu.h>
 
 /*
  * constant limits
@@ -220,7 +221,7 @@ struct kthread {
 	uint32_t		rq_tail;
 	struct list_head	rq_overflow;
 	struct lrpc_chan_in	rxq;
-	uint64_t		pad;
+	unsigned long		pad;
 
 	/* 2nd-5th cache-line */
 	thread_t		*rq[RUNTIME_RQ_SIZE];
@@ -240,11 +241,42 @@ static inline struct kthread *myk(void)
 	return mykthread;
 }
 
+DECLARE_SPINLOCK(klock);
+extern unsigned int nrks;
+extern struct kthread *ks[NTHREAD];
+
+extern void kthread_attach(void);
+extern void kthread_detach(void);
+
+
+/*
+ * RCU support
+ */
+
+extern unsigned int rcu_gen;
+extern __thread unsigned int rcu_tlgen;
+extern void __rcu_schedule(void);
+
+/**
+ * rcu_schedule - called during each reschedule to advance to the next quiescent
+ * period
+ */
+static inline void rcu_schedule(void)
+{
+#ifdef DEBUG
+	assert(rcu_read_count == 0);
+#endif /* DEBUG */
+
+	if (unlikely(load_acquire(&rcu_gen) != rcu_tlgen))
+		__rcu_schedule();
+}
+
 
 /*
  * init
  */
 
+extern int kthread_init_thread(void);
 extern int ioqueues_init(void);
 extern int ioqueues_init_thread(void);
 extern int stack_init_thread(void);

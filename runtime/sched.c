@@ -26,15 +26,6 @@ static struct slab thread_slab;
 static struct tcache *thread_tcache;
 static __thread struct tcache_perthread thread_pt;
 
-/* protects @ks and @nrks below */
-static DEFINE_SPINLOCK(klock);
-/* the total number of kthreads (i.e. the size of @ks) */
-static int nrks;
-/* an array of all the kthreads (for work-stealing) */
-static struct kthread *ks[NTHREAD];
-/* kernel thread-local data */
-__thread struct kthread *mykthread;
-
 /**
  * call_thread - runs a thread, popping its trap frame
  * @th: the thread to run
@@ -144,6 +135,9 @@ static __noreturn void schedule(void)
 		drain_overflow(l);
 
 again:
+	/* mark the end of the RCU quiescent period */
+	rcu_schedule();
+
 	/* first try the local runqueue */
 	if (l->rq_head != l->rq_tail)
 		goto done;
@@ -387,20 +381,6 @@ static void runtime_top_of_stack(void)
 	panic("a runtime function returned to the top of the stack");
 }
 
-static struct kthread *allock(void)
-{
-	struct kthread *k;
-
-	k = malloc(sizeof(*k));
-	if (!k)
-		return NULL;
-
-	memset(k, 0, sizeof(*k));
-	spin_lock_init(&k->lock);
-	list_head_init(&k->rq_overflow);
-	return k;
-}
-
 /**
  * sched_init_thread - initializes per-thread state for the scheduler
  *
@@ -417,18 +397,6 @@ int sched_init_thread(void)
 		return -ENOMEM;
 
 	runtime_stack = (void *)stack_init_to_rsp(s, runtime_top_of_stack); 
-
-	mykthread = allock();
-	if (!mykthread) {
-		stack_free(s);
-		return -ENOMEM;
-	}
-
-	spin_lock(&klock);
-	assert(nrks < NTHREAD);
-	ks[nrks++] = mykthread;
-	spin_unlock(&klock);
-
 	return 0;
 }
 

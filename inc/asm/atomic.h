@@ -54,3 +54,15 @@ do {						\
 	barrier();				\
 	__p;					\
 })
+
+/**
+ * load_consume - load a native value with consume fence semantics
+ * @p: the pointer to load
+ */
+#define load_consume(p)				\
+({						\
+	BUILD_ASSERT(type_is_native(*p));	\
+	typeof(*p) __p = ACCESS_ONCE(*p);	\
+	barrier();				\
+	__p;					\
+})

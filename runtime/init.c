@@ -11,8 +11,6 @@
 
 #include "defs.h"
 
-static pthread_barrier_t init_barrier;
-
 static int runtime_init_thread(void)
 {
 	int ret;
@@ -20,6 +18,12 @@ static int runtime_init_thread(void)
 	ret = base_init_thread();
 	if (ret) {
 		log_err("base_init_thread() failed, ret = %d", ret);
+		return ret;
+	}
+
+	ret = kthread_init_thread();
+	if (ret) {
+		log_err("kthread_init_thread() failed, ret = %d", ret);
 		return ret;
 	}
 
@@ -51,7 +55,7 @@ static void *pthread_entry(void *data)
 	ret = runtime_init_thread();
 	BUG_ON(ret);
 
-	pthread_barrier_wait(&init_barrier);
+	kthread_attach();
 	sched_start();
 
 	/* never reached unless things are broken */
@@ -75,11 +79,6 @@ int runtime_init(thread_fn_t main_fn, void *arg, unsigned int threads)
 	if (threads < 1)
 		return -EINVAL;
 
-	if (pthread_barrier_init(&init_barrier, NULL, threads) == -1) {
-		log_err("pthread_barrier_init() failed, ret = %d", -errno);
-		return -errno;
-	}
-
 	ret = base_init();
 	if (ret) {
 		log_err("base_init() failed, ret = %d", ret);
@@ -92,7 +91,6 @@ int runtime_init(thread_fn_t main_fn, void *arg, unsigned int threads)
 		return ret;
 	}
 
-	// TODO: consider deferring intialization until a socket is requested
 	ret = ioqueues_init();
 	if (ret) {
 		log_err("ioqueues_init() failed, ret = %d", ret);
@@ -118,7 +116,7 @@ int runtime_init(thread_fn_t main_fn, void *arg, unsigned int threads)
 	ret = thread_spawn_main(main_fn, arg);
 	BUG_ON(ret);
 
-	pthread_barrier_wait(&init_barrier);
+	kthread_attach();
 	sched_start();
 
 	/* never reached unless things are broken */

@@ -1,28 +1,38 @@
 /*
  * rcu.h - support for read-copy-update
- *
- * TODO: x86 only for now
  */
+
+#pragma once
 
 #include <base/compiler.h>
 #include <base/atomic.h>
 
+#ifdef DEBUG
 extern __thread int rcu_read_count;
+#endif /* DEBUG */
 
 static inline bool rcu_read_lock_held(void)
 {
+#ifdef DEBUG
 	return rcu_read_count > 0;
+#else /* DEBUG */
+	return true;
+#endif /* DEBUG */
 }
 
 static inline void rcu_read_lock(void)
 {
+#ifdef DEBUG
 	rcu_read_count++;
+#endif /* DEBUG */
 }
 
 static inline void rcu_read_unlock(void)
 {
+#ifdef DEBUG
 	assert(rcu_read_lock_held());
 	rcu_read_count--;
+#endif /* DEBUG */
 }
 
 #ifdef __CHECKER__
@@ -49,7 +59,20 @@ static inline void rcu_read_unlock(void)
 	} while (0)
 
 /**
- * rcu_dereference_protected - safely dereferences an RCU pointer
+ * rcu_dereference - dereferences an RCU pointer in an RCU section
+ * @p: the RCU pointer
+ *
+ * Returns the RCU pointer value.
+ */
+#define rcu_dereference(p)				\
+	({						\
+		rcu_check_type(p);			\
+		assert(rcu_read_lock_held());		\
+		load_consume((typeof(*(p)) __force **)(&p));\
+	})
+
+/**
+ * rcu_dereference_protected - dereferences an RCU pointer (modify or read)
  * @p: the RCU pointer
  * @c: a condition proving the access is safe, such as a check of whether a lock
  * is held.
@@ -63,7 +86,7 @@ static inline void rcu_read_unlock(void)
 	({						\
 		rcu_check_type(p);			\
 		assert(rcu_read_lock_held() || !!(c));	\
-		load_acquire((typeof(*(p)) __force *)(p));\
+		ACCESS_ONCE((typeof(*(p)) __force **)(&p));\
 	})
 
 /**
@@ -73,7 +96,7 @@ static inline void rcu_read_unlock(void)
  */
 #define rcu_assign_pointer(p, v)			\
 	do {						\
-		rcu_check_type(p)			\
+		rcu_check_type(p);			\
 		store_release(&p, RCU_INITIALIZER(v));	\
 	} while (0)
 
@@ -85,5 +108,4 @@ struct rcu_head {
 	rcu_callback_t func;
 };
 
-extern void rcu_free(struct rcu_head, rcu_callback_t func);
-extern void rcu_synchronize(void);
+extern void rcu_free(struct rcu_head *head, rcu_callback_t func);
