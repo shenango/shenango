@@ -91,7 +91,7 @@ int runtime_init(thread_fn_t main_fn, void *arg, unsigned int threads)
 		return ret;
 	}
 
-	ret = ioqueues_init();
+	ret = ioqueues_init(threads);
 	if (ret) {
 		log_err("ioqueues_init() failed, ret = %d", ret);
 		return ret;

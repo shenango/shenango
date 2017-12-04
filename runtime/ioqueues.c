@@ -86,7 +86,7 @@ static void ioqueue_alloc(struct shm_region *r, struct queue_spec *q,
 	q->msg_count = msg_count;
 }
 
-static int control_setup(void)
+static int control_setup(unsigned int threads)
 {
 	struct control_hdr *hdr;
 	struct shm_region *r = &iok.r, *ingress_region = &iok.ingress_region;
@@ -98,7 +98,7 @@ static int control_setup(void)
 	if (ret < 0)
 		return ret;
 
-	shm_len = calculate_shm_space(NCPU);
+	shm_len = calculate_shm_space(threads);
 
 	BUILD_ASSERT(sizeof(iok.mac) >= sizeof(mem_key_t));
 	iok.key = *(mem_key_t*)(&iok.mac);
@@ -121,11 +121,11 @@ static int control_setup(void)
 
 	hdr = r->base;
 	hdr->magic = CONTROL_HDR_MAGIC;
-	hdr->thread_count = NCPU;
+	hdr->thread_count = threads;
 	hdr->mac = iok.mac;
 
 	hdr->sched_cfg.priority = SCHED_PRIORITY_NORMAL;
-	hdr->sched_cfg.max_cores = NCPU;
+	hdr->sched_cfg.max_cores = threads;
 	hdr->sched_cfg.congestion_latency_us = 0;
 	hdr->sched_cfg.scaleout_latency_us = 0;
 
@@ -241,11 +241,11 @@ int ioqueues_init_thread(void)
 	return 0;
 }
 
-int ioqueues_init(void)
+int ioqueues_init(unsigned int threads)
 {
 	int ret;
 
-	ret = control_setup();
+	ret = control_setup(threads);
 	if (ret) {
 		log_err("ioqueues_init: control_setup() failed, ret = %d", ret);
 		return ret;

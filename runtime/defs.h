@@ -277,7 +277,7 @@ static inline void rcu_schedule(void)
  */
 
 extern int kthread_init_thread(void);
-extern int ioqueues_init(void);
+extern int ioqueues_init(unsigned int threads);
 extern int ioqueues_init_thread(void);
 extern int stack_init_thread(void);
 extern int stack_init(void);
