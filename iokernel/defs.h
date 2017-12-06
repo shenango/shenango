@@ -73,7 +73,7 @@ extern int control_init(void);
 extern int dpdk_init(uint8_t port);
 
 /*
- * DPDK main loop
+ * DPDK functions
  */
-
 extern void dpdk_loop(uint8_t port) __noreturn;
+extern bool dpdk_send_completion(void *buf);

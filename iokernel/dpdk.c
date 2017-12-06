@@ -74,7 +74,22 @@ static struct lrpc_chan_out lrpc_data_to_control;
 static struct lrpc_chan_in lrpc_control_to_data;
 static struct proc *clients[IOKERNEL_MAX_PROC];
 static int nr_clients = 0;
+struct rte_mempool *egress_mbuf_pool;
 static struct rte_hash *mac_to_proc;
+
+/*
+ * Private data stored in egress mbufs, used to send completions to runtimes.
+ */
+struct egress_pktmbuf_priv {
+	struct proc *proc;
+	unsigned int thread;
+};
+
+static inline struct egress_pktmbuf_priv *egress_get_priv(struct rte_mbuf *buf)
+{
+	return (struct egress_pktmbuf_priv *) (((char *) buf)
+			+ sizeof(struct rte_mbuf));
+}
 
 /*
  * Callback to unmap the shared memory used by a mempool when destroying it.
@@ -160,6 +175,47 @@ fail_free_mempool:
 fail:
 	log_err("dpdk: couldn't create pktmbuf pool %s", name);
 	return NULL;
+}
+
+/*
+ * Create and initialize a dummy packet mbuf pool for handling completion
+ * events.
+ */
+static struct rte_mempool *dpdk_pktmbuf_completion_pool_create(const char *name,
+		unsigned n, unsigned cache_size, uint16_t priv_size,
+		uint16_t data_room_size, int socket_id)
+{
+	struct rte_mempool *mp;
+	struct rte_pktmbuf_pool_private mbp_priv;
+	unsigned elt_size;
+	int ret;
+
+	if (RTE_ALIGN(priv_size, RTE_MBUF_PRIV_ALIGN) != priv_size) {
+		RTE_LOG(ERR, MBUF, "mbuf priv_size=%u is not aligned\n",
+			priv_size);
+		rte_errno = EINVAL;
+		return NULL;
+	}
+	elt_size = sizeof(struct rte_mbuf) + (unsigned)priv_size +
+		(unsigned)data_room_size;
+	mbp_priv.mbuf_data_room_size = data_room_size;
+	mbp_priv.mbuf_priv_size = priv_size;
+
+	mp = rte_mempool_create_empty(name, n, elt_size, cache_size,
+		 sizeof(struct rte_pktmbuf_pool_private), socket_id, 0);
+	if (mp == NULL)
+		return NULL;
+
+	ret = rte_mempool_set_ops_byname(mp, "completion", NULL);
+	if (ret != 0) {
+		RTE_LOG(ERR, MBUF, "error setting mempool handler\n");
+		rte_mempool_free(mp);
+		rte_errno = -ret;
+		return NULL;
+	}
+	rte_pktmbuf_pool_init(mp, &mbp_priv);
+
+	return mp;
 }
 
 /*
@@ -301,6 +357,30 @@ static bool dpdk_enqueue_to_runtime(struct rx_net_hdr *net_hdr, struct proc *p)
 			sizeof(struct rx_net_hdr));
 
 	return lrpc_send(&t->rxq, RX_NET_RECV, shmptr);
+}
+
+/*
+ * Send a completion event to the runtime for the mbuf pointed to by obj.
+ */
+bool dpdk_send_completion(void *obj) {
+	struct rte_mbuf *buf;
+	struct egress_pktmbuf_priv *priv_data;
+	struct proc *p;
+	struct thread *t;
+	shmptr_t shmptr;
+
+	buf = (struct rte_mbuf *) obj;
+	priv_data = egress_get_priv(buf);
+	p = priv_data->proc;
+	t = &p->threads[priv_data->thread];
+
+	shmptr = ptr_to_shmptr(&p->region, buf, sizeof(struct tx_net_hdr));
+	if (!lrpc_send(&t->rxq, RX_NET_COMPLETE, shmptr)) {
+		log_warn("dpdk: failed to enqueue completion event to runtime");
+		return false;
+	}
+
+	return true;
 }
 
 /*
@@ -516,7 +596,7 @@ static int dpdk_init_control_comm(void)
  */
 int dpdk_init(uint8_t port)
 {
-	struct rte_mempool *mbuf_pool;
+	struct rte_mempool *ingress_mbuf_pool;
 	unsigned nb_ports;
 	char *argv[] = { "./iokerneld", "-l", "2", "--socket-mem=128" };
 	struct rte_hash_parameters hash_params = { 0 };
@@ -531,20 +611,29 @@ int dpdk_init(uint8_t port)
 	if (nb_ports < 1)
 		rte_exit(EXIT_FAILURE, "Error: no available ports\n");
 
-	/* Creates a new mempool in shared memory to hold the mbufs. */
-	mbuf_pool = dpdk_pktmbuf_pool_create_in_shm("MBUF_POOL",
+	/* Create a new mempool in shared memory to hold the ingress mbufs. */
+	ingress_mbuf_pool = dpdk_pktmbuf_pool_create_in_shm("INGRESS_MBUF_POOL",
 			NUM_MBUFS * nb_ports, MBUF_CACHE_SIZE, 0,
 			RTE_MBUF_DEFAULT_BUF_SIZE, rte_socket_id());
 
-	if (mbuf_pool == NULL)
-		rte_exit(EXIT_FAILURE, "Cannot create mbuf pool\n");
+	if (ingress_mbuf_pool == NULL)
+		rte_exit(EXIT_FAILURE, "Cannot create ingress mbuf pool\n");
 
 	/* Initialize port. */
-	if (dpdk_port_init(port, mbuf_pool) != 0)
+	if (dpdk_port_init(port, ingress_mbuf_pool) != 0)
 		rte_exit(EXIT_FAILURE, "Cannot init port %"PRIu8 "\n", port);
 
 	if (rte_lcore_count() > 1)
 		printf("\nWARNING: Too many lcores enabled. Only 1 used.\n");
+
+	/* Create a new dummy mempool to handle completions for egress packets. */
+	egress_mbuf_pool = dpdk_pktmbuf_completion_pool_create("EGRESS_MBUF_POOL",
+			NUM_MBUFS * nb_ports, MBUF_CACHE_SIZE,
+			sizeof(struct egress_pktmbuf_priv), RTE_MBUF_DEFAULT_BUF_SIZE,
+			rte_socket_id());
+
+	if (egress_mbuf_pool == NULL)
+		rte_exit(EXIT_FAILURE, "Cannot create egress mbuf pool\n");
 
 	/* Initialize the hash table for mapping MACs to runtimes. */
 	hash_params.name = "mac_to_proc_hash_table";
