@@ -63,6 +63,10 @@
 #define CONTROL_BURST_SIZE 8
 #define MAC_TO_PROC_ENTRIES	128
 
+#define dpdk_net_hdr_to_rte_mbuf(net_hdr, hdr_type, priv_size) \
+	(struct rte_mbuf *) (((char *) net_hdr) + sizeof(hdr_type) - \
+	RTE_PKTMBUF_HEADROOM - priv_size - sizeof(struct rte_mbuf))
+
 static const struct rte_eth_conf port_conf_default = {
 	.rxmode = {
 			.max_rx_pkt_len = ETHER_MAX_LEN,
@@ -196,6 +200,8 @@ static struct rte_mempool *dpdk_pktmbuf_completion_pool_create(const char *name,
 		rte_errno = EINVAL;
 		return NULL;
 	}
+	assert(sizeof(struct rte_mbuf) + priv_size + RTE_PKTMBUF_HEADROOM -
+			sizeof(struct tx_net_hdr) <= TX_NET_HEADROOM);
 	elt_size = sizeof(struct rte_mbuf) + (unsigned)priv_size +
 		(unsigned)data_room_size;
 	mbp_priv.mbuf_data_room_size = data_room_size;
@@ -320,9 +326,9 @@ void dpdk_swap_ip_src_dest(struct rte_mbuf *buf)
 }
 
 /*
- * Prepend preamble to ingress packets.
+ * Prepend rx_net_hdr preamble to ingress packets.
  */
-static inline struct rx_net_hdr *dpdk_prepend_rx_preamble(struct rte_mbuf *buf)
+static struct rx_net_hdr *dpdk_prepend_rx_preamble(struct rte_mbuf *buf)
 {
 	struct rx_net_hdr *net_hdr;
 	uint64_t masked_ol_flags;
@@ -341,6 +347,45 @@ static inline struct rx_net_hdr *dpdk_prepend_rx_preamble(struct rte_mbuf *buf)
 	net_hdr->csum = 0; /* unused for now */
 
 	return net_hdr;
+}
+
+/*
+ * Prepend rte_mbuf fields to egress packets. Set the mempool of the buf to be
+ * the dummy egress_mbuf_pool, which will handle completion events.
+ */
+static struct rte_mbuf *dpdk_prepend_tx_preamble(struct tx_net_hdr *net_hdr,
+		struct proc *p, unsigned int thread)
+{
+	struct rte_mbuf *buf;
+	uint32_t mbuf_size, buf_len, priv_size;
+	struct egress_pktmbuf_priv *priv_data;
+
+	priv_size = rte_pktmbuf_priv_size(egress_mbuf_pool);
+	buf = dpdk_net_hdr_to_rte_mbuf(net_hdr, struct tx_net_hdr, priv_size);
+
+	/* initialize the pktmbuf, based on rte_pktmbuf_init */
+	mbuf_size = sizeof(struct rte_mbuf) + priv_size;
+	buf_len = rte_pktmbuf_data_room_size(egress_mbuf_pool);
+
+	memset(buf, 0, mbuf_size);
+	buf->priv_size = priv_size;
+	buf->buf_addr = (char *)buf + mbuf_size;
+	/* TODO: look up physical address in a table */
+	buf->buf_physaddr = rte_mem_virt2phy(buf) + mbuf_size;
+	buf->buf_len = (uint16_t)buf_len;
+	buf->data_off = RTE_MIN(RTE_PKTMBUF_HEADROOM, (uint16_t)buf->buf_len);
+	buf->pool = egress_mbuf_pool;
+	buf->nb_segs = 1;
+	buf->port = 0xff;
+	rte_mbuf_refcnt_set(buf, 1);
+	buf->next = NULL;
+
+	/* initialize the private data, used to send completion events */
+	priv_data = egress_get_priv(buf);
+	priv_data->proc = p;
+	priv_data->thread = thread;
+
+	return buf;
 }
 
 /*
@@ -461,6 +506,51 @@ static void dpdk_rx_burst(uint8_t port)
 }
 
 /*
+ * Process a batch of outgoing packets.
+ */
+static void dpdk_tx_burst(uint8_t port)
+{
+	struct rte_mbuf *bufs[PKT_BURST_SIZE];
+	uint16_t i, j, n_pkts, nb_tx;
+	struct proc *p;
+	struct thread *t;
+	uint64_t cmd;
+	unsigned long payload;
+	struct tx_net_hdr *net_hdr;
+
+	/* Poll each thread in each runtime until all have been polled or we have
+	 * PKT_BURST_SIZE pkts. TODO: maintain state across calls to this function
+	 * to avoid starving threads/runtimes with higher indices. */
+	n_pkts = 0;
+	for (i = 0; i < nr_clients; i++) {
+		p = clients[i];
+		for (j = 0; j < p->thread_count; j++) {
+			t = &p->threads[j];
+			if (lrpc_recv(&t->txpktq, &cmd, &payload)) {
+				net_hdr = shmptr_to_ptr(&p->region, payload,
+						sizeof(struct tx_net_hdr));
+				bufs[n_pkts++] = dpdk_prepend_tx_preamble(net_hdr, p, j);
+
+				if (n_pkts >= PKT_BURST_SIZE)
+					goto done_polling;
+			}
+		}
+	}
+
+	if (n_pkts == 0)
+		return;
+
+done_polling:
+	/* send packets to NIC queue */
+	nb_tx = rte_eth_tx_burst(port, 0, bufs, n_pkts);
+
+	if (nb_tx < n_pkts) {
+		for (i = nb_tx; i < n_pkts; i++)
+			rte_pktmbuf_free(bufs[i]);
+	}
+}
+
+/*
  * Add a new client.
  */
 static inline void dpdk_add_client(struct proc *p)
@@ -558,7 +648,8 @@ void dpdk_loop(uint8_t port)
 		/* handle a burst of ingress packets. */
 		dpdk_rx_burst(port);
 
-		/* TODO: poll tx queues for packets to send */
+		/* send a burst of egress packets. */
+		dpdk_tx_burst(port);
 
 		/* handle control messages. */
 		dpdk_rx_control_lrpcs();
