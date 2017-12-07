@@ -95,3 +95,67 @@ void mempool_destroy(struct mempool *m)
 {
 	free(m->free_items);
 }
+
+struct mempool_tc {
+	struct mempool *m;
+	spinlock_t lock;
+};
+
+static void mempool_tcache_free(struct tcache *tc, int nr, void **items)
+{
+	int i;
+
+	struct mempool_tc *mptc = (struct mempool_tc *)tc->data;
+
+	spin_lock(&mptc->lock);
+	for (i = 0; i < nr; i++) {
+		mempool_free(mptc->m, items[i]);
+	}
+	spin_unlock(&mptc->lock);
+}
+
+static int mempool_tcache_alloc(struct tcache *tc, int nr, void **items)
+{
+	int i;
+
+	struct mempool_tc *mptc = (struct mempool_tc *)tc->data;
+
+	spin_lock(&mptc->lock);
+	for (i = 0; i < nr; i++) {
+		items[i] = mempool_alloc(mptc->m);
+		if (items[i] == NULL) {
+			spin_unlock(&mptc->lock);
+			mempool_tcache_free(tc, i, items);
+			return -ENOMEM;
+		}
+	}
+	spin_unlock(&mptc->lock);
+	return 0;
+}
+
+static const struct tcache_ops mempool_tcache_ops = {
+    .alloc = mempool_tcache_alloc, .free = mempool_tcache_free,
+};
+
+struct tcache *mempool_create_tcache(struct mempool *m, const char *name,
+				     unsigned int mag_size)
+{
+	struct mempool_tc *mptc;
+	struct tcache *tc;
+
+	mptc = malloc(sizeof(*mptc));
+	if (mptc == NULL)
+		return NULL;
+
+	mptc->m = m;
+	spin_lock_init(&mptc->lock);
+
+	tc = tcache_create(name, &mempool_tcache_ops, mag_size, m->item_len);
+	if (!tc) {
+		free(mptc);
+		return NULL;
+	}
+
+	tc->data = (unsigned long)mptc;
+	return tc;
+}

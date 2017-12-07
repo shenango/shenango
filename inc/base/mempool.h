@@ -5,6 +5,7 @@
 #pragma once
 
 #include <base/stddef.h>
+#include <base/tcache.h>
 
 struct mempool {
 	void			**free_items;
@@ -55,3 +56,6 @@ static inline void mempool_free(struct mempool *m, void *item)
 extern int mempool_create(struct mempool *m, void *buf, size_t len,
 			  size_t pgsize, size_t item_len);
 extern void mempool_destroy(struct mempool *m);
+
+extern struct tcache *mempool_create_tcache(struct mempool *m, const char *name,
+					    unsigned int mag_size);
