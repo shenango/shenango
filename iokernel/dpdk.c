@@ -517,6 +517,7 @@ static void dpdk_tx_burst(uint8_t port)
 	uint64_t cmd;
 	unsigned long payload;
 	struct tx_net_hdr *net_hdr;
+	struct rte_mbuf *buf;
 
 	/* Poll each thread in each runtime until all have been polled or we have
 	 * PKT_BURST_SIZE pkts. TODO: maintain state across calls to this function
@@ -529,7 +530,21 @@ static void dpdk_tx_burst(uint8_t port)
 			if (lrpc_recv(&t->txpktq, &cmd, &payload)) {
 				net_hdr = shmptr_to_ptr(&p->region, payload,
 						sizeof(struct tx_net_hdr));
-				bufs[n_pkts++] = dpdk_prepend_tx_preamble(net_hdr, p, j);
+				buf = dpdk_prepend_tx_preamble(net_hdr, p, j);
+
+				buf->pkt_len = net_hdr->len;
+				buf->data_len = net_hdr->len;
+				buf->ol_flags = 0;
+				if (net_hdr->olflags & OLFLAG_IP_CHKSUM)
+					buf->ol_flags |= PKT_TX_IP_CKSUM;
+				if (net_hdr->olflags & OLFLAG_TCP_CHKSUM)
+					buf->ol_flags |= PKT_TX_TCP_CKSUM;
+				if (net_hdr->olflags & OLFLAG_IPV4)
+					buf->ol_flags |= PKT_TX_IPV4;
+				if (net_hdr->olflags & OLFLAG_IPV6)
+					buf->ol_flags |= PKT_TX_IPV6;
+
+				bufs[n_pkts++] = buf;
 
 				if (n_pkts >= PKT_BURST_SIZE)
 					goto done_polling;
