@@ -265,8 +265,16 @@ mbuf_create_mempool_allocator(size_t pool_len, unsigned int head_len,
 			      unsigned int reserve_len);
 
 
+/**
+ * Thread-safe/fast mbuf allocation
+ * - buffers are allocated using mempool/tcache from region specified by user
+ * - struct mbufs are allocated using slab/tcache
+ * - allocator free function only frees struct mbuf
+ * 		- buffer must be freed by mbuf_tcache_buffer_free()
+ */
 extern struct mbuf_allocator tc_allocator;
 extern int mbuf_tcache_allocator_init_thread(void);
 extern int mbuf_tcache_allocator_init(void *buf, size_t buf_size,
 				      size_t mbuf_count, unsigned int head_len,
 				      unsigned int reserve_len);
+extern void mbuf_tcache_buffer_free(void *buf);
