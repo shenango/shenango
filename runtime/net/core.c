@@ -2,6 +2,8 @@
  * core.c - core networking infrastructure
  */
 
+#include <base/mempool.h>
+#include <base/slab.h>
 #include <runtime/thread.h>
 
 #include "../defs.h"
