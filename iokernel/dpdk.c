@@ -66,6 +66,9 @@
 #define dpdk_net_hdr_to_rte_mbuf(net_hdr, hdr_type, priv_size) \
 	(struct rte_mbuf *) (((char *) net_hdr) + sizeof(hdr_type) - \
 	RTE_PKTMBUF_HEADROOM - priv_size - sizeof(struct rte_mbuf))
+#define dpdk_rte_mbuf_to_net_hdr(mbuf, hdr_type, priv_size) \
+	(hdr_type *) (((char *) mbuf) + sizeof(struct rte_mbuf) + priv_size + \
+			RTE_PKTMBUF_HEADROOM - sizeof(hdr_type))
 
 static const struct rte_eth_conf port_conf_default = {
 	.rxmode = {
@@ -85,8 +88,7 @@ static struct rte_hash *mac_to_proc;
  * Private data stored in egress mbufs, used to send completions to runtimes.
  */
 struct egress_pktmbuf_priv {
-	struct proc *proc;
-	unsigned int thread;
+	struct thread *thread;
 };
 
 static inline struct egress_pktmbuf_priv *egress_get_priv(struct rte_mbuf *buf)
@@ -354,7 +356,7 @@ static struct rx_net_hdr *dpdk_prepend_rx_preamble(struct rte_mbuf *buf)
  * the dummy egress_mbuf_pool, which will handle completion events.
  */
 static struct rte_mbuf *dpdk_prepend_tx_preamble(struct tx_net_hdr *net_hdr,
-		struct proc *p, unsigned int thread)
+		struct thread *thread)
 {
 	struct rte_mbuf *buf;
 	uint32_t mbuf_size, buf_len, priv_size;
@@ -382,7 +384,6 @@ static struct rte_mbuf *dpdk_prepend_tx_preamble(struct tx_net_hdr *net_hdr,
 
 	/* initialize the private data, used to send completion events */
 	priv_data = egress_get_priv(buf);
-	priv_data->proc = p;
 	priv_data->thread = thread;
 
 	return buf;
@@ -410,17 +411,15 @@ static bool dpdk_enqueue_to_runtime(struct rx_net_hdr *net_hdr, struct proc *p)
 bool dpdk_send_completion(void *obj) {
 	struct rte_mbuf *buf;
 	struct egress_pktmbuf_priv *priv_data;
-	struct proc *p;
 	struct thread *t;
-	shmptr_t shmptr;
+	struct tx_net_hdr *net_hdr;
 
 	buf = (struct rte_mbuf *) obj;
 	priv_data = egress_get_priv(buf);
-	p = priv_data->proc;
-	t = &p->threads[priv_data->thread];
-
-	shmptr = ptr_to_shmptr(&p->region, buf, sizeof(struct tx_net_hdr));
-	if (!lrpc_send(&t->rxq, RX_NET_COMPLETE, shmptr)) {
+	t = priv_data->thread;
+	net_hdr = dpdk_rte_mbuf_to_net_hdr(buf, struct tx_net_hdr,
+			sizeof(struct egress_pktmbuf_priv));
+	if (!lrpc_send(&t->rxq, RX_NET_COMPLETE, net_hdr->completion_data)) {
 		log_warn("dpdk: failed to enqueue completion event to runtime");
 		return false;
 	}
@@ -530,7 +529,7 @@ static void dpdk_tx_burst(uint8_t port)
 			if (lrpc_recv(&t->txpktq, &cmd, &payload)) {
 				net_hdr = shmptr_to_ptr(&p->region, payload,
 						sizeof(struct tx_net_hdr));
-				buf = dpdk_prepend_tx_preamble(net_hdr, p, j);
+				buf = dpdk_prepend_tx_preamble(net_hdr, t);
 
 				buf->pkt_len = net_hdr->len;
 				buf->data_len = net_hdr->len;
