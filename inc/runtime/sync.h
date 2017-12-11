@@ -7,7 +7,7 @@
 #include <base/stddef.h>
 #include <base/list.h>
 #include <base/atomic.h>
-
+#include <runtime/thread.h>
 
 /*
  * Mutex support
