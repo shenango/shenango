@@ -37,7 +37,7 @@ iokernel_src = $(wildcard iokernel/*.c)
 iokernel_obj = $(iokernel_src:.c=.o)
 
 # runtime - a user-level threading and networking library
-runtime_src = $(wildcard runtime/*.c)
+runtime_src = $(wildcard runtime/*.c) $(wildcard runtime/net/*.c)
 runtime_asm = $(wildcard runtime/*.S)
 runtime_obj = $(runtime_src:.c=.o) $(runtime_asm:.S=.o)
 

@@ -8,5 +8,6 @@ test_multiple_runtimes
 test_runtime_threads
 test_runtime_channels
 test_runtime_mutexes
+test_runtime_rcu
 test_smalloc
 test_thread

@@ -201,7 +201,6 @@ fail:
 static int setup_egress_mbufs(void)
 {
 
-	int ret;
 	void *buf;
 	size_t buf_size;
 
@@ -212,10 +211,12 @@ static int setup_egress_mbufs(void)
 	if (buf == NULL)
 		return -ENOMEM;
 
+#if 0
 	ret = mbuf_tcache_allocator_init(buf, buf_size, PACKET_QUEUE_MCOUNT,
 				   ETH_MAX_LEN, 0);
 	if (ret)
 		return ret;
+#endif
 
 	buf += buf_size;
 	iok.next_free = ptr_to_shmptr(&iok.r, buf, 0);
@@ -226,6 +227,7 @@ static int setup_egress_mbufs(void)
 
 int ioqueues_init_thread(void)
 {
+#if 0
 	int ret;
 
 	// TODO: Attach queues?
@@ -237,6 +239,7 @@ int ioqueues_init_thread(void)
 			ret);
 		return ret;
 	}
+#endif
 
 	return 0;
 }

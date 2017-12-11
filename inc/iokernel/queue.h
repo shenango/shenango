@@ -17,9 +17,10 @@ struct rx_net_hdr {
 
 /* preamble to egress network packets */
 struct tx_net_hdr {
+	unsigned long completion_data; /* a tag to help complete the request */
 	unsigned int len;	/* the length of the payload */
 	unsigned int olflags;	/* offload flags */
-	unsigned long completion_data; /* a tag to help complete the request */
+	unsigned short pad;	/* because of 14 byte ethernet header */
 	char	     payload[];	/* packet data */
 };
 
@@ -59,7 +60,7 @@ enum {
  */
 enum {
 	RX_NET_RECV = 0,	/* points to a struct rx_net_hdr */
-	RX_NET_COMPLETE,	/* points to a struct tx_net_hdr */
+	RX_NET_COMPLETE,	/* contains tx_net_hdr.completion_data */
 	RX_CALL_NR,		/* number of commands */
 };
 

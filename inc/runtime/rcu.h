@@ -80,13 +80,15 @@ static inline void rcu_read_unlock(void)
  * An RCU pointer can be safely dereferenced if either the condition @c passes
  * or an RCU read lock is held.
  *
+ * TODO: consume barrier isn't needed if 'c' evaluates to true.
+ *
  * Returns the RCU pointer value.
  */
 #define rcu_dereference_protected(p, c)			\
 	({						\
 		rcu_check_type(p);			\
 		assert(rcu_read_lock_held() || !!(c));	\
-		ACCESS_ONCE((typeof(*(p)) __force **)(&p));\
+		load_consume((typeof(*(p)) __force **)(&p));\
 	})
 
 /**

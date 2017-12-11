@@ -7,24 +7,16 @@
 
 #pragma once
 
-#include <string.h>
-
 #include <base/stddef.h>
 #include <base/assert.h>
-#include <base/mem.h>
-#include <base/kref.h>
 #include <iokernel/queue.h>
 
-struct mempool;
-
-
-/*
- * Message buffer support
- */
+#define MBUF_DEFAULT_LEN	2048
+#define MBUF_DEFAULT_HEADROOM	128
 
 struct mbuf {
+	struct mbuf	*next;	   /* the next mbuf in a chain */
 	unsigned char	*head;	   /* start of the buffer */
-	physaddr_t	head_paddr;/* the physical address of @head */
 	unsigned char	*data;	   /* current position within the buffer */
 	unsigned int	head_len;  /* length of the entire buffer from @head */
 	unsigned int	len;	   /* length of the data */
@@ -147,15 +139,6 @@ static inline unsigned char *mbuf_data(struct mbuf *m)
 }
 
 /**
- * mbuf_data_phys - returns the physical address of the current data pointer
- * @m: the packet
- */
-static inline physaddr_t mbuf_data_phys(struct mbuf *m)
-{
-	return m->head_paddr + mbuf_headroom(m);
-}
-
-/**
  * mbuf_length - returns the current data length
  * @m: the packet
  */
@@ -189,65 +172,15 @@ static inline unsigned int mbuf_length(struct mbuf *m)
  * @head: the start of the backing buffer
  * @head_len: the length of backing buffer
  * @reserve_len: the number of bytes to reserve at the start of @head
- * @paddr: the physical address of @head
  */
 static inline void mbuf_init(struct mbuf *m, unsigned char *head,
-			     unsigned int head_len, unsigned int reserve_len,
-			     physaddr_t paddr)
+			     unsigned int head_len, unsigned int reserve_len)
 {
 	assert(reserve_len < head_len);
 	m->head = head;
-	m->head_paddr = paddr;
 	m->head_len = head_len;
 	m->data = m->head + reserve_len;
 	m->len = 0;
-}
-
-
-/*
- * Message buffer allocation support
- */
-
-struct mbuf_allocator {
-	unsigned int	head_len;
-	unsigned int	reserve_len;
-	struct kref	ref;
-
-	struct mbuf *	(*alloc)(struct mbuf_allocator *a);
-	void		(*release)(struct kref *ref);
-};
-
-/**
- * mbuf_allocator_get - increments the ref count
- * @a: the allocator to ref
- *
- * Returns the allocator.
- */
-static inline struct mbuf_allocator *
-mbuf_allocator_get(struct mbuf_allocator *a)
-{
-	kref_get(&a->ref);
-	return a;
-}
-
-/**
- * mbuf_allocator_put - decrements the ref count, freeing at zero
- * @a: the allocator to unref
- */
-static inline void mbuf_allocator_put(struct mbuf_allocator *a)
-{
-	kref_put(&a->ref, a->release);
-}
-
-/**
- * mbuf_alloc - allocates a new mbuf from an allocator
- * @a: the allocator to use
- *
- * Returns an initialized mbuf, or NULL if out of memory.
- */
-static inline struct mbuf *mbuf_alloc(struct mbuf_allocator *a)
-{
-	return a->alloc(a);
 }
 
 /**
@@ -259,22 +192,4 @@ static inline void mbuf_free(struct mbuf *m)
 	m->release(m);
 }
 
-extern struct mbuf *mbuf_clone(struct mbuf_allocator *a, struct mbuf *m);
-extern struct mbuf_allocator *
-mbuf_create_mempool_allocator(size_t pool_len, unsigned int head_len,
-			      unsigned int reserve_len);
-
-
-/**
- * Thread-safe/fast mbuf allocation
- * - buffers are allocated using mempool/tcache from region specified by user
- * - struct mbufs are allocated using slab/tcache
- * - allocator free function only frees struct mbuf
- * 		- buffer must be freed by mbuf_tcache_buffer_free()
- */
-extern struct mbuf_allocator tc_allocator;
-extern int mbuf_tcache_allocator_init_thread(void);
-extern int mbuf_tcache_allocator_init(void *buf, size_t buf_size,
-				      size_t mbuf_count, unsigned int head_len,
-				      unsigned int reserve_len);
-extern void mbuf_tcache_buffer_free(void *buf);
+extern struct mbuf *mbuf_clone(struct mbuf *dst, struct mbuf *src);

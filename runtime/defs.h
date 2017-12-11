@@ -10,6 +10,7 @@
 #include <base/tcache.h>
 #include <base/lrpc.h>
 #include <iokernel/control.h>
+#include <net/mbufq.h>
 #include <runtime/thread.h>
 #include <runtime/rcu.h>
 
@@ -229,6 +230,10 @@ struct kthread {
 	/* 6th cache-line */
 	struct lrpc_chan_out	txpktq;
 	struct lrpc_chan_out	txcmdq;
+
+	/* 7th cache-line */
+	struct mbufq		txpktq_overflow;
+	struct mbufq		txcmdq_overflow;
 };
 
 extern __thread struct kthread *mykthread;
