@@ -43,7 +43,6 @@ static void touch_mapping(void *base, size_t len, size_t pgsize)
 {
 	__sighandler_t s;
 	char *pos;
-	volatile int value;
 
 	/*
 	 * Unfortunately mmap() provides no error message if MAP_POPULATE fails
@@ -52,7 +51,7 @@ static void touch_mapping(void *base, size_t len, size_t pgsize)
 	 */
 	s = signal(SIGBUS, sigbus_error);
 	for (pos = (char *)base; pos < (char *)base + len; pos += pgsize)
-		value = *pos;
+		ACCESS_ONCE(*pos);
 	signal(SIGBUS, s);
 } 
 

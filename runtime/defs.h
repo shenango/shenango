@@ -9,6 +9,8 @@
 #include <base/mem.h>
 #include <base/tcache.h>
 #include <base/lrpc.h>
+#include <net/ethernet.h>
+#include <net/ip.h>
 #include <iokernel/control.h>
 #include <net/mbufq.h>
 #include <runtime/thread.h>
@@ -275,6 +277,23 @@ static inline void rcu_schedule(void)
 	if (unlikely(load_acquire(&rcu_gen) != rcu_tlgen))
 		__rcu_schedule();
 }
+
+
+/*
+ * Network stack
+ */
+
+struct net_cfg {
+	struct eth_addr		local_mac;
+	struct ip_addr		local_ip;
+	void			*tx_buf;
+	size_t			tx_len;
+	struct shm_region	rx_region;
+};
+
+extern int net_init(struct net_cfg *cfg);
+extern int net_init_thread(void);
+extern void net_schedule(struct kthread *k, unsigned int budget);
 
 
 /*
