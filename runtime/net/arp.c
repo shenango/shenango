@@ -87,6 +87,7 @@ int net_arp_init(struct eth_addr local_mac, struct ip_addr local_ip) {
 void net_rx_arp(struct mbuf *m) {
 	int op;
 	bool am_target;
+	struct mbuf* outgoing;
 	struct eth_hdr* eth_hdr;
 	struct arp_hdr* arp_hdr;
 	struct arp_hdr_ethip* arp_hdr_ethip;
@@ -128,27 +129,26 @@ void net_rx_arp(struct mbuf *m) {
 				  ((sender_ip.addr >> 8) & 0xff),
 				  (sender_ip.addr & 0xff));
 
-		m = net_tx_alloc_mbuf();
-		eth_hdr = (struct eth_hdr*)mbuf_put(m, sizeof(struct eth_hdr));
+		outgoing = net_tx_alloc_mbuf();
+		eth_hdr = (struct eth_hdr*)mbuf_put(outgoing, sizeof(struct eth_hdr));
 		eth_hdr->dhost = arp_hdr_ethip->target_mac;
 		eth_hdr->shost = arp_state.local_mac;
 		eth_hdr->type = hton16(ETHTYPE_ARP);
 
-		arp_hdr = (struct arp_hdr*)mbuf_put(m, sizeof(struct arp_hdr));
+		arp_hdr = (struct arp_hdr*)mbuf_put(outgoing, sizeof(struct arp_hdr));
 		arp_hdr->htype = hton16(ARP_HTYPE_ETHER);
 		arp_hdr->ptype = hton16(ETHTYPE_IP);
 		arp_hdr->hlen = sizeof(struct eth_addr);
 		arp_hdr->plen = sizeof(struct ip_addr);
 		arp_hdr->op = hton16(ARP_OP_REPLY);
 
-		arp_hdr_ethip = (struct arp_hdr_ethip*)mbuf_put(m, sizeof(struct arp_hdr_ethip));
+		arp_hdr_ethip = (struct arp_hdr_ethip*)mbuf_put(outgoing, sizeof(struct arp_hdr_ethip));
 		arp_hdr_ethip->target_ip.addr = hton16(sender_ip.addr);
 		arp_hdr_ethip->target_mac = sender_mac;
 		arp_hdr_ethip->sender_ip = arp_state.local_ip;
 		arp_hdr_ethip->target_mac = arp_state.local_mac;
 
-		net_tx_xmit(m);
-		return;
+		net_tx_xmit(outgoing);
 	}
 
 out:
