@@ -356,10 +356,10 @@ static struct rx_net_hdr *dpdk_prepend_rx_preamble(struct rte_mbuf *buf)
  * the dummy egress_mbuf_pool, which will handle completion events.
  */
 static struct rte_mbuf *dpdk_prepend_tx_preamble(struct tx_net_hdr *net_hdr,
-		struct thread *thread)
+		struct proc *p, struct thread *thread)
 {
 	struct rte_mbuf *buf;
-	uint32_t mbuf_size, buf_len, priv_size;
+	uint32_t mbuf_size, buf_len, priv_size, page_number;
 	struct egress_pktmbuf_priv *priv_data;
 
 	priv_size = rte_pktmbuf_priv_size(egress_mbuf_pool);
@@ -372,8 +372,9 @@ static struct rte_mbuf *dpdk_prepend_tx_preamble(struct tx_net_hdr *net_hdr,
 	memset(buf, 0, mbuf_size);
 	buf->priv_size = priv_size;
 	buf->buf_addr = (char *)buf + mbuf_size;
-	/* TODO: look up physical address in a table */
-	buf->buf_physaddr = rte_mem_virt2phy(buf) + mbuf_size;
+	page_number = PGN_2MB((uintptr_t) buf - (uintptr_t) p->region.base);
+	buf->buf_physaddr = p->page_paddrs[page_number] + PGOFF_2MB(buf) +
+			mbuf_size;
 	buf->buf_len = (uint16_t)buf_len;
 	buf->data_off = RTE_MIN(RTE_PKTMBUF_HEADROOM, (uint16_t)buf->buf_len);
 	buf->pool = egress_mbuf_pool;
@@ -529,7 +530,7 @@ static void dpdk_tx_burst(uint8_t port)
 			if (lrpc_recv(&t->txpktq, &cmd, &payload)) {
 				net_hdr = shmptr_to_ptr(&p->region, payload,
 						sizeof(struct tx_net_hdr));
-				buf = dpdk_prepend_tx_preamble(net_hdr, t);
+				buf = dpdk_prepend_tx_preamble(net_hdr, p, t);
 
 				buf->pkt_len = net_hdr->len;
 				buf->data_len = net_hdr->len;

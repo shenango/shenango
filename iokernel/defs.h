@@ -35,6 +35,9 @@ struct proc {
 
 	/* network data */
 	struct eth_addr		mac;
+
+	/* table of physical addresses for shared memory */
+	physaddr_t		page_paddrs[];
 };
 
 /*
