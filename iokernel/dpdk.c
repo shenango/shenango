@@ -61,6 +61,7 @@
 #define MBUF_CACHE_SIZE 250
 #define PKT_BURST_SIZE 32
 #define CONTROL_BURST_SIZE 8
+#define CMD_BURST_SIZE 32
 #define MAC_TO_PROC_ENTRIES	128
 
 #define dpdk_net_hdr_to_rte_mbuf(net_hdr, hdr_type, priv_size) \
@@ -566,6 +567,46 @@ done_polling:
 }
 
 /*
+ * Process a batch of commands from runtimes.
+ */
+static void dpdk_handle_runtime_commands()
+{
+	uint16_t i, j, n_cmds;
+	struct proc *p;
+	struct thread *t;
+	uint64_t cmd;
+	unsigned long payload;
+	struct rx_net_hdr *net_hdr;
+	struct rte_mbuf *buf;
+
+	/* Poll each thread in each runtime until all have been polled or we have
+	 * processed CMD_BURST_SIZE commands. TODO: maintain state across calls to
+	 * this function to avoid starving threads/runtimes with higher indices. */
+	n_cmds = 0;
+	for (i = 0; i < nr_clients; i++) {
+		p = clients[i];
+		for (j = 0; j < p->thread_count; j++) {
+			t = &p->threads[j];
+			if (lrpc_recv(&t->txcmdq, &cmd, &payload)) {
+				if (cmd == TXCMD_NET_COMPLETE) {
+					/* get pointer to struct rte_mbuf, return to mempool */
+					net_hdr = shmptr_to_ptr(&p->region, payload,
+							sizeof(struct rx_net_hdr));
+					buf = dpdk_net_hdr_to_rte_mbuf(net_hdr, struct rx_net_hdr,
+							0);
+					rte_pktmbuf_free(buf);
+				} else
+					log_err("dpdk: TXCMD %d not handled\n", cmd);
+
+				n_cmds++;
+				if (n_cmds >= CMD_BURST_SIZE)
+					return;
+			}
+		}
+	}
+}
+
+/*
  * Add a new client.
  */
 static inline void dpdk_add_client(struct proc *p)
@@ -665,6 +706,9 @@ void dpdk_loop(uint8_t port)
 
 		/* send a burst of egress packets. */
 		dpdk_tx_burst(port);
+
+		/* process a batch of commands from runtimes */
+		dpdk_handle_runtime_commands();
 
 		/* handle control messages. */
 		dpdk_rx_control_lrpcs();
