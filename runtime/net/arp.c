@@ -4,10 +4,10 @@
 
 #include <stddef.h>
 
+#include <base/lock.h>
 #include <base/log.h>
 #include <net/arp.h>
 #include <runtime/rculist.h>
-#include <runtime/sync.h>
 
 #include "defs.h"
 
@@ -26,10 +26,10 @@ struct arp_entry {
 };
 
 struct arp_state {
-	mutex_t entries_lock;
+	spinlock_t            entries_lock;
 	struct rcu_hlist_head entries[ARP_TABLE_CAPACITY];
-	struct eth_addr  local_mac;
-	struct ip_addr   local_ip;
+	struct eth_addr       local_mac;
+	struct ip_addr        local_ip;
 };
 
 static struct arp_state arp_state;
@@ -45,7 +45,7 @@ static void update_entry(struct ip_addr ip, struct eth_addr eth) {
 	struct mbuf* pending = NULL;
 
 	index = hash_ip(ip);
-	mutex_lock(&arp_state.entries_lock);
+	spin_lock(&arp_state.entries_lock);
 	rcu_hlist_for_each(&arp_state.entries[index], node, true) {
 		entry = rcu_hlist_entry(node, struct arp_entry, link);
 		if(entry->eth.addr == eth.addr) {
@@ -67,13 +67,13 @@ static void update_entry(struct ip_addr ip, struct eth_addr eth) {
 	rcu_hlist_add_head(&arp_state.entries[index], &entry->link);
 
  out:
-	mutex_unlock(&arp_state.entries_lock);
+	spin_unlock(&arp_state.entries_lock);
 	if(pending)
 		net_tx_xmit(pending);
 }
 
 int net_arp_init(struct eth_addr local_mac, struct ip_addr local_ip) {
-	mutex_init(&arp_state.entries_lock);
+	spin_lock_init(&arp_state.entries_lock);
 	arp_state.local_mac = local_mac;
 	arp_state.local_ip = local_ip;
 
@@ -172,12 +172,12 @@ int net_tx_xmit_to_ip(struct mbuf *m, struct ip_addr dst_ip) {
 	}
 	rcu_read_unlock();
 
-	mutex_lock(&arp_state.entries_lock);
+	spin_lock(&arp_state.entries_lock);
 	entry = malloc(sizeof(struct arp_entry));
 	entry->ip = dst_ip;
 	entry->pending = m;
 	rcu_hlist_add_head(&arp_state.entries[index], &entry->link);
-	mutex_unlock(&arp_state.entries_lock);
+	spin_unlock(&arp_state.entries_lock);
 
 	m = net_tx_alloc_mbuf();
 	eth_hdr = (struct eth_hdr*)mbuf_put(m, sizeof(struct eth_hdr));
