@@ -4,6 +4,7 @@
 
 #include <pthread.h>
 
+#include <base/cpu.h>
 #include <base/init.h>
 #include <base/log.h>
 #include <base/limits.h>
@@ -73,10 +74,10 @@ static void *pthread_entry(void *data)
  */
 int runtime_init(thread_fn_t main_fn, void *arg, unsigned int threads)
 {
-	pthread_t tid[NTHREAD];
+	pthread_t tid[cpu_count - 1];
 	int ret, i;
 
-	if (threads < 1)
+	if (threads < 1 || threads > cpu_count - 1)
 		return -EINVAL;
 
 	ret = base_init();
