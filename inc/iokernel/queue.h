@@ -8,6 +8,7 @@
 
 /* preamble to ingress network packets */
 struct rx_net_hdr {
+	unsigned long completion_data; /* a tag to help complete the request */
 	unsigned int len;	/* the length of the payload */
 	unsigned int rss_hash;	/* the HW RSS 5-tuple hash */
 	unsigned int csum_type; /* the type of checksum */
@@ -81,7 +82,6 @@ enum {
  * much faster by the IOKERNEL than packets, so no HOL blocking.
  */
 enum {
-	TXCMD_NET_COMPLETE = 0,	/* points to a struct rx_net_hdr */
-	TXCMD_TXPKT_FULL,	/* no arguments */
+	TXCMD_NET_COMPLETE = 0,	/* contains rx_net_hdr.completion_data */
 	TXCMD_NR,		/* number of commands */
 };

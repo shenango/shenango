@@ -2,12 +2,16 @@
  * core.c - core networking infrastructure
  */
 
+#include <base/log.h>
 #include <base/mempool.h>
 #include <base/slab.h>
 #include <runtime/thread.h>
 
 #include "../defs.h"
 #include "defs.h"
+
+/* the maximum number of packets to process per scheduler invocation */
+#define MAX_BUDGET	512
 
 /* important global state */
 struct eth_addr net_local_mac;
@@ -26,12 +30,21 @@ static __thread struct tcache_perthread net_tx_buf_pt;
 /* RX shared memory region */
 static struct shm_region net_rx_region;
 
+
 /*
  * RX Networking Functions
  */
 
 static void net_rx_release_mbuf(struct mbuf *m)
 {
+	struct rx_net_hdr *hdr = container_of((void *)m->head,
+					      struct rx_net_hdr, payload);
+
+	if (!lrpc_send(&myk()->txcmdq, TXCMD_NET_COMPLETE,
+		       hdr->completion_data)) {
+		mbufq_push_tail(&myk()->txcmdq_overflow, m);
+		return;
+	}
 	tcache_free(&net_mbuf_pt, m);
 }
 
@@ -52,14 +65,120 @@ static struct mbuf *net_rx_alloc_mbuf(struct rx_net_hdr *hdr)
 	return m;
 }
 
-int net_rx_register_handler(struct rx_handler *h)
+static void net_rx_one(struct rx_net_hdr *hdr)
 {
-	return -ENOSYS;
+	struct mbuf *m;
+	struct eth_hdr *llhdr;
+	struct ip_hdr *iphdr;
+	uint16_t len;
+
+	m = net_rx_alloc_mbuf(hdr);
+	if (unlikely(!m)) {
+		while (!lrpc_send(&myk()->txcmdq, TXCMD_NET_COMPLETE,
+				  hdr->completion_data)) {
+			cpu_relax();
+		}
+		return;
+	}
+
+
+	/*
+	 * Link Layer Processing (OSI L2)
+	 */
+
+	llhdr = mbuf_pull_hdr_or_null(m, *llhdr);
+	if (unlikely(!llhdr))
+		goto drop;
+
+	/* handle ARP requests */
+	if (ntoh16(llhdr->type) == ETHTYPE_ARP) {
+		net_rx_arp(m);
+		return;
+	}
+
+	/* filter out requests we can't handle */
+	if (unlikely(ntoh16(llhdr->type) != ETHTYPE_IP ||
+		     llhdr->dhost.addr != net_local_mac.addr))
+		goto drop;
+
+
+	/*
+	 * Network Layer Processing (OSI L3)
+	 */
+
+	iphdr = mbuf_pull_hdr_or_null(m, *iphdr);
+	if (unlikely(!iphdr))
+		goto drop;
+
+	/* TODO: Has the NIC validated IP checksum for us? */
+
+	/* must be IPv4, no IP options, no IP fragments */
+	if (unlikely(iphdr->version != IPVERSION ||
+		     iphdr->header_len != sizeof(*iphdr) / sizeof(uint32_t) ||
+		     (iphdr->off & IP_MF) > 0))
+		goto drop;
+
+	len = ntoh16(iphdr->len);
+
+	switch(iphdr->proto) {
+	case IPPROTO_ICMP:
+		net_rx_icmp(m, &iphdr->src_addr, len);
+		break;
+
+	case IPPROTO_UDP:
+		net_rx_udp(m, &iphdr->src_addr, len);
+		break;
+
+	default:
+		goto drop;
+	}
+
+	return;
+
+drop:
+	mbuf_free(m);
 }
 
-void net_rx_unregister_handler(struct rx_handler *h)
+static void net_rx_schedule(struct kthread *k, unsigned int budget)
 {
+	struct rx_net_hdr *recv_reqs[MAX_BUDGET];
+	struct mbuf *completion_reqs[MAX_BUDGET];
+	int recv_cnt = 0, completion_cnt = 0;
+	int i;
 
+	/* Step 1: Pull available IOKERNEL commands from the RXQ */
+	budget = min(budget, MAX_BUDGET);
+	while (budget--) {
+		uint64_t cmd;
+		unsigned long payload;
+
+		if (!lrpc_recv(&k->rxq, &cmd, &payload))
+			break;
+
+		switch (cmd) {
+		case RX_NET_RECV:
+			recv_reqs[recv_cnt++] = shmptr_to_ptr(&net_rx_region,
+				(shmptr_t)payload, MBUF_DEFAULT_LEN);
+			BUG_ON(recv_reqs[recv_cnt - 1] == NULL);
+			break;
+
+		case RX_NET_COMPLETE:
+			completion_reqs[completion_cnt++] =
+				(struct mbuf *)payload;
+			break;
+
+		default:
+			log_err_ratelimited("net: invalid RXQ cmd '%ld'", cmd);
+		}
+	}
+
+	/* Step 2: Complete TX requests and free packets */
+	for (i = 0; i < completion_cnt; i++)
+		mbuf_free(completion_reqs[i]);
+
+	/* Step 3: Deliver new RX packets to the runtime */
+	for (i = 0; i < recv_cnt; i++)
+		net_rx_one(recv_reqs[i]);
 }
 
 
@@ -103,7 +222,7 @@ int net_tx_xmit(struct mbuf *m)
 
 void net_schedule(struct kthread *k, unsigned int budget)
 {
-
+	net_rx_schedule(k, budget);
 }
 
 int net_init_thread(void)
@@ -113,6 +232,12 @@ int net_init_thread(void)
 	return 0;
 }
 
+/**
+ * net_init - initializes the network stack
+ * @cfg: configuration parameters for initialization
+ *
+ * Returns 0 if successful.
+ */
 int net_init(struct net_cfg *cfg)
 {
 	int ret;
