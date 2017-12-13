@@ -250,7 +250,7 @@ static inline struct kthread *myk(void)
 
 DECLARE_SPINLOCK(klock);
 extern unsigned int nrks;
-extern struct kthread *ks[NTHREAD];
+extern struct kthread *ks[NCPU];
 
 extern void kthread_attach(void);
 extern void kthread_detach(void);

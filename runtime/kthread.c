@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <base/cpu.h>
 #include <base/list.h>
 #include <base/lock.h>
 
@@ -15,7 +16,7 @@ DEFINE_SPINLOCK(klock);
 /* the total number of kthreads (i.e. the size of @ks) */
 unsigned int nrks;
 /* an array of all the kthreads (for work-stealing) */
-struct kthread *ks[NTHREAD];
+struct kthread *ks[NCPU];
 /* kernel thread-local data */
 __thread struct kthread *mykthread;
 
@@ -55,7 +56,7 @@ int kthread_init_thread(void)
 void kthread_attach(void)
 {
 	spin_lock(&klock);
-	assert(nrks < NTHREAD);
+	assert(nrks < cpu_count - 1);
 	ks[nrks++] = mykthread;
 	rcu_tlgen = rcu_gen;
 	spin_unlock(&klock);
