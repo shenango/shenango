@@ -5,7 +5,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include <base/cpu.h>
 #include <base/list.h>
 #include <base/lock.h>
 
@@ -56,7 +55,7 @@ int kthread_init_thread(void)
 void kthread_attach(void)
 {
 	spin_lock(&klock);
-	assert(nrks < cpu_count - 1);
+	assert(nrks < NTHREAD);
 	ks[nrks++] = mykthread;
 	rcu_tlgen = rcu_gen;
 	spin_unlock(&klock);

@@ -4,7 +4,6 @@
 
 #include <pthread.h>
 
-#include <base/cpu.h>
 #include <base/init.h>
 #include <base/log.h>
 #include <base/limits.h>
@@ -85,9 +84,6 @@ int runtime_init(thread_fn_t main_fn, void *arg, unsigned int threads)
 		log_err("base_init() failed, ret = %d", ret);
 		return ret;
 	}
-
-	if (threads > cpu_count - 1)
-		return -EINVAL;
 
 	ret = stack_init();
 	if (ret) {
