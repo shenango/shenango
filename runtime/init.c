@@ -74,10 +74,10 @@ static void *pthread_entry(void *data)
  */
 int runtime_init(thread_fn_t main_fn, void *arg, unsigned int threads)
 {
-	pthread_t tid[cpu_count - 1];
+	pthread_t tid[NTHREAD];
 	int ret, i;
 
-	if (threads < 1 || threads > cpu_count - 1)
+	if (threads < 1)
 		return -EINVAL;
 
 	ret = base_init();
@@ -85,6 +85,9 @@ int runtime_init(thread_fn_t main_fn, void *arg, unsigned int threads)
 		log_err("base_init() failed, ret = %d", ret);
 		return ret;
 	}
+
+	if (threads > cpu_count - 1)
+		return -EINVAL;
 
 	ret = stack_init();
 	if (ret) {
