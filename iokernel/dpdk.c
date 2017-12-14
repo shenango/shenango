@@ -537,14 +537,20 @@ static void dpdk_tx_burst(uint8_t port)
 				buf->pkt_len = net_hdr->len;
 				buf->data_len = net_hdr->len;
 				buf->ol_flags = 0;
-				if (net_hdr->olflags & OLFLAG_IP_CHKSUM)
-					buf->ol_flags |= PKT_TX_IP_CKSUM;
-				if (net_hdr->olflags & OLFLAG_TCP_CHKSUM)
-					buf->ol_flags |= PKT_TX_TCP_CKSUM;
-				if (net_hdr->olflags & OLFLAG_IPV4)
-					buf->ol_flags |= PKT_TX_IPV4;
-				if (net_hdr->olflags & OLFLAG_IPV6)
-					buf->ol_flags |= PKT_TX_IPV6;
+
+				if (net_hdr->olflags != 0) {
+					if (net_hdr->olflags & OLFLAG_IP_CHKSUM)
+						buf->ol_flags |= PKT_TX_IP_CKSUM;
+					if (net_hdr->olflags & OLFLAG_TCP_CHKSUM)
+						buf->ol_flags |= PKT_TX_TCP_CKSUM;
+					if (net_hdr->olflags & OLFLAG_IPV4)
+						buf->ol_flags |= PKT_TX_IPV4;
+					if (net_hdr->olflags & OLFLAG_IPV6)
+						buf->ol_flags |= PKT_TX_IPV6;
+
+					buf->l2_len = ETHER_HDR_LEN;
+					buf->l3_len = sizeof(struct ipv4_hdr);
+				}
 
 				bufs[n_pkts++] = buf;
 
@@ -560,6 +566,7 @@ static void dpdk_tx_burst(uint8_t port)
 done_polling:
 	/* send packets to NIC queue */
 	nb_tx = rte_eth_tx_burst(port, 0, bufs, n_pkts);
+	log_debug("dpdk: transmitted %d packets on port %d", nb_tx, port);
 
 	if (nb_tx < n_pkts) {
 		for (i = nb_tx; i < n_pkts; i++)
