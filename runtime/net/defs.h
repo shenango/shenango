@@ -9,6 +9,7 @@
 #include <net/ip.h>
 #include <runtime/rculist.h>
 
+#include "../defs.h"
 
 /*
  * Initialization

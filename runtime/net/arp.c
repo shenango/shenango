@@ -162,13 +162,20 @@ int net_tx_xmit_to_ip(struct mbuf *m, struct ip_addr dst_ip) {
 	struct arp_hdr* arp_hdr;
 	struct arp_hdr_ethip* arp_hdr_ethip;
 
+	eth_hdr = mbuf_push_hdr(m, *eth_hdr);
+	eth_hdr->shost = netcfg.local_mac;
+	eth_hdr->type = hton16(ETHTYPE_IP);
+
+	if ((dst_ip.addr & netcfg.netmask.addr) != netcfg.network.addr)
+		dst_ip.addr = netcfg.gateway.addr;
+
 	index = hash_ip(dst_ip);
 	rcu_read_lock();
 	rcu_hlist_for_each(&arp_state.entries[index], node, true) {
 		entry = rcu_hlist_entry(node, struct arp_entry, link);
-		if(entry->ip.addr == dst_ip.addr) {
-			if(entry->pending == NULL) {
-				((struct eth_hdr*)m->data)->dhost = entry->eth;
+		if (entry->ip.addr == dst_ip.addr) {
+			if (entry->pending == NULL) {
+				eth_hdr->dhost = entry->eth;
 				rcu_read_unlock();
 				return net_tx_xmit(m);
 			} else {
@@ -181,26 +188,27 @@ int net_tx_xmit_to_ip(struct mbuf *m, struct ip_addr dst_ip) {
 	rcu_read_unlock();
 
 	spin_lock(&arp_state.entries_lock);
-	entry = malloc(sizeof(struct arp_entry));
+	entry = malloc(sizeof(*entry));
+	BUG_ON(entry == NULL);
 	entry->ip = dst_ip;
 	entry->pending = m;
 	rcu_hlist_add_head(&arp_state.entries[index], &entry->link);
 	spin_unlock(&arp_state.entries_lock);
 
 	m = net_tx_alloc_mbuf();
-	eth_hdr = (struct eth_hdr*)mbuf_put(m, sizeof(struct eth_hdr));
+	eth_hdr = mbuf_put_hdr(m, *eth_hdr);
 	eth_hdr->dhost = (struct eth_addr)ETH_ADDR_BROADCAST;
 	eth_hdr->shost = arp_state.local_mac;
 	eth_hdr->type = hton16(ETHTYPE_ARP);
 
-	arp_hdr = (struct arp_hdr*)mbuf_put(m, sizeof(struct arp_hdr));
+	arp_hdr = mbuf_put_hdr(m, *arp_hdr);
 	arp_hdr->htype = hton16(ARP_HTYPE_ETHER);
 	arp_hdr->ptype = hton16(ETHTYPE_IP);
 	arp_hdr->hlen = sizeof(struct eth_addr);
 	arp_hdr->plen = sizeof(struct ip_addr);
 	arp_hdr->op = hton16(ARP_OP_REQUEST);
 
-	arp_hdr_ethip = (struct arp_hdr_ethip*)mbuf_put(m, sizeof(struct arp_hdr_ethip));
+	arp_hdr_ethip = mbuf_put_hdr(m, *arp_hdr_ethip);
 	arp_hdr_ethip->sender_mac = arp_state.local_mac;
 	arp_hdr_ethip->sender_ip.addr = hton32(arp_state.local_ip.addr);
 	arp_hdr_ethip->target_ip.addr = hton32(dst_ip.addr);

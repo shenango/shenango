@@ -292,8 +292,9 @@ struct net_cfg {
 	struct ip_addr		netmask;
 	struct ip_addr		gateway;
 	struct ip_addr		broadcast;
+	struct ip_addr		network;
 	struct eth_addr		local_mac;
-	uint8_t pad[10];
+	uint8_t pad[6];
 } __packed;
 
 extern struct net_cfg netcfg;

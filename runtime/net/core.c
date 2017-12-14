@@ -286,6 +286,8 @@ int net_init(void)
 	netcfg.local_ip.addr = TEMP_IP_ADDR;
 	netcfg.netmask.addr = TEMP_NETMASK;
 	netcfg.gateway.addr = TEMP_GATEWAY;
+	netcfg.network.addr = netcfg.local_ip.addr & netcfg.netmask.addr;
+	netcfg.broadcast.addr = netcfg.network.addr | ~netcfg.netmask.addr;
 
 	BUILD_ASSERT(sizeof(struct net_cfg) == CACHE_LINE_SIZE);
 
