@@ -13,6 +13,7 @@
 #include <net/ethernet.h>
 #include <net/arp.h>
 #include <net/ip.h>
+#include <net/udp.h>
 
 /**
  * dump_eth_pkt - prints an ethernet header
@@ -76,6 +77,36 @@ void dump_arp_pkt(int loglvl,
         logk(loglvl, "\ttarget IP:\t%d.%d.%d.%d\n",
              ((tip >> 24) & 0xff), ((tip >> 16) & 0xff),
              ((tip >> 8) & 0xff), (tip & 0xff));
+}
+
+void dump_udp_pkt(int loglvl, struct ip_addr *src, struct udp_hdr *udp_hdr,
+          void *data)
+{
+    char sip[IP_ADDR_STR_LEN];
+    char line[256];
+    uint16_t sport, dport, len;
+    size_t c, d;
+    int i, j, k;
+
+    ip_addr_to_str(src, sip);
+    sport = ntoh16(udp_hdr->src_port);
+    dport = ntoh16(udp_hdr->dst_port);
+    len = ntoh16(udp_hdr->len) - sizeof(*udp_hdr);
+
+    logk(loglvl, "UDP packet received from %s:%d on port %d", sip, sport,
+         dport);
+    for (c = 0; c < len;) {
+        d = snprintf(line, 256, "%016lx: ", c);
+        for (i = 0; i < 8 && c < len; i++) {
+            for (j = 0; j < 2 && c < len; j++, c++) {
+                k = *(((char *)data) + c);
+                d += snprintf(line + d, 256 - d, "%02x", k);
+            }
+            d += snprintf(line + d, 256 - d, " ");
+        }
+        line[d] = 0;
+        logk(loglvl, "%s", line);
+    }
 }
 
 /**
