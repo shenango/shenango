@@ -202,7 +202,7 @@ int net_tx_xmit_to_ip(struct mbuf *m, struct ip_addr dst_ip) {
 
 	arp_hdr_ethip = (struct arp_hdr_ethip*)mbuf_put(m, sizeof(struct arp_hdr_ethip));
 	arp_hdr_ethip->sender_mac = arp_state.local_mac;
-	arp_hdr_ethip->sender_ip = arp_state.local_ip;
-	arp_hdr_ethip->target_ip = dst_ip;
+	arp_hdr_ethip->sender_ip.addr = hton32(arp_state.local_ip.addr);
+	arp_hdr_ethip->target_ip.addr = hton32(dst_ip.addr);
 	return net_tx_xmit(m);
 }
