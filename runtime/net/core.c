@@ -82,6 +82,10 @@ static void net_rx_one(struct rx_net_hdr *hdr)
 		return;
 	}
 
+	/* Did HW checksum verification pass? */
+	if (hdr->csum_type != CHECKSUM_TYPE_UNNECESSARY)
+		goto drop;
+
 
 	/*
 	 * Link Layer Processing (OSI L2)
@@ -114,7 +118,7 @@ static void net_rx_one(struct rx_net_hdr *hdr)
 	if (unlikely(!iphdr))
 		goto drop;
 
-	/* TODO: Has the NIC validated IP checksum for us? */
+	/* The NIC has validated IP checksum for us. */
 
 	/* must be IPv4, no IP options, no IP fragments */
 	if (unlikely(iphdr->version != IPVERSION ||
@@ -122,7 +126,7 @@ static void net_rx_one(struct rx_net_hdr *hdr)
 		     (iphdr->off & IP_MF) > 0))
 		goto drop;
 
-	len = ntoh16(iphdr->len);
+	len = ntoh16(iphdr->len) - sizeof(*iphdr);
 
 	switch(iphdr->proto) {
 	case IPPROTO_ICMP:
