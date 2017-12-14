@@ -222,16 +222,17 @@ struct mbuf *net_tx_alloc_mbuf(void)
 int net_tx_xmit(struct mbuf *m)
 {
 
-	struct tx_net_hdr *net_hdr;
-	net_hdr = container_of((void *)m->data, struct tx_net_hdr, payload);
+	struct tx_net_hdr *hdr;
+	unsigned int len = mbuf_length(m);
 
-	net_hdr->completion_data = (unsigned long)m;
-	net_hdr->len = m->len;
-	net_hdr->olflags = 0; // TODO: fix this?
+	hdr = mbuf_push_hdr(m, *hdr);
+	hdr->completion_data = (unsigned long)m;
+	hdr->len = len;
+	hdr->olflags = m->txflags;
 
 	if (!lrpc_send(
 		&myk()->txpktq, TXPKT_NET_XMIT,
-		ptr_to_shmptr(&netcfg.tx_region, net_hdr, MBUF_DEFAULT_LEN)))
+		ptr_to_shmptr(&netcfg.tx_region, hdr, len + sizeof(*hdr))))
 		mbufq_push_tail(&myk()->txpktq_overflow, m);
 
 	return 0;
