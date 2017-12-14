@@ -378,7 +378,7 @@ static struct rte_mbuf *dpdk_prepend_tx_preamble(struct tx_net_hdr *net_hdr,
 	buf->buf_physaddr = p->page_paddrs[page_number] + PGOFF_2MB(buf) +
 			mbuf_size;
 	buf->buf_len = (uint16_t)buf_len;
-	buf->data_off = RTE_MIN(RTE_PKTMBUF_HEADROOM, (uint16_t)buf->buf_len) - 6;
+	buf->data_off = RTE_MIN(RTE_PKTMBUF_HEADROOM, (uint16_t)buf->buf_len);
 	buf->pool = egress_mbuf_pool;
 	buf->nb_segs = 1;
 	buf->port = 0xff;
