@@ -138,6 +138,9 @@ again:
 	/* mark the end of the RCU quiescent period */
 	rcu_schedule();
 
+	/* perform network functions */
+	net_schedule(l, 512);
+
 	/* first try the local runqueue */
 	if (l->rq_head != l->rq_tail)
 		goto done;

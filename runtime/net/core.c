@@ -13,9 +13,12 @@
 /* the maximum number of packets to process per scheduler invocation */
 #define MAX_BUDGET	512
 
+#define TEMP_IP_ADDR 3232235781 // 192.168.1.5
+#define TEMP_NETMASK 0xffffff00 // 255.255.255.0
+#define TEMP_GATEWAY 0
+
 /* important global state */
-struct eth_addr net_local_mac;
-struct ip_addr net_local_ip;
+struct net_cfg netcfg __aligned(CACHE_LINE_SIZE);
 
 /* mbuf allocation */
 static struct slab net_mbuf_slab;
@@ -26,9 +29,6 @@ static __thread struct tcache_perthread net_mbuf_pt;
 static struct mempool net_tx_buf_mp;
 static struct tcache *net_tx_buf_tcache;
 static __thread struct tcache_perthread net_tx_buf_pt;
-
-/* RX shared memory region */
-static struct shm_region net_rx_region;
 
 
 /*
@@ -57,6 +57,7 @@ static struct mbuf *net_rx_alloc_mbuf(struct rx_net_hdr *hdr)
 		return NULL;
 
 	mbuf_init(m, (unsigned char *)hdr->payload, hdr->len, 0);
+	m->len = hdr->len;
 	m->csum_type = hdr->csum_type;
 	m->csum = hdr->csum;
 	m->rss_hash = hdr->rss_hash;
@@ -97,8 +98,11 @@ static void net_rx_one(struct rx_net_hdr *hdr)
 	}
 
 	/* filter out requests we can't handle */
+	BUILD_ASSERT(sizeof(llhdr->dhost.addr) ==
+		     sizeof(netcfg.local_mac.addr));
 	if (unlikely(ntoh16(llhdr->type) != ETHTYPE_IP ||
-		     llhdr->dhost.addr != net_local_mac.addr))
+		     memcmp(llhdr->dhost.addr, netcfg.local_mac.addr,
+			    sizeof(llhdr->dhost.addr)) != 0))
 		goto drop;
 
 
@@ -157,7 +161,7 @@ static void net_rx_schedule(struct kthread *k, unsigned int budget)
 
 		switch (cmd) {
 		case RX_NET_RECV:
-			recv_reqs[recv_cnt++] = shmptr_to_ptr(&net_rx_region,
+			recv_reqs[recv_cnt++] = shmptr_to_ptr(&netcfg.rx_region,
 				(shmptr_t)payload, MBUF_DEFAULT_LEN);
 			BUG_ON(recv_reqs[recv_cnt - 1] == NULL);
 			break;
@@ -217,7 +221,20 @@ struct mbuf *net_tx_alloc_mbuf(void)
 
 int net_tx_xmit(struct mbuf *m)
 {
-	return -ENOSYS;
+
+	struct tx_net_hdr *net_hdr;
+	net_hdr = container_of((void *)m->data, struct tx_net_hdr, payload);
+
+	net_hdr->completion_data = (unsigned long)m;
+	net_hdr->len = m->len;
+	net_hdr->olflags = 0; // TODO: fix this?
+
+	if (!lrpc_send(
+		&myk()->txpktq, TXPKT_NET_XMIT,
+		ptr_to_shmptr(&netcfg.tx_region, net_hdr, MBUF_DEFAULT_LEN)))
+		mbufq_push_tail(&myk()->txpktq_overflow, m);
+
+	return 0;
 }
 
 void net_schedule(struct kthread *k, unsigned int budget)
@@ -234,11 +251,10 @@ int net_init_thread(void)
 
 /**
  * net_init - initializes the network stack
- * @cfg: configuration parameters for initialization
  *
  * Returns 0 if successful.
  */
-int net_init(struct net_cfg *cfg)
+int net_init(void)
 {
 	int ret;
 
@@ -252,7 +268,7 @@ int net_init(struct net_cfg *cfg)
 	if (!net_mbuf_tcache)
 		return -ENOMEM;
 
-	ret = mempool_create(&net_tx_buf_mp, cfg->tx_buf, cfg->tx_len,
+	ret = mempool_create(&net_tx_buf_mp, iok.tx_buf, iok.tx_len,
 			     PGSIZE_2MB, MBUF_DEFAULT_LEN);
 	if (ret)
 		return ret;
@@ -262,9 +278,15 @@ int net_init(struct net_cfg *cfg)
 	if (!net_tx_buf_tcache)
 		return -ENOMEM;
 
-	net_local_mac = cfg->local_mac;
-	net_local_ip = cfg->local_ip;
-	net_rx_region = cfg->rx_region;
+	netcfg.local_ip.addr = TEMP_IP_ADDR;
+	netcfg.netmask.addr = TEMP_NETMASK;
+	netcfg.gateway.addr = TEMP_GATEWAY;
+
+	BUILD_ASSERT(sizeof(struct net_cfg) == CACHE_LINE_SIZE);
+
+	ret = net_arp_init(netcfg.local_mac, netcfg.local_ip);
+	if (ret)
+		return ret;
 
 	return 0;
 }

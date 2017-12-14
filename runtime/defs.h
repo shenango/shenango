@@ -198,15 +198,17 @@ stack_init_to_rsp_with_buf(struct stack *s, void **buf, size_t buf_len,
  * ioqueues
  */
 
+DECLARE_SPINLOCK(qlock);
+extern unsigned int nrqs;
+
 struct iokernel_control {
 	int fd;
 	mem_key_t key;
-	struct shm_region r;
 	shmptr_t next_free;
 	unsigned int thread_count;
 	struct thread_spec threads[NCPU];
-	struct eth_addr mac;
-	struct shm_region ingress_region;
+	void *tx_buf;
+	size_t tx_len;
 };
 
 extern struct iokernel_control iok;
@@ -284,14 +286,17 @@ static inline void rcu_schedule(void)
  */
 
 struct net_cfg {
-	struct eth_addr		local_mac;
-	struct ip_addr		local_ip;
-	void			*tx_buf;
-	size_t			tx_len;
+	struct shm_region tx_region;
 	struct shm_region	rx_region;
-};
+	struct ip_addr		local_ip;
+	struct ip_addr		netmask;
+	struct ip_addr		gateway;
+	struct eth_addr		local_mac;
+	uint8_t pad[14];
+} __packed;
 
-extern int net_init(struct net_cfg *cfg);
+extern struct net_cfg netcfg;
+extern int net_init(void);
 extern int net_init_thread(void);
 extern void net_schedule(struct kthread *k, unsigned int budget);
 

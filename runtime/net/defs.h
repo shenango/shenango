@@ -18,14 +18,6 @@ extern int net_arp_init(struct eth_addr, struct ip_addr);
 
 
 /*
- * Global State
- */
-
-extern struct eth_addr net_local_mac;
-extern struct ip_addr net_local_ip;
-
-
-/*
  * RX Networking Functions
  */
 

@@ -40,6 +40,12 @@ static int runtime_init_thread(void)
 		return ret;
 	}
 
+	ret = net_init_thread();
+	if (ret) {
+		log_err("net_init_thread() failed, ret = %d", ret);
+		return ret;
+	}
+
 	ret = sched_init_thread();
 	if (ret) {
 		log_err("sched_init_thread() failed, ret = %d", ret);
@@ -98,6 +104,12 @@ int runtime_init(thread_fn_t main_fn, void *arg, unsigned int threads)
 	ret = ioqueues_init(threads);
 	if (ret) {
 		log_err("ioqueues_init() failed, ret = %d", ret);
+		return ret;
+	}
+
+	ret = net_init();
+	if (ret) {
+		log_err("net_init() failed, ret = %d", ret);
 		return ret;
 	}
 

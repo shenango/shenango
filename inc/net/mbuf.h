@@ -12,7 +12,8 @@
 #include <iokernel/queue.h>
 
 #define MBUF_DEFAULT_LEN	2048
-#define MBUF_DEFAULT_HEADROOM	128
+#define MBUF_DEFAULT_HEADROOM	(sizeof(struct tx_net_hdr) + TX_NET_HEADROOM)
+
 
 struct mbuf {
 	struct mbuf	*next;	   /* the next mbuf in a chain */

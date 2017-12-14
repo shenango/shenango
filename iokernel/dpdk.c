@@ -340,6 +340,7 @@ static struct rx_net_hdr *dpdk_prepend_rx_preamble(struct rte_mbuf *buf)
 			(uint16_t) sizeof(*net_hdr));
 	RTE_ASSERT(net_hdr != NULL);
 
+	net_hdr->completion_data = (unsigned long)buf;
 	net_hdr->len = rte_pktmbuf_pkt_len(buf) - sizeof(*net_hdr);
 	net_hdr->rss_hash = 0; /* unused for now */
 	masked_ol_flags = buf->ol_flags & PKT_RX_IP_CKSUM_MASK;
@@ -377,7 +378,7 @@ static struct rte_mbuf *dpdk_prepend_tx_preamble(struct tx_net_hdr *net_hdr,
 	buf->buf_physaddr = p->page_paddrs[page_number] + PGOFF_2MB(buf) +
 			mbuf_size;
 	buf->buf_len = (uint16_t)buf_len;
-	buf->data_off = RTE_MIN(RTE_PKTMBUF_HEADROOM, (uint16_t)buf->buf_len);
+	buf->data_off = RTE_MIN(RTE_PKTMBUF_HEADROOM, (uint16_t)buf->buf_len) - 6;
 	buf->pool = egress_mbuf_pool;
 	buf->nb_segs = 1;
 	buf->port = 0xff;
@@ -576,7 +577,6 @@ static void dpdk_handle_runtime_commands()
 	struct thread *t;
 	uint64_t cmd;
 	unsigned long payload;
-	struct rx_net_hdr *net_hdr;
 	struct rte_mbuf *buf;
 
 	/* Poll each thread in each runtime until all have been polled or we have
@@ -590,10 +590,7 @@ static void dpdk_handle_runtime_commands()
 			if (lrpc_recv(&t->txcmdq, &cmd, &payload)) {
 				if (cmd == TXCMD_NET_COMPLETE) {
 					/* get pointer to struct rte_mbuf, return to mempool */
-					net_hdr = shmptr_to_ptr(&p->region, payload,
-							sizeof(struct rx_net_hdr));
-					buf = dpdk_net_hdr_to_rte_mbuf(net_hdr, struct rx_net_hdr,
-							0);
+					buf = (struct rte_mbuf *)payload;
 					rte_pktmbuf_free(buf);
 				} else
 					log_err("dpdk: TXCMD %d not handled\n", cmd);

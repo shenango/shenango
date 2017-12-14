@@ -22,6 +22,9 @@
 #define PACKET_QUEUE_MCOUNT 8192
 #define COMMAND_QUEUE_MCOUNT 16
 
+DEFINE_SPINLOCK(qlock);
+unsigned int nrqs;
+
 struct iokernel_control iok;
 
 static int generate_random_mac(struct eth_addr *mac)
@@ -66,9 +69,12 @@ static size_t calculate_shm_space(unsigned int thread_count)
 
 	ret = align_up(ret, PGSIZE_2MB);
 
-	// Egress mbufs
-	q = ETH_MAX_LEN + sizeof(struct mbuf);
-	ret += q * PACKET_QUEUE_MCOUNT;
+	// Egress buffers
+	BUILD_ASSERT(ETH_MAX_LEN + sizeof(struct tx_net_hdr) +
+			 TX_NET_HEADROOM <=
+		     MBUF_DEFAULT_LEN);
+	BUILD_ASSERT(PGSIZE_2MB % MBUF_DEFAULT_LEN == 0);
+	ret += MBUF_DEFAULT_LEN * PACKET_QUEUE_MCOUNT;
 	ret = align_up(ret, PGSIZE_2MB);
 
 	return ret;
@@ -89,19 +95,19 @@ static void ioqueue_alloc(struct shm_region *r, struct queue_spec *q,
 static int control_setup(unsigned int threads)
 {
 	struct control_hdr *hdr;
-	struct shm_region *r = &iok.r, *ingress_region = &iok.ingress_region;
+	struct shm_region *r = &netcfg.tx_region, *ingress_region = &netcfg.rx_region;
 	char *ptr;
 	int i, ret;
 	size_t shm_len;
 
-	ret = generate_random_mac(&iok.mac);
+	ret = generate_random_mac(&netcfg.local_mac);
 	if (ret < 0)
 		return ret;
 
 	shm_len = calculate_shm_space(threads);
 
-	BUILD_ASSERT(sizeof(iok.mac) >= sizeof(mem_key_t));
-	iok.key = *(mem_key_t*)(&iok.mac);
+	BUILD_ASSERT(sizeof(netcfg.local_mac) >= sizeof(mem_key_t));
+	iok.key = *(mem_key_t*)(&netcfg.local_mac);
 
 	r->len = shm_len;
 	r->base = mem_map_shm(iok.key, NULL, shm_len, PGSIZE_2MB, true);
@@ -118,11 +124,13 @@ static int control_setup(unsigned int threads)
 		mem_unmap_shm(r->base);
 		return -1;
 	}
+	ingress_region->len = INGRESS_MBUF_SHM_SIZE;
 
+	iok.thread_count = threads;
 	hdr = r->base;
 	hdr->magic = CONTROL_HDR_MAGIC;
 	hdr->thread_count = threads;
-	hdr->mac = iok.mac;
+	hdr->mac = netcfg.local_mac;
 
 	hdr->sched_cfg.priority = SCHED_PRIORITY_NORMAL;
 	hdr->sched_cfg.max_cores = threads;
@@ -143,6 +151,13 @@ static int control_setup(unsigned int threads)
 	memcpy(hdr->threads, iok.threads,
 	       sizeof(struct thread_spec) * hdr->thread_count);
 
+	ptr = (char *)align_up((uintptr_t)ptr, PGSIZE_2MB);
+	iok.tx_buf = ptr;
+	iok.tx_len = MBUF_DEFAULT_LEN * PACKET_QUEUE_MCOUNT;
+
+	ptr_to_shmptr(r, ptr, iok.tx_len);
+	ptr += iok.tx_len;
+
 	iok.next_free = ptr_to_shmptr(r, ptr, 0);
 
 	return 0;
@@ -150,8 +165,8 @@ static int control_setup(unsigned int threads)
 
 static void control_cleanup(void)
 {
-	mem_unmap_shm(iok.r.base);
-	mem_unmap_shm(iok.ingress_region.base);
+	mem_unmap_shm(netcfg.tx_region.base);
+	mem_unmap_shm(netcfg.rx_region.base);
 }
 
 
@@ -184,8 +199,8 @@ static int register_iokernel(void)
 		goto fail;
 	}
 
-	ret = write(iok.fd, &iok.r.len, sizeof(iok.r.len));
-	if (ret != sizeof(iok.r.len)) {
+	ret = write(iok.fd, &netcfg.tx_region.len, sizeof(netcfg.tx_region.len));
+	if (ret != sizeof(netcfg.tx_region.len)) {
 		log_err("register_iokernel: write() failed [%s]", strerror(errno));
 		goto fail;
 	}
@@ -198,48 +213,60 @@ fail:
 
 }
 
-static int setup_egress_mbufs(void)
+static int ioqueue_attach_lrpc_in(struct shm_region *r, struct queue_spec *s,
+				  struct lrpc_chan_in *c)
 {
+	struct lrpc_msg *tbl;
+	uint32_t *wb;
 
-	void *buf;
-	size_t buf_size;
+	tbl = (struct lrpc_msg *)shmptr_to_ptr(
+	    r, s->msg_buf, sizeof(struct lrpc_msg) * s->msg_count);
+	if (!tbl)
+		return -EINVAL;
 
-	buf_size = (ETH_MAX_LEN + sizeof(struct mbuf)) * PACKET_QUEUE_MCOUNT;
-	buf_size = align_up(buf_size, PGSIZE_2MB);
+	wb = (uint32_t *)shmptr_to_ptr(r, s->wb, sizeof(*wb));
+	if (!wb)
+		return -EINVAL;
 
-	buf = shmptr_to_ptr(&iok.r, align_up(iok.next_free, PGSIZE_2MB), buf_size);
-	if (buf == NULL)
-		return -ENOMEM;
+	return lrpc_init_in(c, tbl, s->msg_count, wb);
+}
 
-#if 0
-	ret = mbuf_tcache_allocator_init(buf, buf_size, PACKET_QUEUE_MCOUNT,
-				   ETH_MAX_LEN, 0);
-	if (ret)
-		return ret;
-#endif
+static int ioqueue_attach_lprc_out(struct shm_region *r, struct queue_spec *s,
+				   struct lrpc_chan_out *c)
+{
+	struct lrpc_msg *tbl;
+	uint32_t *wb;
 
-	buf += buf_size;
-	iok.next_free = ptr_to_shmptr(&iok.r, buf, 0);
+	tbl = (struct lrpc_msg *)shmptr_to_ptr(
+	    r, s->msg_buf, sizeof(struct lrpc_msg) * s->msg_count);
+	if (!tbl)
+		return -EINVAL;
 
-	return 0;
+	wb = (uint32_t *)shmptr_to_ptr(r, s->wb, sizeof(*wb));
+	if (!wb)
+		return -EINVAL;
 
+	return lrpc_init_out(c, tbl, s->msg_count, wb);
 }
 
 int ioqueues_init_thread(void)
 {
-#if 0
 	int ret;
+	struct shm_region *r = &netcfg.tx_region;
 
-	// TODO: Attach queues?
+	spin_lock(&qlock);
+	assert(nrqs < iok.thread_count);
+	struct thread_spec *ts = &iok.threads[nrqs++];
+	spin_unlock(&qlock);
 
-	ret = mbuf_tcache_allocator_init_thread();
-	if (ret) {
-		log_err("ioqueues_init_thread: failed to setup tcache mbufs, "
-			"ret = %d",
-			ret);
-		return ret;
-	}
-#endif
+	ret = ioqueue_attach_lrpc_in(r, &ts->rxq, &myk()->rxq);
+	BUG_ON(ret);
+
+	ret = ioqueue_attach_lprc_out(r, &ts->txpktq, &myk()->txpktq);
+	BUG_ON(ret);
+
+	ret = ioqueue_attach_lprc_out(r, &ts->txcmdq, &myk()->txcmdq);
+	BUG_ON(ret);
 
 	return 0;
 }
@@ -247,6 +274,8 @@ int ioqueues_init_thread(void)
 int ioqueues_init(unsigned int threads)
 {
 	int ret;
+
+	spin_lock_init(&qlock);
 
 	ret = control_setup(threads);
 	if (ret) {
@@ -257,14 +286,6 @@ int ioqueues_init(unsigned int threads)
 	ret = register_iokernel();
 	if (ret) {
 		log_err("ioqueues_init: register_iokernel() failed, ret = %d", ret);
-		control_cleanup();
-		return ret;
-	}
-
-	ret = setup_egress_mbufs();
-	if (ret) {
-		log_err("ioqueues_init: setup_egress_mbufs() failed, ret = %d", ret);
-		close(iok.fd);
 		control_cleanup();
 		return ret;
 	}

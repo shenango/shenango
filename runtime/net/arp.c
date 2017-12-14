@@ -94,12 +94,11 @@ void net_rx_arp(struct mbuf *m) {
 	struct ip_addr sender_ip, target_ip;
 	struct eth_addr sender_mac;
 
-	eth_hdr = (struct eth_hdr*)mbuf_pull_or_null(m, sizeof(struct eth_hdr));
 	arp_hdr = (struct arp_hdr*)mbuf_pull_or_null(m, sizeof(struct arp_hdr));
 	arp_hdr_ethip = (struct arp_hdr_ethip*)
 		mbuf_pull_or_null(m, sizeof(struct arp_hdr_ethip));
 
-	if (!eth_hdr || !arp_hdr || !arp_hdr_ethip)
+	if (!arp_hdr || !arp_hdr_ethip)
 		goto out;
 
 	/* make sure the arp header is valid */
@@ -123,7 +122,7 @@ void net_rx_arp(struct mbuf *m) {
 
 	if (am_target && op == ARP_OP_REQUEST) {
 		log_debug("arp: responding to arp request "
-				  "from IP %d.%d.%d.%d\n",
+				  "from IP %d.%d.%d.%d",
 				  ((sender_ip.addr >> 24) & 0xff),
 				  ((sender_ip.addr >> 16) & 0xff),
 				  ((sender_ip.addr >> 8) & 0xff),
@@ -131,7 +130,7 @@ void net_rx_arp(struct mbuf *m) {
 
 		outgoing = net_tx_alloc_mbuf();
 		eth_hdr = (struct eth_hdr*)mbuf_put(outgoing, sizeof(struct eth_hdr));
-		eth_hdr->dhost = arp_hdr_ethip->target_mac;
+		eth_hdr->dhost = arp_hdr_ethip->sender_mac;
 		eth_hdr->shost = arp_state.local_mac;
 		eth_hdr->type = hton16(ETHTYPE_ARP);
 
@@ -143,10 +142,10 @@ void net_rx_arp(struct mbuf *m) {
 		arp_hdr->op = hton16(ARP_OP_REPLY);
 
 		arp_hdr_ethip = (struct arp_hdr_ethip*)mbuf_put(outgoing, sizeof(struct arp_hdr_ethip));
-		arp_hdr_ethip->target_ip.addr = hton16(sender_ip.addr);
+		arp_hdr_ethip->target_ip.addr = hton32(sender_ip.addr);
 		arp_hdr_ethip->target_mac = sender_mac;
-		arp_hdr_ethip->sender_ip = arp_state.local_ip;
-		arp_hdr_ethip->target_mac = arp_state.local_mac;
+		arp_hdr_ethip->sender_ip.addr = hton32(arp_state.local_ip.addr);
+		arp_hdr_ethip->sender_mac = arp_state.local_mac;
 
 		net_tx_xmit(outgoing);
 	}
