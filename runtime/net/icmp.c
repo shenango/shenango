@@ -8,11 +8,10 @@
 #include <base/log.h>
 #include <net/icmp.h>
 
-#include "../defs.h"
 #include "defs.h"
 
-void net_rx_icmp_echo(struct icmp_hdr *in_icmp_hdr, struct ip_hdr *in_iphdr,
-		uint16_t len)
+static void net_rx_icmp_echo(struct icmp_hdr *in_icmp_hdr,
+			     struct ip_hdr *in_iphdr, uint16_t len)
 {
 	struct mbuf *outgoing;
 	struct ip_hdr *out_iphdr;
@@ -22,9 +21,11 @@ void net_rx_icmp_echo(struct icmp_hdr *in_icmp_hdr, struct ip_hdr *in_iphdr,
 	log_debug("icmp: responding to icmp echo request");
 
 	outgoing = net_tx_alloc_mbuf();
+	if (unlikely(!outgoing))
+		return;
 
 	/* copy incoming IP hdr, swap addrs */
-	out_iphdr = (struct ip_hdr *) mbuf_put(outgoing,
+	out_iphdr = (struct ip_hdr *)mbuf_put(outgoing,
 			in_iphdr->header_len * sizeof(uint32_t));
 	memcpy(out_iphdr, in_iphdr, in_iphdr->header_len * sizeof(uint32_t));
 	out_iphdr->src_addr = in_iphdr->dst_addr;
@@ -32,7 +33,7 @@ void net_rx_icmp_echo(struct icmp_hdr *in_icmp_hdr, struct ip_hdr *in_iphdr,
 	out_iphdr->chksum = 0;
 
 	/* copy incoming ICMP hdr and data, set type and checksum */
-	out_icmp_hdr = (struct icmp_hdr *) mbuf_put(outgoing, len);
+	out_icmp_hdr = (struct icmp_hdr *)mbuf_put(outgoing, len);
 	memcpy(out_icmp_hdr, in_icmp_hdr, len);
 	out_icmp_hdr->type = ICMP_ECHOREPLY;
 	out_icmp_hdr->chksum = 0;
@@ -40,15 +41,19 @@ void net_rx_icmp_echo(struct icmp_hdr *in_icmp_hdr, struct ip_hdr *in_iphdr,
 
 	outgoing->txflags |= OLFLAG_IP_CHKSUM | OLFLAG_IPV4;
 	dst_ip_addr.addr = ntoh32(out_iphdr->dst_addr.addr);
-	net_tx_xmit_to_ip(outgoing, dst_ip_addr);
+
+	if (unlikely(net_tx_xmit_to_ip(outgoing, dst_ip_addr)))
+		mbuf_free(outgoing);
 }
 
 void net_rx_icmp(struct mbuf *m, struct ip_hdr *iphdr, uint16_t len)
 {
 	struct icmp_hdr *icmp_hdr;
 
-	icmp_hdr = (struct icmp_hdr *) mbuf_pull_or_null(m,
+	icmp_hdr = (struct icmp_hdr *)mbuf_pull_or_null(m,
 			sizeof(struct icmp_hdr));
+	if (unlikely(!icmp_hdr))
+		goto drop;
 
 	switch (icmp_hdr->type) {
 	case ICMP_ECHO:
@@ -59,5 +64,6 @@ void net_rx_icmp(struct mbuf *m, struct ip_hdr *iphdr, uint16_t len)
 		break;
 	}
 
+drop:
 	mbuf_free(m);
 }

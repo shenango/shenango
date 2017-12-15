@@ -6,13 +6,15 @@
 
 #include <base/lock.h>
 #include <base/log.h>
+#include <base/hash.h>
 #include <net/arp.h>
 #include <runtime/rculist.h>
 
 #include "defs.h"
 
-#define ARP_TABLE_CAPACITY 1024
-#define ARP_EXPIRATION (1000 * ONE_SECOND)
+#define ARP_SEED		0xD4812A53
+#define ARP_TABLE_CAPACITY	1024
+#define ARP_EXPIRATION		(1000 * ONE_SECOND)
 
 /*
  * A single entry in the ARP table. The ip field is valid only if pending is NULL.
@@ -28,17 +30,17 @@ struct arp_entry {
 struct arp_state {
 	spinlock_t            entries_lock;
 	struct rcu_hlist_head entries[ARP_TABLE_CAPACITY];
-	struct eth_addr       local_mac;
-	struct ip_addr        local_ip;
 };
 
 static struct arp_state arp_state;
 
-static int hash_ip(struct ip_addr ip) {
-	return ip.addr % ARP_TABLE_CAPACITY;
+static int hash_ip(struct ip_addr ip)
+{
+	return hash_crc32c_one(ARP_SEED, ip.addr) % ARP_TABLE_CAPACITY;
 }
 
-static void update_entry(struct ip_addr ip, struct eth_addr eth) {
+static void update_entry(struct ip_addr ip, struct eth_addr eth)
+{
 	int index;
 	struct arp_entry* entry;
 	struct rcu_hlist_node* node;
@@ -60,6 +62,7 @@ static void update_entry(struct ip_addr ip, struct eth_addr eth) {
 	}
 
 	entry = malloc(sizeof(struct arp_entry));
+	BUG_ON(!entry);
 	entry->ip = ip;
 	entry->eth = eth;
 	entry->pending = NULL;
@@ -72,19 +75,8 @@ static void update_entry(struct ip_addr ip, struct eth_addr eth) {
 		net_tx_xmit(pending);
 }
 
-int net_arp_init(struct eth_addr local_mac, struct ip_addr local_ip) {
-	spin_lock_init(&arp_state.entries_lock);
-	arp_state.local_mac = local_mac;
-	arp_state.local_ip = local_ip;
-
-	for(int i = 0; i < ARP_TABLE_CAPACITY; i++) {
-		rcu_hlist_init_head(&arp_state.entries[i]);
-	}
-
-	return 0;
-}
-
-void net_rx_arp(struct mbuf *m) {
+void net_rx_arp(struct mbuf *m)
+{
 	int op;
 	bool am_target;
 	struct mbuf* outgoing;
@@ -117,7 +109,7 @@ void net_rx_arp(struct mbuf *m) {
 	if (sender_mac.addr[0] & ETH_ADDR_GROUP)
 		goto out;
 
-	am_target = (arp_state.local_ip.addr == target_ip.addr);
+	am_target = (netcfg.local_ip.addr == target_ip.addr);
 	update_entry(sender_ip, sender_mac);
 
 	if (am_target && op == ARP_OP_REQUEST) {
@@ -131,7 +123,7 @@ void net_rx_arp(struct mbuf *m) {
 		outgoing = net_tx_alloc_mbuf();
 		eth_hdr = (struct eth_hdr*)mbuf_put(outgoing, sizeof(struct eth_hdr));
 		eth_hdr->dhost = arp_hdr_ethip->sender_mac;
-		eth_hdr->shost = arp_state.local_mac;
+		eth_hdr->shost = netcfg.local_mac;
 		eth_hdr->type = hton16(ETHTYPE_ARP);
 
 		arp_hdr = (struct arp_hdr*)mbuf_put(outgoing, sizeof(struct arp_hdr));
@@ -144,17 +136,19 @@ void net_rx_arp(struct mbuf *m) {
 		arp_hdr_ethip = (struct arp_hdr_ethip*)mbuf_put(outgoing, sizeof(struct arp_hdr_ethip));
 		arp_hdr_ethip->target_ip.addr = hton32(sender_ip.addr);
 		arp_hdr_ethip->target_mac = sender_mac;
-		arp_hdr_ethip->sender_ip.addr = hton32(arp_state.local_ip.addr);
-		arp_hdr_ethip->sender_mac = arp_state.local_mac;
+		arp_hdr_ethip->sender_ip.addr = hton32(netcfg.local_ip.addr);
+		arp_hdr_ethip->sender_mac = netcfg.local_mac;
 
-		net_tx_xmit(outgoing);
+		if (unlikely(net_tx_xmit(outgoing)))
+			mbuf_free(outgoing);
 	}
 
 out:
 	mbuf_free(m);
 }
 
-int net_tx_xmit_to_ip(struct mbuf *m, struct ip_addr dst_ip) {
+int net_tx_xmit_to_ip(struct mbuf *m, struct ip_addr dst_ip)
+{
 	int index;
 	struct arp_entry* entry;
 	struct rcu_hlist_node* node;
@@ -171,7 +165,7 @@ int net_tx_xmit_to_ip(struct mbuf *m, struct ip_addr dst_ip) {
 
 	index = hash_ip(dst_ip);
 	rcu_read_lock();
-	rcu_hlist_for_each(&arp_state.entries[index], node, true) {
+	rcu_hlist_for_each(&arp_state.entries[index], node, false) {
 		entry = rcu_hlist_entry(node, struct arp_entry, link);
 		if (entry->ip.addr == dst_ip.addr) {
 			if (entry->pending == NULL) {
@@ -180,25 +174,28 @@ int net_tx_xmit_to_ip(struct mbuf *m, struct ip_addr dst_ip) {
 				return net_tx_xmit(m);
 			} else {
 				rcu_read_unlock();
-				mbuf_free(m);
-				return -1;
+				return -EIO;
 			}
 		}
 	}
 	rcu_read_unlock();
 
-	spin_lock(&arp_state.entries_lock);
 	entry = malloc(sizeof(*entry));
 	BUG_ON(entry == NULL);
 	entry->ip = dst_ip;
 	entry->pending = m;
+
+	spin_lock(&arp_state.entries_lock);
 	rcu_hlist_add_head(&arp_state.entries[index], &entry->link);
 	spin_unlock(&arp_state.entries_lock);
 
 	m = net_tx_alloc_mbuf();
+	if (unlikely(!m))
+		return -ENOMEM;
+
 	eth_hdr = mbuf_put_hdr(m, *eth_hdr);
 	eth_hdr->dhost = (struct eth_addr)ETH_ADDR_BROADCAST;
-	eth_hdr->shost = arp_state.local_mac;
+	eth_hdr->shost = netcfg.local_mac;
 	eth_hdr->type = hton16(ETHTYPE_ARP);
 
 	arp_hdr = mbuf_put_hdr(m, *arp_hdr);
@@ -209,8 +206,20 @@ int net_tx_xmit_to_ip(struct mbuf *m, struct ip_addr dst_ip) {
 	arp_hdr->op = hton16(ARP_OP_REQUEST);
 
 	arp_hdr_ethip = mbuf_put_hdr(m, *arp_hdr_ethip);
-	arp_hdr_ethip->sender_mac = arp_state.local_mac;
-	arp_hdr_ethip->sender_ip.addr = hton32(arp_state.local_ip.addr);
+	arp_hdr_ethip->sender_mac = netcfg.local_mac;
+	arp_hdr_ethip->sender_ip.addr = hton32(netcfg.local_ip.addr);
 	arp_hdr_ethip->target_ip.addr = hton32(dst_ip.addr);
+
 	return net_tx_xmit(m);
+}
+
+int net_arp_init(void)
+{
+	spin_lock_init(&arp_state.entries_lock);
+
+	for (int i = 0; i < ARP_TABLE_CAPACITY; i++) {
+		rcu_hlist_init_head(&arp_state.entries[i]);
+	}
+
+	return 0;
 }

@@ -7,7 +7,6 @@
 #include <base/slab.h>
 #include <runtime/thread.h>
 
-#include "../defs.h"
 #include "defs.h"
 
 /* the maximum number of packets to process per scheduler invocation */
@@ -291,7 +290,7 @@ int net_init(void)
 
 	BUILD_ASSERT(sizeof(struct net_cfg) == CACHE_LINE_SIZE);
 
-	ret = net_arp_init(netcfg.local_mac, netcfg.local_ip);
+	ret = net_arp_init();
 	if (ret)
 		return ret;
 

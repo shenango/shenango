@@ -11,11 +11,12 @@
 
 #include "../defs.h"
 
+
 /*
  * Initialization
  */
 
-extern int net_arp_init(struct eth_addr, struct ip_addr);
+extern int net_arp_init(void);
 
 
 /*
