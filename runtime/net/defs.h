@@ -22,7 +22,7 @@ extern int net_arp_init(struct eth_addr, struct ip_addr);
  * RX Networking Functions
  */
 
-extern void net_rx_icmp(struct mbuf *m, struct ip_addr *src, uint16_t len);
+extern void net_rx_icmp(struct mbuf *m, struct ip_hdr *iphdr, uint16_t len);
 extern void net_rx_udp(struct mbuf *m, struct ip_addr *src, uint16_t len);
 extern void net_rx_arp(struct mbuf *m);
 

@@ -130,7 +130,7 @@ static void net_rx_one(struct rx_net_hdr *hdr)
 
 	switch(iphdr->proto) {
 	case IPPROTO_ICMP:
-		net_rx_icmp(m, &iphdr->src_addr, len);
+		net_rx_icmp(m, iphdr, len);
 		break;
 
 	case IPPROTO_UDP:

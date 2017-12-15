@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <stdint.h>
+
 /**
  * chksum_internet - performs an internet checksum on a buffer
  * @buf: the buffer
