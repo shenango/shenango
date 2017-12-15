@@ -260,10 +260,14 @@ static inline int dpdk_port_init(uint8_t port, struct rte_mempool *mbuf_pool)
 			return retval;
 	}
 
+	struct rte_eth_txconf rtetxc;
+	/* Enable TX offloading */
+	memset(&rtetxc, 0, sizeof(struct rte_eth_txconf));
+
 	/* Allocate and set up 1 TX queue per Ethernet port. */
 	for (q = 0; q < tx_rings; q++) {
 		retval = rte_eth_tx_queue_setup(port, q, nb_txd,
-				rte_eth_dev_socket_id(port), NULL);
+				rte_eth_dev_socket_id(port), &rtetxc);
 		if (retval < 0)
 			return retval;
 	}
