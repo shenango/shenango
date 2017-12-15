@@ -70,9 +70,8 @@ static size_t calculate_shm_space(unsigned int thread_count)
 	ret = align_up(ret, PGSIZE_2MB);
 
 	// Egress buffers
-	BUILD_ASSERT(ETH_MAX_LEN + sizeof(struct tx_net_hdr) +
-			 TX_NET_HEADROOM <=
-		     MBUF_DEFAULT_LEN);
+	BUILD_ASSERT(ETH_MAX_LEN + sizeof(struct tx_net_hdr) <=
+			MBUF_DEFAULT_LEN);
 	BUILD_ASSERT(PGSIZE_2MB % MBUF_DEFAULT_LEN == 0);
 	ret += MBUF_DEFAULT_LEN * PACKET_QUEUE_MCOUNT;
 	ret = align_up(ret, PGSIZE_2MB);

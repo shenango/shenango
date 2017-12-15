@@ -23,7 +23,7 @@ struct tx_net_hdr {
 	unsigned int olflags;	/* offload flags */
 	unsigned short pad;	/* because of 14 byte ethernet header */
 	char	     payload[];	/* packet data */
-};
+} __attribute__((__packed__));
 
 /* possible values for @csum_type above */
 enum {
@@ -51,9 +51,6 @@ enum {
 #define OLFLAG_TCP_CHKSUM	BIT(1)	/* enable TCP checksum generation */
 #define OLFLAG_IPV4		BIT(2)  /* indicates the packet is IPv4 */
 #define OLFLAG_IPV6		BIT(3)  /* indicates the packet is IPv6 */
-
-/* required headroom in front of tx_net_hdr, for use by the iokernel */
-#define TX_NET_HEADROOM	256
 
 /*
  * RX queues: IOKERNEL -> RUNTIMES

@@ -64,13 +64,6 @@
 #define CMD_BURST_SIZE 32
 #define MAC_TO_PROC_ENTRIES	128
 
-#define dpdk_net_hdr_to_rte_mbuf(net_hdr, hdr_type, priv_size) \
-	(struct rte_mbuf *) (((char *) net_hdr) + sizeof(hdr_type) - \
-	RTE_PKTMBUF_HEADROOM - priv_size - sizeof(struct rte_mbuf))
-#define dpdk_rte_mbuf_to_net_hdr(mbuf, hdr_type, priv_size) \
-	(hdr_type *) (((char *) mbuf) + sizeof(struct rte_mbuf) + priv_size + \
-			RTE_PKTMBUF_HEADROOM - sizeof(hdr_type))
-
 static const struct rte_eth_conf port_conf_default = {
 	.rxmode = {
 			.max_rx_pkt_len = ETHER_MAX_LEN,
@@ -90,6 +83,7 @@ static struct rte_hash *mac_to_proc;
  */
 struct egress_pktmbuf_priv {
 	struct thread *thread;
+	unsigned long completion_data;
 };
 
 static inline struct egress_pktmbuf_priv *egress_get_priv(struct rte_mbuf *buf)
@@ -185,12 +179,12 @@ fail:
 }
 
 /*
- * Create and initialize a dummy packet mbuf pool for handling completion
- * events.
+ * Create and initialize a packet mbuf pool for holding struct mbufs and
+ * handling completion events. Actual buffer memory is separate, in shared
+ * memory.
  */
 static struct rte_mempool *dpdk_pktmbuf_completion_pool_create(const char *name,
-		unsigned n, unsigned cache_size, uint16_t priv_size,
-		uint16_t data_room_size, int socket_id)
+		unsigned n, unsigned cache_size, uint16_t priv_size, int socket_id)
 {
 	struct rte_mempool *mp;
 	struct rte_pktmbuf_pool_private mbp_priv;
@@ -203,11 +197,8 @@ static struct rte_mempool *dpdk_pktmbuf_completion_pool_create(const char *name,
 		rte_errno = EINVAL;
 		return NULL;
 	}
-	assert(sizeof(struct rte_mbuf) + priv_size + RTE_PKTMBUF_HEADROOM -
-			sizeof(struct tx_net_hdr) <= TX_NET_HEADROOM);
-	elt_size = sizeof(struct rte_mbuf) + (unsigned)priv_size +
-		(unsigned)data_room_size;
-	mbp_priv.mbuf_data_room_size = data_room_size;
+	elt_size = sizeof(struct rte_mbuf) + (unsigned)priv_size;
+	mbp_priv.mbuf_data_room_size = 0;
 	mbp_priv.mbuf_priv_size = priv_size;
 
 	mp = rte_mempool_create_empty(name, n, elt_size, cache_size,
@@ -223,6 +214,15 @@ static struct rte_mempool *dpdk_pktmbuf_completion_pool_create(const char *name,
 		return NULL;
 	}
 	rte_pktmbuf_pool_init(mp, &mbp_priv);
+
+	ret = rte_mempool_populate_default(mp);
+	if (ret < 0) {
+		rte_mempool_free(mp);
+		rte_errno = -ret;
+		return NULL;
+	}
+
+	rte_mempool_obj_iter(mp, rte_pktmbuf_init, NULL);
 
 	return mp;
 }
@@ -358,42 +358,45 @@ static struct rx_net_hdr *dpdk_prepend_rx_preamble(struct rte_mbuf *buf)
 }
 
 /*
- * Prepend rte_mbuf fields to egress packets. Set the mempool of the buf to be
- * the dummy egress_mbuf_pool, which will handle completion events.
+ * Prepare rte_mbuf struct for transmission.
  */
-static struct rte_mbuf *dpdk_prepend_tx_preamble(struct tx_net_hdr *net_hdr,
-		struct proc *p, struct thread *thread)
+static void dpdk_prepare_tx_mbuf(struct rte_mbuf *buf,
+		struct tx_net_hdr *net_hdr, struct proc *p, struct thread *thread)
 {
-	struct rte_mbuf *buf;
-	uint32_t mbuf_size, buf_len, priv_size, page_number;
+	uint32_t page_number;
 	struct egress_pktmbuf_priv *priv_data;
 
-	priv_size = rte_pktmbuf_priv_size(egress_mbuf_pool);
-	buf = dpdk_net_hdr_to_rte_mbuf(net_hdr, struct tx_net_hdr, priv_size);
-
-	/* initialize the pktmbuf, based on rte_pktmbuf_init */
-	mbuf_size = sizeof(struct rte_mbuf) + priv_size;
-	buf_len = rte_pktmbuf_data_room_size(egress_mbuf_pool);
-
-	memset(buf, 0, mbuf_size);
-	buf->priv_size = priv_size;
-	buf->buf_addr = (char *)buf + mbuf_size;
-	page_number = PGN_2MB((uintptr_t) buf - (uintptr_t) p->region.base);
-	buf->buf_physaddr = p->page_paddrs[page_number] + PGOFF_2MB(buf) +
-			mbuf_size;
-	buf->buf_len = (uint16_t)buf_len;
-	buf->data_off = RTE_MIN(RTE_PKTMBUF_HEADROOM, (uint16_t)buf->buf_len);
-	buf->pool = egress_mbuf_pool;
-	buf->nb_segs = 1;
-	buf->port = 0xff;
+	/* initialize mbuf to point to net_hdr->payload */
+	buf->buf_addr = (char *) net_hdr->payload;
+	page_number = PGN_2MB((uintptr_t) buf->buf_addr -
+			(uintptr_t) p->region.base);
+	buf->buf_physaddr = p->page_paddrs[page_number] + PGOFF_2MB(buf->buf_addr);
+	buf->data_off = 0;
 	rte_mbuf_refcnt_set(buf, 1);
-	buf->next = NULL;
+
+	buf->buf_len = net_hdr->len;
+	buf->pkt_len = net_hdr->len;
+	buf->data_len = net_hdr->len;
+
+	buf->ol_flags = 0;
+	if (net_hdr->olflags != 0) {
+		if (net_hdr->olflags & OLFLAG_IP_CHKSUM)
+			buf->ol_flags |= PKT_TX_IP_CKSUM;
+		if (net_hdr->olflags & OLFLAG_TCP_CHKSUM)
+			buf->ol_flags |= PKT_TX_TCP_CKSUM;
+		if (net_hdr->olflags & OLFLAG_IPV4)
+			buf->ol_flags |= PKT_TX_IPV4;
+		if (net_hdr->olflags & OLFLAG_IPV6)
+			buf->ol_flags |= PKT_TX_IPV6;
+
+		buf->l2_len = ETHER_HDR_LEN;
+		buf->l3_len = sizeof(struct ipv4_hdr);
+	}
 
 	/* initialize the private data, used to send completion events */
 	priv_data = egress_get_priv(buf);
 	priv_data->thread = thread;
-
-	return buf;
+	priv_data->completion_data = net_hdr->completion_data;
 }
 
 /*
@@ -419,14 +422,16 @@ bool dpdk_send_completion(void *obj) {
 	struct rte_mbuf *buf;
 	struct egress_pktmbuf_priv *priv_data;
 	struct thread *t;
-	struct tx_net_hdr *net_hdr;
+
+	if (unlikely(nr_clients == 0))
+		return true;
+
+	/* TODO: verify that this proc is still registered */
 
 	buf = (struct rte_mbuf *) obj;
 	priv_data = egress_get_priv(buf);
 	t = priv_data->thread;
-	net_hdr = dpdk_rte_mbuf_to_net_hdr(buf, struct tx_net_hdr,
-			sizeof(struct egress_pktmbuf_priv));
-	if (!lrpc_send(&t->rxq, RX_NET_COMPLETE, net_hdr->completion_data)) {
+	if (!lrpc_send(&t->rxq, RX_NET_COMPLETE, priv_data->completion_data)) {
 		log_warn("dpdk: failed to enqueue completion event to runtime");
 		return false;
 	}
@@ -523,6 +528,7 @@ static void dpdk_tx_burst(uint8_t port)
 	uint64_t cmd;
 	unsigned long payload;
 	struct tx_net_hdr *net_hdr;
+	int ret;
 	struct rte_mbuf *buf;
 
 	/* Poll each thread in each runtime until all have been polled or we have
@@ -536,25 +542,15 @@ static void dpdk_tx_burst(uint8_t port)
 			if (lrpc_recv(&t->txpktq, &cmd, &payload)) {
 				net_hdr = shmptr_to_ptr(&p->region, payload,
 						sizeof(struct tx_net_hdr));
-				buf = dpdk_prepend_tx_preamble(net_hdr, p, t);
 
-				buf->pkt_len = net_hdr->len;
-				buf->data_len = net_hdr->len;
-				buf->ol_flags = 0;
-
-				if (net_hdr->olflags != 0) {
-					if (net_hdr->olflags & OLFLAG_IP_CHKSUM)
-						buf->ol_flags |= PKT_TX_IP_CKSUM;
-					if (net_hdr->olflags & OLFLAG_TCP_CHKSUM)
-						buf->ol_flags |= PKT_TX_TCP_CKSUM;
-					if (net_hdr->olflags & OLFLAG_IPV4)
-						buf->ol_flags |= PKT_TX_IPV4;
-					if (net_hdr->olflags & OLFLAG_IPV6)
-						buf->ol_flags |= PKT_TX_IPV6;
-
-					buf->l2_len = ETHER_HDR_LEN;
-					buf->l3_len = sizeof(struct ipv4_hdr);
+				ret = rte_mempool_get(egress_mbuf_pool, (void **) &buf);
+				if (ret < 0) {
+					/* TODO: send completion to free net_hdr's memory */
+					log_warn("dpdk: error getting mbuf from mempool");
+					goto done_polling;
 				}
+
+				dpdk_prepare_tx_mbuf(buf, net_hdr, p, t);
 
 				bufs[n_pkts++] = buf;
 
@@ -604,7 +600,7 @@ static void dpdk_handle_runtime_commands()
 					buf = (struct rte_mbuf *)payload;
 					rte_pktmbuf_free(buf);
 				} else
-					log_err("dpdk: TXCMD %d not handled\n", cmd);
+					log_err("dpdk: TXCMD %lu not handled", cmd);
 
 				n_cmds++;
 				if (n_cmds >= CMD_BURST_SIZE)
@@ -787,8 +783,7 @@ int dpdk_init(uint8_t port)
 	/* Create a new dummy mempool to handle completions for egress packets. */
 	egress_mbuf_pool = dpdk_pktmbuf_completion_pool_create("EGRESS_MBUF_POOL",
 			NUM_MBUFS * nb_ports, MBUF_CACHE_SIZE,
-			sizeof(struct egress_pktmbuf_priv), RTE_MBUF_DEFAULT_BUF_SIZE,
-			rte_socket_id());
+			sizeof(struct egress_pktmbuf_priv), rte_socket_id());
 
 	if (egress_mbuf_pool == NULL)
 		rte_exit(EXIT_FAILURE, "Cannot create egress mbuf pool\n");
