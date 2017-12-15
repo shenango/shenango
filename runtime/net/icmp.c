@@ -56,11 +56,8 @@ void net_rx_icmp(struct mbuf *m, struct ip_hdr *iphdr, uint16_t len)
 		break;
 	default:
 		log_err("icmp: type %d not yet supported", icmp_hdr->type);
-		goto drop;
+		break;
 	}
 
-	return;
-
-drop:
 	mbuf_free(m);
 }
