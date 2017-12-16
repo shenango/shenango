@@ -35,7 +35,6 @@
 
 #include <base/types.h>
 #include <base/compiler.h>
-#include <net/ip.h>
 
 /*
  * Interface Control Message Protocol Definitions.
@@ -66,7 +65,7 @@ struct icmp_pkt {
 	struct icmp_hdr hdr;
 	union {
 		uint8_t ih_pptr;		/* ICMP_PARAMPROB */
-		struct ip_addr ih_gwaddr;	/* ICMP_REDIRECT */
+		uint32_t ih_gwaddr;		/* ICMP_REDIRECT */
 		struct ih_idseq {
 			uint16_t	icd_id;	/* network format */
 			uint16_t	icd_seq; /* network format */
@@ -106,7 +105,7 @@ struct icmp_pkt {
 			uint32_t its_ttime;	/* Transmit */
 		} id_ts;
 		struct id_ip  {
-			struct ip_hdr idi_ip;
+			uint32_t idi_ip;
 			/* options and then 64 bits of data */
 		} id_ip;
 		struct icmp_ra_addr id_radv;

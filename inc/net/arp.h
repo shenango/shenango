@@ -26,9 +26,9 @@ struct arp_hdr {
 
 struct arp_hdr_ethip {
 	struct eth_addr	sender_mac;
-	struct ip_addr	sender_ip;
+	uint32_t	sender_ip;
 	struct eth_addr	target_mac;
-	struct ip_addr	target_ip;
+	uint32_t	target_ip;
 } __packed;
 
 #define ARP_HTYPE_ETHER		1	/* ethernet */

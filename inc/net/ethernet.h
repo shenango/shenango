@@ -25,6 +25,7 @@ struct eth_addr {
 #define ETH_ADDR_LOCAL_ADMIN	0x02 /* locally assigned */
 #define ETH_ADDR_GROUP		0x01 /* multicast or broadcast */
 #define ETH_ADDR_BROADCAST {.addr = {0xFF, 0XFF, 0XFF, 0XFF, 0XFF, 0XFF},}
+static const struct eth_addr eth_addr_broadcast = ETH_ADDR_BROADCAST;
 
 static inline uint64_t eth_addr_to_uint64(struct eth_addr *addr)
 {

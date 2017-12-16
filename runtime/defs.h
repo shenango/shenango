@@ -286,15 +286,15 @@ static inline void rcu_schedule(void)
  */
 
 struct net_cfg {
-	struct shm_region tx_region;
+	struct shm_region	tx_region;
 	struct shm_region	rx_region;
-	struct ip_addr		local_ip;
-	struct ip_addr		netmask;
-	struct ip_addr		gateway;
-	struct ip_addr		broadcast;
-	struct ip_addr		network;
-	struct eth_addr		local_mac;
-	uint8_t pad[6];
+	uint32_t		addr;
+	uint32_t		netmask;
+	uint32_t		gateway;
+	uint32_t		broadcast;
+	uint32_t		network;
+	struct eth_addr		mac;
+	uint8_t			pad[6];
 } __packed;
 
 extern struct net_cfg netcfg;

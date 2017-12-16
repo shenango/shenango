@@ -6,10 +6,10 @@
 
 #include <net/udp.h>
 
-void dump_udp_pkt(int loglvl, struct ip_addr *src, struct udp_hdr *udp_hdr,
-          void *data);
+void dump_udp_pkt(int loglvl, uint32_t saddr,
+		  struct udp_hdr *udp_hdr, void *data);
 
-void net_rx_udp(struct mbuf *m, struct ip_addr *src, uint16_t len)
+void net_rx_udp(struct mbuf *m, uint32_t saddr, uint16_t len)
 {
 	struct udp_hdr *hdr;
 
@@ -21,7 +21,7 @@ void net_rx_udp(struct mbuf *m, struct ip_addr *src, uint16_t len)
 		goto drop;
 
 
-	dump_udp_pkt(0, src, hdr, mbuf_data(m));
+	dump_udp_pkt(0, saddr, hdr, mbuf_data(m));
 
 	// return;
 

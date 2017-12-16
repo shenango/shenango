@@ -101,10 +101,9 @@ static void net_rx_one(struct rx_net_hdr *hdr)
 	}
 
 	/* filter out requests we can't handle */
-	BUILD_ASSERT(sizeof(llhdr->dhost.addr) ==
-		     sizeof(netcfg.local_mac.addr));
+	BUILD_ASSERT(sizeof(llhdr->dhost.addr) == sizeof(netcfg.mac.addr));
 	if (unlikely(ntoh16(llhdr->type) != ETHTYPE_IP ||
-		     memcmp(llhdr->dhost.addr, netcfg.local_mac.addr,
+		     memcmp(llhdr->dhost.addr, netcfg.mac.addr,
 			    sizeof(llhdr->dhost.addr)) != 0))
 		goto drop;
 
@@ -133,7 +132,7 @@ static void net_rx_one(struct rx_net_hdr *hdr)
 		break;
 
 	case IPPROTO_UDP:
-		net_rx_udp(m, &iphdr->src_addr, len);
+		net_rx_udp(m, ntoh32(iphdr->saddr), len);
 		break;
 
 	default:
@@ -164,9 +163,10 @@ static void net_rx_schedule(struct kthread *k, unsigned int budget)
 
 		switch (cmd) {
 		case RX_NET_RECV:
-			recv_reqs[recv_cnt++] = shmptr_to_ptr(&netcfg.rx_region,
+			recv_reqs[recv_cnt] = shmptr_to_ptr(&netcfg.rx_region,
 				(shmptr_t)payload, MBUF_DEFAULT_LEN);
-			BUG_ON(recv_reqs[recv_cnt - 1] == NULL);
+			BUG_ON(recv_reqs[recv_cnt] == NULL);
+			recv_cnt++;
 			break;
 
 		case RX_NET_COMPLETE:
@@ -193,12 +193,24 @@ static void net_rx_schedule(struct kthread *k, unsigned int budget)
  * TX Networking Functions
  */
 
+/**
+ * net_tx_release_mbuf - the default TX mbuf release handler
+ * @m: the mbuf to free
+ *
+ * Normally, this handler will get called automatically. If you override
+ * mbuf.release(), call this method manually.
+ */
 void net_tx_release_mbuf(struct mbuf *m)
 {
 	tcache_free(&net_tx_buf_pt, m->head);
 	tcache_free(&net_mbuf_pt, m);
 }
 
+/**
+ * net_tx_alloc_mbuf - allocates an mbuf for transmitting.
+ *
+ * Returns an mbuf, or NULL if out of memory.
+ */
 struct mbuf *net_tx_alloc_mbuf(void)
 {
 	struct mbuf *m;
@@ -222,6 +234,17 @@ struct mbuf *net_tx_alloc_mbuf(void)
 	return m;
 }
 
+/**
+ * net_tx_xmit - transmits a packet
+ * @m: the mbuf to transmit
+ *
+ * The ethernet frame must be included in the packet. The mbuf must have been
+ * allocated with net_tx_alloc_mbuf().
+ *
+ * Returns 0 if successful, otherwise fail. If the successful, the mbuf will
+ * be freed when the transmit completes. Otherwise, the mbuf still belongs to
+ * the caller.
+ */
 int net_tx_xmit(struct mbuf *m)
 {
 
@@ -233,8 +256,7 @@ int net_tx_xmit(struct mbuf *m)
 	hdr->len = len;
 	hdr->olflags = m->txflags;
 
-	if (!lrpc_send(
-		&myk()->txpktq, TXPKT_NET_XMIT,
+	if (!lrpc_send(&myk()->txpktq, TXPKT_NET_XMIT,
 		ptr_to_shmptr(&netcfg.tx_region, hdr, len + sizeof(*hdr))))
 		mbufq_push_tail(&myk()->txpktq_overflow, m);
 
@@ -246,6 +268,11 @@ void net_schedule(struct kthread *k, unsigned int budget)
 	net_rx_schedule(k, budget);
 }
 
+/**
+ * net_init_thread - initializes per-thread state for the network stack
+ *
+ * Returns 0 (can't fail).
+ */
 int net_init_thread(void)
 {
 	tcache_init_perthread(net_mbuf_tcache, &net_mbuf_pt);
@@ -282,11 +309,11 @@ int net_init(void)
 	if (!net_tx_buf_tcache)
 		return -ENOMEM;
 
-	netcfg.local_ip.addr = TEMP_IP_ADDR;
-	netcfg.netmask.addr = TEMP_NETMASK;
-	netcfg.gateway.addr = TEMP_GATEWAY;
-	netcfg.network.addr = netcfg.local_ip.addr & netcfg.netmask.addr;
-	netcfg.broadcast.addr = netcfg.network.addr | ~netcfg.netmask.addr;
+	netcfg.addr = TEMP_IP_ADDR;
+	netcfg.netmask = TEMP_NETMASK;
+	netcfg.gateway = TEMP_GATEWAY;
+	netcfg.network = netcfg.addr & netcfg.netmask;
+	netcfg.broadcast = netcfg.network | ~netcfg.netmask;
 
 	BUILD_ASSERT(sizeof(struct net_cfg) == CACHE_LINE_SIZE);
 

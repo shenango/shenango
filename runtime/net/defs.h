@@ -7,7 +7,6 @@
 #include <net/mbuf.h>
 #include <net/ethernet.h>
 #include <net/ip.h>
-#include <runtime/rculist.h>
 
 #include "../defs.h"
 
@@ -23,8 +22,8 @@ extern int net_arp_init(void);
  * RX Networking Functions
  */
 
-extern void net_rx_icmp(struct mbuf *m, struct ip_hdr *iphdr, uint16_t len);
-extern void net_rx_udp(struct mbuf *m, struct ip_addr *src, uint16_t len);
+extern void net_rx_icmp(struct mbuf *m, const struct ip_hdr *iphdr, uint16_t len);
+extern void net_rx_udp(struct mbuf *m, uint32_t saddr, uint16_t len);
 extern void net_rx_arp(struct mbuf *m);
 
 
@@ -34,5 +33,27 @@ extern void net_rx_arp(struct mbuf *m);
 
 extern struct mbuf *net_tx_alloc_mbuf(void);
 extern void net_tx_release_mbuf(struct mbuf *m);
-extern int net_tx_xmit(struct mbuf *m);
-extern int net_tx_xmit_to_ip(struct mbuf *m, struct ip_addr dst_ip);
+extern int net_tx_xmit(struct mbuf *m) __must_use_return;
+extern int net_tx_xmit_to_ip(struct mbuf *m, uint32_t daddr) __must_use_return;
+
+/**
+ * net_tx_xmit_or_free - transmits an mbuf, freeing it if the transmit fails
+ * @m: the mbuf to transmit
+ */
+static inline void net_tx_xmit_or_free(struct mbuf *m)
+{
+	if (unlikely(net_tx_xmit(m) != 0))
+		mbuf_free(m);
+}
+
+/**
+ * net_tx_xmit_to_ip_or_free - transmits an mbuf to an IP address, freeing it
+ * if the transmit fails
+ * @m: the mbuf to transmit
+ * @daddr: the destination IP address
+ */
+static inline void net_tx_xmit_to_ip_or_free(struct mbuf *m, uint32_t daddr)
+{
+	if (unlikely(net_tx_xmit_to_ip(m, daddr) != 0))
+		mbuf_free(m);
+}

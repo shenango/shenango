@@ -10,43 +10,41 @@
 
 #include "defs.h"
 
-static void net_rx_icmp_echo(struct icmp_hdr *in_icmp_hdr,
-			     struct ip_hdr *in_iphdr, uint16_t len)
+static void net_rx_icmp_echo(const struct icmp_hdr *in_icmp_hdr,
+			     const struct ip_hdr *in_iphdr, uint16_t len)
 {
-	struct mbuf *outgoing;
+	struct mbuf *m;
 	struct ip_hdr *out_iphdr;
 	struct icmp_hdr *out_icmp_hdr;
-	struct ip_addr dst_ip_addr;
+	uint32_t daddr;
 
 	log_debug("icmp: responding to icmp echo request");
 
-	outgoing = net_tx_alloc_mbuf();
-	if (unlikely(!outgoing))
+	m = net_tx_alloc_mbuf();
+	if (unlikely(!m))
 		return;
 
 	/* copy incoming IP hdr, swap addrs */
-	out_iphdr = (struct ip_hdr *)mbuf_put(outgoing,
+	out_iphdr = (struct ip_hdr *)mbuf_put(m,
 			in_iphdr->header_len * sizeof(uint32_t));
 	memcpy(out_iphdr, in_iphdr, in_iphdr->header_len * sizeof(uint32_t));
-	out_iphdr->src_addr = in_iphdr->dst_addr;
-	out_iphdr->dst_addr = in_iphdr->src_addr;
+	out_iphdr->saddr = in_iphdr->daddr;
+	out_iphdr->daddr = in_iphdr->saddr;
 	out_iphdr->chksum = 0;
 
 	/* copy incoming ICMP hdr and data, set type and checksum */
-	out_icmp_hdr = (struct icmp_hdr *)mbuf_put(outgoing, len);
+	out_icmp_hdr = (struct icmp_hdr *)mbuf_put(m, len);
 	memcpy(out_icmp_hdr, in_icmp_hdr, len);
 	out_icmp_hdr->type = ICMP_ECHOREPLY;
 	out_icmp_hdr->chksum = 0;
-	out_icmp_hdr->chksum = chksum_internet((char *) out_icmp_hdr, len);
+	out_icmp_hdr->chksum = chksum_internet((char *)out_icmp_hdr, len);
 
-	outgoing->txflags |= OLFLAG_IP_CHKSUM | OLFLAG_IPV4;
-	dst_ip_addr.addr = ntoh32(out_iphdr->dst_addr.addr);
-
-	if (unlikely(net_tx_xmit_to_ip(outgoing, dst_ip_addr)))
-		mbuf_free(outgoing);
+	m->txflags |= OLFLAG_IP_CHKSUM | OLFLAG_IPV4;
+	daddr = ntoh32(out_iphdr->daddr);
+	net_tx_xmit_to_ip_or_free(m, daddr);
 }
 
-void net_rx_icmp(struct mbuf *m, struct ip_hdr *iphdr, uint16_t len)
+void net_rx_icmp(struct mbuf *m, const struct ip_hdr *iphdr, uint16_t len)
 {
 	struct icmp_hdr *icmp_hdr;
 

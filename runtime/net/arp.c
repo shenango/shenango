@@ -20,26 +20,26 @@
  * A single entry in the ARP table. The ip field is valid only if pending is NULL.
  */
 struct arp_entry {
-	struct ip_addr        ip;
-	struct eth_addr       eth;
-	struct mbuf*          pending;
-	uint64_t              expiration;
-	struct rcu_hlist_node link;
+	uint32_t		ip;
+	struct eth_addr		eth;
+	struct mbuf		*pending;
+	uint64_t		expiration;
+	struct rcu_hlist_node	link;
 };
 
 struct arp_state {
-	spinlock_t            entries_lock;
-	struct rcu_hlist_head entries[ARP_TABLE_CAPACITY];
+	spinlock_t		entries_lock;
+	struct rcu_hlist_head	entries[ARP_TABLE_CAPACITY];
 };
 
 static struct arp_state arp_state;
 
-static int hash_ip(struct ip_addr ip)
+static inline int hash_ip(uint32_t ip)
 {
-	return hash_crc32c_one(ARP_SEED, ip.addr) % ARP_TABLE_CAPACITY;
+	return hash_crc32c_one(ARP_SEED, ip) % ARP_TABLE_CAPACITY;
 }
 
-static void update_entry(struct ip_addr ip, struct eth_addr eth)
+static void update_entry(uint32_t ip, struct eth_addr eth)
 {
 	int index;
 	struct arp_entry* entry;
@@ -48,9 +48,10 @@ static void update_entry(struct ip_addr ip, struct eth_addr eth)
 
 	index = hash_ip(ip);
 	spin_lock(&arp_state.entries_lock);
-	rcu_hlist_for_each(&arp_state.entries[index], node, true) {
+	rcu_hlist_for_each(&arp_state.entries[index], node,
+			   spin_lock_held(&arp_state.entries_lock)) {
 		entry = rcu_hlist_entry(node, struct arp_entry, link);
-		if(entry->eth.addr == eth.addr) {
+		if (entry->eth.addr == eth.addr) {
 			pending = entry->pending;
 			((struct eth_hdr*)pending->data)->dhost = entry->eth;
 
@@ -72,24 +73,52 @@ static void update_entry(struct ip_addr ip, struct eth_addr eth)
  out:
 	spin_unlock(&arp_state.entries_lock);
 	if(pending)
-		net_tx_xmit(pending);
+		net_tx_xmit_or_free(pending);
+}
+
+static void arp_send(uint16_t op, struct eth_addr dhost, uint32_t daddr)
+{
+	struct mbuf *m;
+	struct eth_hdr *eth_hdr;
+	struct arp_hdr *arp_hdr;
+	struct arp_hdr_ethip *arp_hdr_ethip;
+
+	m = net_tx_alloc_mbuf();
+	if (unlikely(!m))
+		return;
+
+	eth_hdr = mbuf_push_hdr(m, *eth_hdr);
+	eth_hdr->shost = netcfg.mac;
+	eth_hdr->dhost = dhost;
+	eth_hdr->type = hton16(ETHTYPE_ARP);
+
+	arp_hdr = mbuf_put_hdr(m, *arp_hdr);
+	arp_hdr->htype = hton16(ARP_HTYPE_ETHER);
+	arp_hdr->ptype = hton16(ETHTYPE_IP);
+	arp_hdr->hlen = sizeof(struct eth_addr);
+	arp_hdr->plen = sizeof(uint32_t);
+	arp_hdr->op = hton16(op);
+
+	arp_hdr_ethip = mbuf_put_hdr(m, *arp_hdr_ethip);
+	arp_hdr_ethip->sender_mac = netcfg.mac;
+	arp_hdr_ethip->sender_ip = hton32(netcfg.addr);
+	arp_hdr_ethip->target_mac = dhost;
+	arp_hdr_ethip->target_ip = hton32(daddr);
+
+	net_tx_xmit_or_free(m);
 }
 
 void net_rx_arp(struct mbuf *m)
 {
-	int op;
+	uint16_t op;
 	bool am_target;
-	struct mbuf* outgoing;
-	struct eth_hdr* eth_hdr;
-	struct arp_hdr* arp_hdr;
-	struct arp_hdr_ethip* arp_hdr_ethip;
-	struct ip_addr sender_ip, target_ip;
+	struct arp_hdr *arp_hdr;
+	struct arp_hdr_ethip *arp_hdr_ethip;
+	uint32_t sender_ip, target_ip;
 	struct eth_addr sender_mac;
 
-	arp_hdr = (struct arp_hdr*)mbuf_pull_or_null(m, sizeof(struct arp_hdr));
-	arp_hdr_ethip = (struct arp_hdr_ethip*)
-		mbuf_pull_or_null(m, sizeof(struct arp_hdr_ethip));
-
+	arp_hdr = mbuf_pull_hdr_or_null(m, *arp_hdr);
+	arp_hdr_ethip = mbuf_pull_hdr_or_null(m, *arp_hdr_ethip);
 	if (!arp_hdr || !arp_hdr_ethip)
 		goto out;
 
@@ -97,129 +126,99 @@ void net_rx_arp(struct mbuf *m)
 	if (ntoh16(arp_hdr->htype) != ARP_HTYPE_ETHER ||
 	    ntoh16(arp_hdr->ptype) != ETHTYPE_IP ||
 	    arp_hdr->hlen != sizeof(struct eth_addr) ||
-	    arp_hdr->plen != sizeof(struct ip_addr))
+	    arp_hdr->plen != sizeof(uint32_t))
 		goto out;
 
 	op = ntoh16(arp_hdr->op);
-	sender_ip.addr = ntoh32(arp_hdr_ethip->sender_ip.addr);
-	target_ip.addr = ntoh32(arp_hdr_ethip->target_ip.addr);
+	sender_ip = ntoh32(arp_hdr_ethip->sender_ip);
+	target_ip = ntoh32(arp_hdr_ethip->target_ip);
 	sender_mac = arp_hdr_ethip->sender_mac;
 
 	/* refuse ARP packets with multicast source MAC's */
 	if (sender_mac.addr[0] & ETH_ADDR_GROUP)
 		goto out;
 
-	am_target = (netcfg.local_ip.addr == target_ip.addr);
+	am_target = (netcfg.addr == target_ip);
 	update_entry(sender_ip, sender_mac);
 
 	if (am_target && op == ARP_OP_REQUEST) {
 		log_debug("arp: responding to arp request "
 				  "from IP %d.%d.%d.%d",
-				  ((sender_ip.addr >> 24) & 0xff),
-				  ((sender_ip.addr >> 16) & 0xff),
-				  ((sender_ip.addr >> 8) & 0xff),
-				  (sender_ip.addr & 0xff));
+				  ((sender_ip >> 24) & 0xff),
+				  ((sender_ip >> 16) & 0xff),
+				  ((sender_ip >> 8) & 0xff),
+				  (sender_ip & 0xff));
 
-		outgoing = net_tx_alloc_mbuf();
-		eth_hdr = (struct eth_hdr*)mbuf_put(outgoing, sizeof(struct eth_hdr));
-		eth_hdr->dhost = arp_hdr_ethip->sender_mac;
-		eth_hdr->shost = netcfg.local_mac;
-		eth_hdr->type = hton16(ETHTYPE_ARP);
-
-		arp_hdr = (struct arp_hdr*)mbuf_put(outgoing, sizeof(struct arp_hdr));
-		arp_hdr->htype = hton16(ARP_HTYPE_ETHER);
-		arp_hdr->ptype = hton16(ETHTYPE_IP);
-		arp_hdr->hlen = sizeof(struct eth_addr);
-		arp_hdr->plen = sizeof(struct ip_addr);
-		arp_hdr->op = hton16(ARP_OP_REPLY);
-
-		arp_hdr_ethip = (struct arp_hdr_ethip*)mbuf_put(outgoing, sizeof(struct arp_hdr_ethip));
-		arp_hdr_ethip->target_ip.addr = hton32(sender_ip.addr);
-		arp_hdr_ethip->target_mac = sender_mac;
-		arp_hdr_ethip->sender_ip.addr = hton32(netcfg.local_ip.addr);
-		arp_hdr_ethip->sender_mac = netcfg.local_mac;
-
-		if (unlikely(net_tx_xmit(outgoing)))
-			mbuf_free(outgoing);
+		arp_send(ARP_OP_REPLY, sender_mac, sender_ip);
 	}
 
 out:
 	mbuf_free(m);
 }
 
-int net_tx_xmit_to_ip(struct mbuf *m, struct ip_addr dst_ip)
+/**
+ * net_tx_xmit_to_ip - trasmits a packet an IP address
+ * @m: the mbuf to transmit
+ * @daddr: the destination IP address (in native byte order)
+ *
+ * The payload must start with the network (L3) header. The ethernet header
+ * will be prepended by this function.
+ *
+ * Returns 0 if successful, otherwise fail. If the successful, the mbuf will
+ * be freed when the transmit completes. Otherwise, the mbuf still belongs to
+ * the caller.
+ */
+int net_tx_xmit_to_ip(struct mbuf *m, uint32_t daddr)
 {
 	int index;
 	struct arp_entry* entry;
 	struct rcu_hlist_node* node;
-	struct eth_hdr* eth_hdr;
-	struct arp_hdr* arp_hdr;
-	struct arp_hdr_ethip* arp_hdr_ethip;
+	struct eth_hdr *eth_hdr;
 
 	eth_hdr = mbuf_push_hdr(m, *eth_hdr);
-	eth_hdr->shost = netcfg.local_mac;
+	eth_hdr->shost = netcfg.mac;
 	eth_hdr->type = hton16(ETHTYPE_IP);
 
-	if ((dst_ip.addr & netcfg.netmask.addr) != netcfg.network.addr)
-		dst_ip.addr = netcfg.gateway.addr;
+	if ((daddr & netcfg.netmask) != netcfg.network)
+		daddr = netcfg.gateway;
 
-	index = hash_ip(dst_ip);
+	index = hash_ip(daddr);
 	rcu_read_lock();
 	rcu_hlist_for_each(&arp_state.entries[index], node, false) {
 		entry = rcu_hlist_entry(node, struct arp_entry, link);
-		if (entry->ip.addr == dst_ip.addr) {
-			if (entry->pending == NULL) {
-				eth_hdr->dhost = entry->eth;
-				rcu_read_unlock();
-				return net_tx_xmit(m);
-			} else {
+		if (entry->ip == daddr) {
+			if (unlikely(entry->pending != NULL)) {
 				rcu_read_unlock();
 				return -EIO;
 			}
+
+			eth_hdr->dhost = entry->eth;
+			rcu_read_unlock();
+			return net_tx_xmit(m);
 		}
 	}
 	rcu_read_unlock();
 
 	entry = malloc(sizeof(*entry));
 	BUG_ON(entry == NULL);
-	entry->ip = dst_ip;
+	entry->ip = daddr;
 	entry->pending = m;
 
 	spin_lock(&arp_state.entries_lock);
 	rcu_hlist_add_head(&arp_state.entries[index], &entry->link);
 	spin_unlock(&arp_state.entries_lock);
 
-	m = net_tx_alloc_mbuf();
-	if (unlikely(!m))
-		return -ENOMEM;
-
-	eth_hdr = mbuf_put_hdr(m, *eth_hdr);
-	eth_hdr->dhost = (struct eth_addr)ETH_ADDR_BROADCAST;
-	eth_hdr->shost = netcfg.local_mac;
-	eth_hdr->type = hton16(ETHTYPE_ARP);
-
-	arp_hdr = mbuf_put_hdr(m, *arp_hdr);
-	arp_hdr->htype = hton16(ARP_HTYPE_ETHER);
-	arp_hdr->ptype = hton16(ETHTYPE_IP);
-	arp_hdr->hlen = sizeof(struct eth_addr);
-	arp_hdr->plen = sizeof(struct ip_addr);
-	arp_hdr->op = hton16(ARP_OP_REQUEST);
-
-	arp_hdr_ethip = mbuf_put_hdr(m, *arp_hdr_ethip);
-	arp_hdr_ethip->sender_mac = netcfg.local_mac;
-	arp_hdr_ethip->sender_ip.addr = hton32(netcfg.local_ip.addr);
-	arp_hdr_ethip->target_ip.addr = hton32(dst_ip.addr);
-
-	return net_tx_xmit(m);
+	arp_send(ARP_OP_REQUEST, eth_addr_broadcast, daddr);
+	return 0;
 }
 
 int net_arp_init(void)
 {
-	spin_lock_init(&arp_state.entries_lock);
+	int i;
 
-	for (int i = 0; i < ARP_TABLE_CAPACITY; i++) {
+	spin_lock_init(&arp_state.entries_lock);
+	for (i = 0; i < ARP_TABLE_CAPACITY; i++)
 		rcu_hlist_init_head(&arp_state.entries[i]);
-	}
 
 	return 0;
 }

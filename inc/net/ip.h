@@ -43,17 +43,13 @@
  */
 #define	IPVERSION	4
 
-struct ip_addr {
-        uint32_t addr;
-} __packed;
-
 #define MAKE_IP_ADDR(a, b, c, d)			\
 	(((uint32_t) a << 24) | ((uint32_t) b << 16) |	\
 	 ((uint32_t) c << 8) | (uint32_t) d)
 
 #define IP_ADDR_STR_LEN	16
 
-extern void ip_addr_to_str(struct ip_addr *addr, char *str);
+extern void ip_addr_to_str(uint32_t addr, char *str);
 
 /*
  * Structure of an internet header, naked of options.
@@ -78,8 +74,8 @@ struct ip_hdr {
 	uint8_t ttl;			/* time to live */
 	uint8_t proto;			/* protocol */
 	uint16_t chksum;		/* checksum */
-	struct	ip_addr src_addr;	/* source address */
-	struct  ip_addr dst_addr;	/* dest address */
+	uint32_t saddr;			/* source address */
+	uint32_t daddr;			/* dest address */
 } __packed __aligned(4);
 
 #define	IP_MAXPACKET	65535		/* maximum packet size */
@@ -190,7 +186,7 @@ struct	ip_timestamp {
 	union  {
 		uint32_t time[1];	/* network format */
 		struct {
-			struct ip_addr addr;
+			uint32_t addr;
 			uint32_t ipt_time;	/* network format */
 		} ta[1];
 	} u;
@@ -225,8 +221,8 @@ struct	ip_timestamp {
  * For stronger checksums, the real thing must be used.
  */
 struct ip_pseudo {
-	struct	ip_addr	src;		/* source internet address */
-	struct	ip_addr	dst;		/* destination internet address */
+	uint32_t	saddr;		/* source internet address */
+	uint32_t	daddr;		/* destination internet address */
 	uint8_t		pad;		/* pad, must be zero */
 	uint8_t		proto;		/* protocol */
 	uint16_t	len;		/* protocol length */

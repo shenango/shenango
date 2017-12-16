@@ -99,14 +99,14 @@ static int control_setup(unsigned int threads)
 	int i, ret;
 	size_t shm_len;
 
-	ret = generate_random_mac(&netcfg.local_mac);
+	ret = generate_random_mac(&netcfg.mac);
 	if (ret < 0)
 		return ret;
 
 	shm_len = calculate_shm_space(threads);
 
-	BUILD_ASSERT(sizeof(netcfg.local_mac) >= sizeof(mem_key_t));
-	iok.key = *(mem_key_t*)(&netcfg.local_mac);
+	BUILD_ASSERT(sizeof(netcfg.mac) >= sizeof(mem_key_t));
+	iok.key = *(mem_key_t*)(&netcfg.mac);
 
 	r->len = shm_len;
 	r->base = mem_map_shm(iok.key, NULL, shm_len, PGSIZE_2MB, true);
@@ -129,7 +129,7 @@ static int control_setup(unsigned int threads)
 	hdr = r->base;
 	hdr->magic = CONTROL_HDR_MAGIC;
 	hdr->thread_count = threads;
-	hdr->mac = netcfg.local_mac;
+	hdr->mac = netcfg.mac;
 
 	hdr->sched_cfg.priority = SCHED_PRIORITY_NORMAL;
 	hdr->sched_cfg.max_cores = threads;

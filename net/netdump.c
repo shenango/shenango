@@ -53,8 +53,8 @@ void dump_arp_pkt(int loglvl,
         uint32_t sip, tip;
 
 	op = ntoh16(arphdr->op);
-        sip = ntoh32(ethip->sender_ip.addr);
-        tip = ntoh32(ethip->target_ip.addr);
+        sip = ntoh32(ethip->sender_ip);
+        tip = ntoh32(ethip->target_ip);
 
         logk(loglvl, "ARP packet dump: op %s\n",
              (op == ARP_OP_REQUEST) ? "request" : "response");
@@ -79,7 +79,7 @@ void dump_arp_pkt(int loglvl,
              ((tip >> 8) & 0xff), (tip & 0xff));
 }
 
-void dump_udp_pkt(int loglvl, struct ip_addr *src, struct udp_hdr *udp_hdr,
+void dump_udp_pkt(int loglvl, uint32_t saddr, struct udp_hdr *udp_hdr,
           void *data)
 {
     char sip[IP_ADDR_STR_LEN];
@@ -88,7 +88,7 @@ void dump_udp_pkt(int loglvl, struct ip_addr *src, struct udp_hdr *udp_hdr,
     size_t c, d;
     int i, j, k;
 
-    ip_addr_to_str(src, sip);
+    ip_addr_to_str(saddr, sip);
     sport = ntoh16(udp_hdr->src_port);
     dport = ntoh16(udp_hdr->dst_port);
     len = ntoh16(udp_hdr->len) - sizeof(*udp_hdr);
@@ -116,11 +116,11 @@ void dump_udp_pkt(int loglvl, struct ip_addr *src, struct udp_hdr *udp_hdr,
  *
  * The buffer must be IP_ADDR_STR_LEN in size.
  */
-void ip_addr_to_str(struct ip_addr *addr, char *str)
+void ip_addr_to_str(uint32_t addr, char *str)
 {
 	snprintf(str, IP_ADDR_STR_LEN, "%d.%d.%d.%d",
-		 ((addr->addr >> 24) & 0xff),
-                 ((addr->addr >> 16) & 0xff),
-                 ((addr->addr >> 8) & 0xff),
-                 (addr->addr & 0xff));
+		 ((addr >> 24) & 0xff),
+                 ((addr >> 16) & 0xff),
+                 ((addr >> 8) & 0xff),
+                 (addr & 0xff));
 }
