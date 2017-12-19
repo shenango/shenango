@@ -17,6 +17,7 @@
 
 extern int net_arp_init(void);
 extern int usocket_init(void);
+extern int usocket_init_thread(void);
 
 
 /*

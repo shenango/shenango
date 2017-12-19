@@ -264,7 +264,7 @@ int usocket_create(void)
 
 	spin_lock(&usocket_lock);
 
-	for (i = 0; i < NUSOCKET && !usockets[i]; i++) ;
+	for (i = 0; i < NUSOCKET && usockets[i]; i++) ;
 
 	if (i == NUSOCKET) {
 		spin_unlock(&usocket_lock);

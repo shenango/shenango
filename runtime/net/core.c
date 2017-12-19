@@ -132,7 +132,7 @@ static void net_rx_one(struct rx_net_hdr *hdr)
 		break;
 
 	case IPPROTO_UDP:
-		net_rx_udp_dump(m, ntoh32(iphdr->saddr), len);
+		net_rx_udp_usocket(m, iphdr, len);
 		break;
 
 	default:
@@ -275,8 +275,15 @@ void net_schedule(struct kthread *k, unsigned int budget)
  */
 int net_init_thread(void)
 {
+	int ret;
+
 	tcache_init_perthread(net_mbuf_tcache, &net_mbuf_pt);
 	tcache_init_perthread(net_tx_buf_tcache, &net_tx_buf_pt);
+
+	ret = usocket_init_thread();
+	if (ret)
+		return ret;
+
 	return 0;
 }
 
@@ -318,6 +325,10 @@ int net_init(void)
 	BUILD_ASSERT(sizeof(struct net_cfg) == CACHE_LINE_SIZE);
 
 	ret = net_arp_init();
+	if (ret)
+		return ret;
+
+	ret = usocket_init();
 	if (ret)
 		return ret;
 
