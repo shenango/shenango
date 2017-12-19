@@ -72,7 +72,7 @@ void net_rx_udp_usocket(struct mbuf *m, const struct ip_hdr *iphdr, uint16_t len
 	int idx;
 	uint16_t lport, rport;
 	uint32_t laddr, raddr;
-	struct msg *msg;
+	struct msg msg, *msgpt;
 	struct rcu_hlist_node *node;
 	struct udp_hdr *hdr;
 	struct usocket *usock;
@@ -103,21 +103,22 @@ void net_rx_udp_usocket(struct mbuf *m, const struct ip_hdr *iphdr, uint16_t len
 		if (usock->raddr.port && usock->raddr.port != rport)
 			continue;
 
-		msg = tcache_alloc(&msg_pt);
-		if (unlikely(!msg))
-			goto unlock;
 
-		msg->m = m;
-		msg->usock = usock;
-		msg->raddr.ip = raddr;
-		msg->raddr.port = rport;
+		msg.m = m;
+		msg.usock = usock;
+		msg.raddr.ip = raddr;
+		msg.raddr.port = rport;
 
 		if (usock->state == STATE_BOUND_QUEUE) {
 			// TODO: is this behavior desired?
-			if (unlikely(chan_send(usock->pktq, msg, false)))
+			if (unlikely(chan_send(usock->pktq, &msg, false)))
 				goto unlock;
 		} else {
-			if (unlikely(thread_spawn(packet_handler, msg)))
+			msgpt = tcache_alloc(&msg_pt);
+			if (unlikely(!msgpt))
+				goto unlock;
+			*msgpt = msg;
+			if (unlikely(thread_spawn(packet_handler, msgpt)))
 				goto unlock;
 		}
 
@@ -137,8 +138,7 @@ drop:
 struct mbuf *usocket_recv(int desc, struct addr *raddr, bool block)
 {
 	int ret;
-	struct mbuf *m;
-	struct msg *msg;
+	struct msg msg;
 
 	if (unlikely(!valid_desc(desc) || usockets[desc]->state != STATE_BOUND_QUEUE))
 		return NULL;
@@ -148,12 +148,9 @@ struct mbuf *usocket_recv(int desc, struct addr *raddr, bool block)
 		return NULL;
 
 	if (raddr)
-		*raddr = msg->raddr;
+		*raddr = msg.raddr;
 
-	m = msg->m;
-	tcache_free(&msg_pt, msg);
-
-	return m;
+	return msg.m;
 }
 
 int usocket_send(int desc, struct mbuf *m, struct addr raddr)
