@@ -117,7 +117,8 @@ void net_rx_udp_usocket(struct mbuf *m, const struct ip_hdr *iphdr, uint16_t len
 			if (unlikely(chan_send(usock->pktq, msg, false)))
 				goto unlock;
 		} else {
-			thread_spawn(packet_handler, msg);
+			if (unlikely(thread_spawn(packet_handler, msg)))
+				goto unlock;
 		}
 
 		rcu_read_unlock();
@@ -203,30 +204,48 @@ int usocket_connect(int desc, struct addr raddr)
 	return 0;
 }
 
+int usocket_bind_handler(int desc, struct addr laddr, handler_fn_t fn)
+{
+	int idx;
 
-int usocket_bind(int desc, struct addr laddr, handler_fn_t fn)
+	if (unlikely(!valid_desc(desc) || usockets[desc]->state != STATE_INIT || !laddr.port))
+		return -EINVAL;
+
+	// TODO: validate laddr
+	usockets[desc]->laddr = laddr;
+	memset(&usockets[desc]->raddr, 0, sizeof(usockets[desc]->raddr));
+
+	usockets[desc]->state = STATE_BOUND_CALLBACK;
+	usockets[desc]->handler = fn;
+	idx = hash_port(laddr.port);
+
+	spin_lock(&usocket_lock);
+	rcu_hlist_add_head(&socketmap[idx], &usockets[desc]->link);
+	spin_unlock(&usocket_lock);
+
+	return 0;
+}
+
+int usocket_bind_queue(int desc, struct addr laddr)
 {
 	int ret, idx;
 
 	if (unlikely(!valid_desc(desc) || usockets[desc]->state != STATE_INIT || !laddr.port))
 		return -EINVAL;
 
+	// TODO: validate laddr
 	usockets[desc]->laddr = laddr;
 	memset(&usockets[desc]->raddr, 0, sizeof(usockets[desc]->raddr));
 
-	// TODO: validate laddr
-	if (fn) {
-		usockets[desc]->state = STATE_BOUND_CALLBACK;
-		usockets[desc]->handler = fn;
-	} else {
-		usockets[desc]->state = STATE_BOUND_QUEUE;
-		usockets[desc]->pktq = smalloc(sizeof(chan_t));
-		if (unlikely(!usockets[desc]->pktq))
-			return -ENOMEM;
-		ret = chan_create(usockets[desc]->pktq, sizeof(struct mbuf *),
-				  PKT_QUEUE_CAPACITY);
-		if (ret)
-			return ret;
+	usockets[desc]->state = STATE_BOUND_QUEUE;
+	usockets[desc]->pktq = smalloc(sizeof(chan_t));
+	if (unlikely(!usockets[desc]->pktq))
+		return -ENOMEM;
+	ret = chan_create(usockets[desc]->pktq, sizeof(struct mbuf *),
+			  PKT_QUEUE_CAPACITY);
+	if (ret) {
+		sfree(usockets[desc]->pktq);
+		return ret;
 	}
 
 	idx = hash_port(laddr.port);
