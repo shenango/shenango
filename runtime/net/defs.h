@@ -16,6 +16,7 @@
  */
 
 extern int net_arp_init(void);
+extern int usocket_init(void);
 
 
 /*
@@ -23,8 +24,10 @@ extern int net_arp_init(void);
  */
 
 extern void net_rx_icmp(struct mbuf *m, const struct ip_hdr *iphdr, uint16_t len);
-extern void net_rx_udp(struct mbuf *m, uint32_t saddr, uint16_t len);
+extern void net_rx_udp_dump(struct mbuf *m, uint32_t saddr, uint16_t len);
 extern void net_rx_arp(struct mbuf *m);
+
+extern void net_rx_udp_usocket(struct mbuf *m, const struct ip_hdr *iphdr, uint16_t len);
 
 
 /*

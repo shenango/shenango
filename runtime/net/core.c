@@ -132,7 +132,7 @@ static void net_rx_one(struct rx_net_hdr *hdr)
 		break;
 
 	case IPPROTO_UDP:
-		net_rx_udp(m, ntoh32(iphdr->saddr), len);
+		net_rx_udp_dump(m, ntoh32(iphdr->saddr), len);
 		break;
 
 	default:
