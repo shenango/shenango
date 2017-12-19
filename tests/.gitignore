@@ -5,6 +5,7 @@ test_base_thread
 test_hello
 test_many_threads
 test_multiple_runtimes
+test_ping
 test_runtime_threads
 test_runtime_channels
 test_runtime_mutexes

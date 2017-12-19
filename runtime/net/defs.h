@@ -39,6 +39,9 @@ extern struct mbuf *net_tx_alloc_mbuf(void);
 extern void net_tx_release_mbuf(struct mbuf *m);
 extern int net_tx_xmit(struct mbuf *m) __must_use_return;
 extern int net_tx_xmit_to_ip(struct mbuf *m, uint32_t daddr) __must_use_return;
+extern int net_tx_ip(struct mbuf *m, uint8_t proto, uint32_t daddr) __must_use_return;
+extern int net_tx_icmp(struct mbuf *m, uint8_t type, uint8_t code,
+		uint32_t daddr, uint32_t header_data) __must_use_return;
 
 /**
  * net_tx_xmit_or_free - transmits an mbuf, freeing it if the transmit fails
