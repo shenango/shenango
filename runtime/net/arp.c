@@ -170,7 +170,7 @@ out:
  */
 int net_tx_xmit_to_ip(struct mbuf *m, uint32_t daddr)
 {
-	int index;
+	int index, ret;
 	struct arp_entry* entry;
 	struct rcu_hlist_node* node;
 	struct eth_hdr *eth_hdr;
@@ -189,12 +189,16 @@ int net_tx_xmit_to_ip(struct mbuf *m, uint32_t daddr)
 		if (entry->ip == daddr) {
 			if (unlikely(entry->pending != NULL)) {
 				rcu_read_unlock();
+				mbuf_pull_hdr(m, *eth_hdr);
 				return -EIO;
 			}
 
 			eth_hdr->dhost = entry->eth;
 			rcu_read_unlock();
-			return net_tx_xmit(m);
+			ret = net_tx_xmit(m);
+			if (unlikely(ret))
+				mbuf_pull_hdr(m, *eth_hdr);
+			return ret;
 		}
 	}
 	rcu_read_unlock();

@@ -43,7 +43,7 @@ static void main_handler(void *arg)
 
 	usocket_bind_handler(fd, laddr, &responder);
 
-	while (1) {}
+	while (1) thread_yield();
 
 
 }

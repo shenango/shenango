@@ -129,11 +129,11 @@ static void net_rx_one(struct rx_net_hdr *hdr)
 	switch(iphdr->proto) {
 	case IPPROTO_ICMP:
 		net_rx_icmp(m, iphdr, len);
-		break;
+		return;
 
 	case IPPROTO_UDP:
 		net_rx_udp_usocket(m, iphdr, len);
-		break;
+		return;
 
 	default:
 		goto drop;

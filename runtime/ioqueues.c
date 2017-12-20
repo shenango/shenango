@@ -20,7 +20,7 @@
 #include "defs.h"
 
 #define PACKET_QUEUE_MCOUNT 8192
-#define COMMAND_QUEUE_MCOUNT 16
+#define COMMAND_QUEUE_MCOUNT 8192
 
 DEFINE_SPINLOCK(qlock);
 unsigned int nrqs;

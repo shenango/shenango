@@ -5,6 +5,7 @@
 #include "defs.h"
 
 #include <base/hash.h>
+#include <base/log.h>
 #include <base/smalloc.h>
 #include <base/slab.h>
 #include <base/tcache.h>
@@ -111,8 +112,10 @@ void net_rx_udp_usocket(struct mbuf *m, const struct ip_hdr *iphdr, uint16_t len
 
 		if (usock->state == STATE_BOUND_QUEUE) {
 			// TODO: is this behavior desired?
-			if (unlikely(chan_send(usock->pktq, &msg, false)))
+			if (unlikely(chan_send(usock->pktq, &msg, false))) {
+				log_warn_once("UDP socket queue is full - packets dropped");
 				goto unlock;
+			}
 		} else {
 			msgpt = tcache_alloc(&msg_pt);
 			if (unlikely(!msgpt))
@@ -155,8 +158,8 @@ struct mbuf *usocket_recv(int desc, struct addr *raddr, bool block)
 
 int usocket_send(int desc, struct mbuf *m, struct addr raddr)
 {
+	int ret;
 	struct udp_hdr *udphdr;
-	struct ip_hdr *iphdr;
 
 	if (unlikely(!valid_desc(desc) || usockets[desc]->state == STATE_INIT))
 		return -EINVAL;
@@ -169,23 +172,11 @@ int usocket_send(int desc, struct mbuf *m, struct addr raddr)
 	udphdr->len = hton16(len);
 	udphdr->chksum = 0;
 
-	iphdr = mbuf_push_hdr(m, *iphdr);
-	iphdr->version = IPVERSION;
-	BUILD_ASSERT(sizeof(*iphdr) % 4 == 0);
-	iphdr->header_len = sizeof(*iphdr) / 4;
-	iphdr->tos = 0;
-	iphdr->len = hton16(len + sizeof(*iphdr));
-	iphdr->id = 0;
-	iphdr->off = 0;
-	iphdr->ttl = 64;
-	iphdr->proto = IPPROTO_UDP;
-	iphdr->chksum = 0;
-	iphdr->saddr = hton32(netcfg.addr);
-	iphdr->daddr = hton32(raddr.ip);
+	ret = net_tx_ip(m, IPPROTO_UDP, raddr.ip);
+	if (unlikely(ret))
+		mbuf_pull_hdr(m, *udphdr);
 
-	m->txflags = OLFLAG_IP_CHKSUM;
-
-	return net_tx_xmit_to_ip(m, raddr.ip);
+	return ret;
 
 }
 
@@ -238,7 +229,7 @@ int usocket_bind_queue(int desc, struct addr laddr)
 	usockets[desc]->pktq = smalloc(sizeof(chan_t));
 	if (unlikely(!usockets[desc]->pktq))
 		return -ENOMEM;
-	ret = chan_create(usockets[desc]->pktq, sizeof(struct mbuf *),
+	ret = chan_create(usockets[desc]->pktq, sizeof(struct msg),
 			  PKT_QUEUE_CAPACITY);
 	if (ret) {
 		sfree(usockets[desc]->pktq);
@@ -306,27 +297,3 @@ int usocket_init(void)
 
 	return 0;
 }
-
-void dump_udp_pkt(int loglvl, uint32_t saddr,
-		  struct udp_hdr *udp_hdr, void *data);
-
-void net_rx_udp_dump(struct mbuf *m, uint32_t saddr, uint16_t len)
-{
-	struct udp_hdr *hdr;
-
-	hdr = mbuf_pull_hdr_or_null(m, *hdr);
-	if (unlikely(!hdr))
-		goto drop;
-
-	if (unlikely(ntoh16(hdr->len) != len))
-		goto drop;
-
-
-	dump_udp_pkt(0, saddr, hdr, mbuf_data(m));
-
-	// return;
-
-drop:
-	mbuf_free(m);
-}
-

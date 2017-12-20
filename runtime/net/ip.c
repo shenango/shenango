@@ -21,6 +21,7 @@
  */
 int net_tx_ip(struct mbuf *m, uint8_t proto, uint32_t daddr)
 {
+	int ret;
 	struct ip_hdr *iphdr;
 
 	/* populate IP header */
@@ -39,5 +40,8 @@ int net_tx_ip(struct mbuf *m, uint8_t proto, uint32_t daddr)
 	iphdr->daddr = hton32(daddr);
 
 	m->txflags |= OLFLAG_IP_CHKSUM | OLFLAG_IPV4;
-	return net_tx_xmit_to_ip(m, daddr);
+	ret = net_tx_xmit_to_ip(m, daddr);
+	if (unlikely(ret))
+		mbuf_pull_hdr(m, *iphdr);
+	return ret;
 }
