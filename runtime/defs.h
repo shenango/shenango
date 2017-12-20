@@ -99,6 +99,10 @@ extern void __pop_tf(struct thread_tf *tf) __noreturn;
 extern void __call_runtime(struct thread_tf *tf, runtime_fn_t fn,
 			   void *stack, unsigned long arg);
 
+extern void thread_ready_lock_held(thread_t *th);
+extern int thread_spawn_lock_held(thread_fn_t fn, void *arg);
+
+
 
 /*
  * Stack support

@@ -129,7 +129,7 @@ void net_rx_udp_usocket(struct mbuf *m, const struct ip_hdr *iphdr, uint16_t len
 			if (unlikely(!msgpt))
 				goto unlock;
 			*msgpt = msg;
-			if (unlikely(thread_spawn(packet_handler, msgpt)))
+			if (unlikely(thread_spawn_lock_held(packet_handler, msgpt)))
 				goto unlock;
 		}
 

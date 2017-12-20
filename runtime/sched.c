@@ -194,6 +194,33 @@ void thread_park_and_unlock(spinlock_t *lock)
 }
 
 /**
+ * thread_ready_lock_held - marks a thread as a runnable
+ * expects lock for myk() to be held already
+ * @th: the thread to mark runnable
+ *
+ * This function can only be called when @th is sleeping.
+ */
+void thread_ready_lock_held(thread_t *th)
+{
+	struct kthread *k = myk();
+	uint32_t rq_tail;
+
+	assert(th->state == THREAD_STATE_SLEEPING);
+	th->state = THREAD_STATE_RUNNABLE;
+
+	rq_tail = load_acquire(&k->rq_tail);
+	if (unlikely(k->rq_head - rq_tail >= RUNTIME_RQ_SIZE)) {
+		assert(k->rq_head - rq_tail == RUNTIME_RQ_SIZE);
+		assert_spin_lock_held(&k->lock);
+		list_add_tail(&k->rq_overflow, &th->link);
+		return;
+	}
+
+	k->rq[k->rq_head % RUNTIME_RQ_SIZE] = th;
+	store_release(&k->rq_head, k->rq_head + 1);
+}
+
+/**
  * thread_ready - marks a thread as a runnable
  * @th: the thread to mark runnable
  *
@@ -306,6 +333,23 @@ thread_t *thread_create_with_buf(thread_fn_t fn, void **buf, size_t buf_len)
 	th->tf.rip = (uint64_t)fn;
 	*buf = ptr;
 	return th;
+}
+
+/**
+ * thread_spawn_lock_held - creates and launches a new thread
+ * @fn: a function pointer to the starting method of the thread
+ * @arg: an argument passed to @fn
+ * myk()->lock must be held!
+ *
+ * Returns 0 if successful, otherwise -ENOMEM if out of memory.
+ */
+int thread_spawn_lock_held(thread_fn_t fn, void *arg)
+{
+	thread_t *th = thread_create(fn, arg);
+	if (unlikely(!th))
+		return -ENOMEM;
+	thread_ready_lock_held(th);
+	return 0;
 }
 
 /**

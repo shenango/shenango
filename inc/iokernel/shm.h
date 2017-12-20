@@ -10,7 +10,7 @@
 #include <base/atomic.h>
 
 #define INGRESS_MBUF_SHM_KEY 0x696d736b /* "imsk" */
-#define INGRESS_MBUF_SHM_SIZE 0x2000000
+#define INGRESS_MBUF_SHM_SIZE 0x20000000
 
 /*
  * Shared memory pointer support. These are pointers that are passed across
