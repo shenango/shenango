@@ -239,6 +239,8 @@ static inline int dpdk_port_init(uint8_t port, struct rte_mempool *mbuf_pool)
 	uint16_t nb_txd = TX_RING_SIZE;
 	int retval;
 	uint16_t q;
+	struct rte_eth_dev_info dev_info;
+	struct rte_eth_txconf *txconf;
 
 	if (port >= rte_eth_dev_count())
 		return -1;
@@ -260,14 +262,16 @@ static inline int dpdk_port_init(uint8_t port, struct rte_mempool *mbuf_pool)
 			return retval;
 	}
 
-	struct rte_eth_txconf rtetxc;
 	/* Enable TX offloading */
-	memset(&rtetxc, 0, sizeof(struct rte_eth_txconf));
+	rte_eth_dev_info_get(0, &dev_info);
+	txconf = &dev_info.default_txconf;
+	txconf->txq_flags &= ~(ETH_TXQ_FLAGS_NOXSUMUDP |
+			ETH_TXQ_FLAGS_NOXSUMTCP);
 
 	/* Allocate and set up 1 TX queue per Ethernet port. */
 	for (q = 0; q < tx_rings; q++) {
 		retval = rte_eth_tx_queue_setup(port, q, nb_txd,
-				rte_eth_dev_socket_id(port), &rtetxc);
+				rte_eth_dev_socket_id(port), txconf);
 		if (retval < 0)
 			return retval;
 	}
