@@ -2,11 +2,12 @@
  * ip.c - support for Internet Protocol version 4 (IPv4)
  */
 
-#include <stdlib.h>
-
+#include <base/hash.h>
 #include <net/ip.h>
 
 #include "defs.h"
+
+#define IP_ID_SEED	0x42345323
 
 /**
  * net_tx_ip - transmits an IP packet
@@ -30,8 +31,9 @@ int net_tx_ip(struct mbuf *m, uint8_t proto, uint32_t daddr)
 	iphdr->header_len = 5;
 	iphdr->tos = IPTOS_DSCP_CS0 | IPTOS_ECN_NOTECT;
 	iphdr->len = hton16(mbuf_length(m));
-	/* TODO: there are some uniqueness requirements on the ID, see RFC 6864 */
-	iphdr->id = rand() % 65536;
+	/* This must be unique for each connection, see RFC 6864 */
+	iphdr->id = hash_crc32c_two(IP_ID_SEED, daddr,
+				    ((uint64_t)netcfg.addr << 32) | proto);
 	iphdr->off = 0;
 	iphdr->ttl = 64;
 	iphdr->proto = proto;
