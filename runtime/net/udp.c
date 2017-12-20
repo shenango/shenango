@@ -14,11 +14,19 @@
 #include <runtime/rculist.h>
 #include <runtime/net/usocket.h>
 
+#include <string.h>
+
 /** UDP socket stuff **/
 #define NUSOCKET		512
 #define PKT_QUEUE_CAPACITY		128
 #define USOCKET_TABLE_CAPACITY		1024
 #define UDP_SEED		0xDEADBEEF
+
+#define UDP_HDR_SZ                                                             \
+	(sizeof(struct eth_hdr) + sizeof(struct ip_hdr) +                      \
+	 sizeof(struct udp_hdr))
+
+#define MAX_UDP_PAYLOAD (ETH_MAX_LEN - UDP_HDR_SZ)
 
 enum { STATE_INIT = 0,
        STATE_BOUND_QUEUE,
@@ -138,7 +146,7 @@ drop:
 }
 
 
-struct mbuf *usocket_recv(int desc, struct addr *raddr, bool block)
+struct mbuf *usocket_recv_zc(int desc, struct addr *raddr, bool block)
 {
 	int ret;
 	struct msg msg;
@@ -156,7 +164,7 @@ struct mbuf *usocket_recv(int desc, struct addr *raddr, bool block)
 	return msg.m;
 }
 
-int usocket_send(int desc, struct mbuf *m, struct addr raddr)
+int usocket_send_zc(int desc, struct mbuf *m, struct addr raddr)
 {
 	int ret;
 	struct udp_hdr *udphdr;
@@ -178,6 +186,43 @@ int usocket_send(int desc, struct mbuf *m, struct addr raddr)
 
 	return ret;
 
+}
+
+ssize_t usocket_recv(int desc, void *buf, size_t len, struct addr *raddr,
+		     bool block)
+{
+	ssize_t actual_len;
+	struct mbuf *m = usocket_recv_zc(desc, raddr, block);
+
+	actual_len = min(mbuf_length(m), len);
+
+	memcpy(buf, mbuf_data(m), actual_len);
+
+	mbuf_free(m);
+
+	return actual_len;
+}
+
+ssize_t usocket_send(int desc, const void *buf, size_t len, struct addr raddr)
+{
+	ssize_t actual_len;
+	unsigned char *c;
+
+	struct mbuf *r = net_tx_alloc_mbuf();
+	if (unlikely(!r))
+		return -ENOMEM;
+
+	actual_len = min(MAX_UDP_PAYLOAD, len);
+
+	c = mbuf_put(r, actual_len);
+	memcpy(c, buf, actual_len);
+
+	if (unlikely(usocket_send_zc(desc, r, raddr))) {
+		mbuf_free(r);
+		return -EIO;
+	}
+
+	return actual_len;
 }
 
 

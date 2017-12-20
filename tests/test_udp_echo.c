@@ -27,7 +27,7 @@ static void responder(int descriptor, struct mbuf *m, struct addr raddr)
 	void *ptr = mbuf_put(r, mbuf_length(m));
 	memcpy(ptr, mbuf_data(m), mbuf_length(m));
 
-	usocket_send(descriptor, r, raddr);
+	usocket_send_zc(descriptor, r, raddr);
 
 	mbuf_free(m);
 
