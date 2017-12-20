@@ -157,7 +157,7 @@ out:
 }
 
 /**
- * net_tx_xmit_to_ip - trasmits a packet an IP address
+ * net_tx_xmit_to_ip - trasmits a packet to an IP address
  * @m: the mbuf to transmit
  * @daddr: the destination IP address (in native byte order)
  *

@@ -247,7 +247,7 @@ struct mbuf *net_tx_alloc_mbuf(void)
  */
 int net_tx_xmit(struct mbuf *m)
 {
-
+	shmptr_t shm;
 	struct tx_net_hdr *hdr;
 	unsigned int len = mbuf_length(m);
 
@@ -256,8 +256,8 @@ int net_tx_xmit(struct mbuf *m)
 	hdr->len = len;
 	hdr->olflags = m->txflags;
 
-	if (!lrpc_send(&myk()->txpktq, TXPKT_NET_XMIT,
-		ptr_to_shmptr(&netcfg.tx_region, hdr, len + sizeof(*hdr))))
+	shm = ptr_to_shmptr(&netcfg.tx_region, hdr, len + sizeof(*hdr));
+	if (!lrpc_send(&myk()->txpktq, TXPKT_NET_XMIT, shm))
 		mbufq_push_tail(&myk()->txpktq_overflow, m);
 
 	return 0;
