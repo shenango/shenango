@@ -19,11 +19,11 @@ struct mbufq {
  */
 static inline void mbufq_push_tail(struct mbufq *q, struct mbuf *m)
 {
+	m->next = NULL;
 	if (!q->head) {
 		q->head = q->tail = m;
 		return;
 	}
-	m->next = NULL;
 	q->tail->next = m;
 	q->tail = m;
 }
