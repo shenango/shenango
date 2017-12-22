@@ -2,6 +2,8 @@
  * test_runtime_thread.c - tests basic thread spawning
  */
 
+#include <string.h>
+
 #include <base/stddef.h>
 #include <base/log.h>
 #include <base/time.h>

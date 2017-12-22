@@ -17,80 +17,90 @@
 #define ARP_EXPIRATION		(1000 * ONE_SECOND)
 
 /*
- * A single entry in the ARP table. The ip field is valid only if pending is NULL.
+ * A single entry in the ARP table.
  */
 struct arp_entry {
+	uint32_t		valid;
 	uint32_t		ip;
 	struct eth_addr		eth;
-	struct mbuf		*pending;
-	uint64_t		expiration;
+	struct mbufq		q;
 	struct rcu_hlist_node	link;
 };
 
-struct arp_state {
-	spinlock_t		entries_lock;
-	struct rcu_hlist_head	entries[ARP_TABLE_CAPACITY];
-};
-
-static struct arp_state arp_state;
+static DEFINE_SPINLOCK(arp_lock);
+static struct rcu_hlist_head arp_tbl[ARP_TABLE_CAPACITY];
 
 static inline int hash_ip(uint32_t ip)
 {
 	return hash_crc32c_one(ARP_SEED, ip) % ARP_TABLE_CAPACITY;
 }
 
-static void update_entry(uint32_t ip, struct eth_addr eth)
+static struct arp_entry *lookup_entry(int idx, uint32_t daddr)
 {
-	int index;
-	struct arp_entry* entry;
-	struct rcu_hlist_node* node;
-	struct mbuf* pending = NULL;
+	struct arp_entry *e;
+	struct rcu_hlist_node *node;
 
-	index = hash_ip(ip);
-	spin_lock(&arp_state.entries_lock);
-	rcu_hlist_for_each(&arp_state.entries[index], node,
-			   spin_lock_held(&arp_state.entries_lock)) {
-		entry = rcu_hlist_entry(node, struct arp_entry, link);
-		if (entry->eth.addr == eth.addr) {
-			pending = entry->pending;
-			((struct eth_hdr*)pending->data)->dhost = entry->eth;
-
-			entry->pending = NULL;
-			entry->ip = ip;
-			entry->expiration = microtime() + ARP_EXPIRATION;
-			goto out;
-		}
+	rcu_hlist_for_each(&arp_tbl[idx], node, true) {
+		e = rcu_hlist_entry(node, struct arp_entry, link);
+		if (e->ip == daddr)
+			return e;
 	}
 
-	entry = malloc(sizeof(struct arp_entry));
-	BUG_ON(!entry);
-	entry->ip = ip;
-	entry->eth = eth;
-	entry->pending = NULL;
+	return NULL;
+}
 
-	rcu_hlist_add_head(&arp_state.entries[index], &entry->link);
+static struct arp_entry *create_entry(uint32_t daddr)
+{
+	struct arp_entry *e = malloc(sizeof(*e));
+	if (!e)
+		return NULL;
 
- out:
-	spin_unlock(&arp_state.entries_lock);
-	if(pending)
-		net_tx_xmit_or_free(pending);
+	e->ip = daddr;
+	e->valid = false;
+	mbufq_init(&e->q);
+	return e;
+}
+
+static void update_entry(uint32_t daddr, struct eth_addr dhost)
+{
+	struct mbufq q;
+	int idx = hash_ip(daddr);
+	struct arp_entry *e;
+
+	mbufq_init(&q);
+
+	spin_lock(&arp_lock);
+	e = lookup_entry(idx, daddr);
+	if (!e) {
+		e = create_entry(daddr);
+		if (unlikely(!e)) {
+			spin_unlock(&arp_lock);
+			return;
+		}
+
+		rcu_hlist_add_head(&arp_tbl[idx], &e->link);
+	}
+	e->eth = dhost;
+	store_release(&e->valid, true);
+	mbufq_merge_to_tail(&q, &e->q);
+	spin_unlock(&arp_lock);
+
+	/* drain mbufs waiting for ARP response */
+	while (!mbufq_empty(&q)) {
+		struct mbuf *m = mbufq_pop_head(&q);
+		net_tx_eth_or_free(m, ETHTYPE_IP, dhost);
+	}
 }
 
 static void arp_send(uint16_t op, struct eth_addr dhost, uint32_t daddr)
 {
 	struct mbuf *m;
-	struct eth_hdr *eth_hdr;
 	struct arp_hdr *arp_hdr;
 	struct arp_hdr_ethip *arp_hdr_ethip;
 
 	m = net_tx_alloc_mbuf();
 	if (unlikely(!m))
 		return;
-
-	eth_hdr = mbuf_push_hdr(m, *eth_hdr);
-	eth_hdr->shost = netcfg.mac;
-	eth_hdr->dhost = dhost;
-	eth_hdr->type = hton16(ETHTYPE_ARP);
 
 	arp_hdr = mbuf_put_hdr(m, *arp_hdr);
 	arp_hdr->htype = hton16(ARP_HTYPE_ETHER);
@@ -105,9 +115,13 @@ static void arp_send(uint16_t op, struct eth_addr dhost, uint32_t daddr)
 	arp_hdr_ethip->target_mac = dhost;
 	arp_hdr_ethip->target_ip = hton32(daddr);
 
-	net_tx_xmit_or_free(m);
+	net_tx_eth_or_free(m, ETHTYPE_ARP, dhost);
 }
 
+/**
+ * net_rx_arp - receive an ARP packet
+ * @m: the mbuf containing the ARP packet (eth hdr is stripped)
+ */
 void net_rx_arp(struct mbuf *m)
 {
 	uint16_t op;
@@ -157,72 +171,80 @@ out:
 }
 
 /**
- * net_tx_xmit_to_ip - trasmits a packet to an IP address
- * @m: the mbuf to transmit
- * @daddr: the destination IP address (in native byte order)
+ * arp_lookup - retrieve a MAC address for a given IP address
+ * @daddr: the target IP address
+ * @dhost_out: A buffer to store the MAC address
+ * @m: the mbuf requiring the lookup (can be NULL, otherwise must start with
+ * a network header (L3))
  *
- * The payload must start with the network (L3) header. The ethernet header
- * will be prepended by this function.
- *
- * Returns 0 if successful, otherwise fail. If the successful, the mbuf will
- * be freed when the transmit completes. Otherwise, the mbuf still belongs to
- * the caller.
+ * Returns 0 and writes to @dhost_out if successful. Otherwise returns:
+ * -ENOMEM: If out of memory
+ * -EINPROGRESS: If the ARP request is still resolving. Takes ownership of @m.
  */
-int net_tx_xmit_to_ip(struct mbuf *m, uint32_t daddr)
+int arp_lookup(uint32_t daddr, struct eth_addr *dhost_out, struct mbuf *m)
 {
-	int index, ret;
-	struct arp_entry* entry;
-	struct rcu_hlist_node* node;
-	struct eth_hdr *eth_hdr;
+	struct arp_entry *e, *newe = NULL;
+	int idx = hash_ip(daddr);
 
-	eth_hdr = mbuf_push_hdr(m, *eth_hdr);
-	eth_hdr->shost = netcfg.mac;
-	eth_hdr->type = hton16(ETHTYPE_IP);
-
-	if ((daddr & netcfg.netmask) != netcfg.network)
-		daddr = netcfg.gateway;
-
-	index = hash_ip(daddr);
+	/* hot-path: @daddr hits in ARP cache */
 	rcu_read_lock();
-	rcu_hlist_for_each(&arp_state.entries[index], node, false) {
-		entry = rcu_hlist_entry(node, struct arp_entry, link);
-		if (entry->ip == daddr) {
-			if (unlikely(entry->pending != NULL)) {
-				rcu_read_unlock();
-				mbuf_pull_hdr(m, *eth_hdr);
-				return -EIO;
-			}
-
-			eth_hdr->dhost = entry->eth;
-			rcu_read_unlock();
-			ret = net_tx_xmit(m);
-			if (unlikely(ret))
-				mbuf_pull_hdr(m, *eth_hdr);
-			return ret;
-		}
+	e = lookup_entry(idx, daddr);
+	if (likely(e && load_acquire(&e->valid))) {
+		*dhost_out = e->eth;
+		rcu_read_unlock();
+		return 0;
 	}
 	rcu_read_unlock();
 
-	entry = malloc(sizeof(*entry));
-	BUG_ON(entry == NULL);
-	entry->ip = daddr;
-	entry->pending = m;
+	/* cold-path: solicit an ARP response */
+	if (!e) {
+		arp_send(ARP_OP_REQUEST, eth_addr_broadcast, daddr);
+		newe = create_entry(daddr);
+		if (!newe)
+			return -ENOMEM;
+	}
 
-	spin_lock(&arp_state.entries_lock);
-	rcu_hlist_add_head(&arp_state.entries[index], &entry->link);
-	spin_unlock(&arp_state.entries_lock);
+	/* check again for @daddr in ARP cache; we own @m going forward */
+	spin_lock(&arp_lock);
+	e = lookup_entry(idx, daddr);
+	if (e) {
+		/* entry already exists */
+		free (newe);
+		if (e->valid) {
+			*dhost_out = e->eth;
+			spin_unlock(&arp_lock);
+			return 0;
+		}
+	} else if (newe) {
+		/* insert new entry */
+		e = newe;
+		rcu_hlist_add_head(&arp_tbl[idx], &newe->link);
+	}
 
-	arp_send(ARP_OP_REQUEST, eth_addr_broadcast, daddr);
-	return 0;
+	/* enqueue the mbuf for later transmission */
+	if (m && e)
+		mbufq_push_tail(&e->q, m);
+	spin_unlock(&arp_lock);
+
+	/* if the entry was removed, assume unreachable and free */
+	if (m && !e)
+		mbuf_free(m);
+
+	return -EINPROGRESS;
 }
 
+/**
+ * net_arp_init - initializes the ARP subsystem
+ *
+ * Always returns 0 for success.
+ */
 int net_arp_init(void)
 {
 	int i;
 
-	spin_lock_init(&arp_state.entries_lock);
+	spin_lock_init(&arp_lock);
 	for (i = 0; i < ARP_TABLE_CAPACITY; i++)
-		rcu_hlist_init_head(&arp_state.entries[i]);
+		rcu_hlist_init_head(&arp_tbl[i]);
 
 	return 0;
 }

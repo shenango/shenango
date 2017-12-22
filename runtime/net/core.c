@@ -5,9 +5,12 @@
 #include <base/log.h>
 #include <base/mempool.h>
 #include <base/slab.h>
+#include <base/hash.h>
 #include <runtime/thread.h>
 
 #include "defs.h"
+
+#define IP_ID_SEED	0x42345323
 
 /* the maximum number of packets to process per scheduler invocation */
 #define MAX_BUDGET	512
@@ -125,6 +128,8 @@ static void net_rx_one(struct rx_net_hdr *hdr)
 		goto drop;
 
 	len = ntoh16(iphdr->len) - sizeof(*iphdr);
+	if (unlikely(mbuf_length(m) < len))
+		goto drop;
 
 	switch(iphdr->proto) {
 	case IPPROTO_ICMP:
@@ -234,18 +239,7 @@ struct mbuf *net_tx_alloc_mbuf(void)
 	return m;
 }
 
-/**
- * net_tx_xmit - transmits a packet
- * @m: the mbuf to transmit
- *
- * The ethernet frame must be included in the packet. The mbuf must have been
- * allocated with net_tx_alloc_mbuf().
- *
- * Returns 0 if successful, otherwise fail. If the successful, the mbuf will
- * be freed when the transmit completes. Otherwise, the mbuf still belongs to
- * the caller.
- */
-int net_tx_xmit(struct mbuf *m)
+static void net_tx_raw(struct mbuf *m)
 {
 	shmptr_t shm;
 	struct tx_net_hdr *hdr;
@@ -259,7 +253,95 @@ int net_tx_xmit(struct mbuf *m)
 	shm = ptr_to_shmptr(&netcfg.tx_region, hdr, len + sizeof(*hdr));
 	if (!lrpc_send(&myk()->txpktq, TXPKT_NET_XMIT, shm))
 		mbufq_push_tail(&myk()->txpktq_overflow, m);
+}
 
+/**
+ * net_tx_eth - transmits an ethernet packet
+ * @m: the mbuf to transmit
+ * @type: the ethernet type
+ * @dhost: the destination MAC address
+ *
+ * The payload must start with the network (L3) header. The ethernet (L2)
+ * header will be prepended by this function.
+ *
+ * @m must have been allocated with net_tx_alloc_mbuf().
+ *
+ * Returns 0 if successful. If successful, the mbuf will be freed when the
+ * transmit completes. Otherwise, the mbuf still belongs to the caller.
+ */
+int net_tx_eth(struct mbuf *m, uint16_t type, struct eth_addr dhost)
+{
+	struct eth_hdr *eth_hdr;
+
+	eth_hdr = mbuf_push_hdr(m, *eth_hdr);
+	eth_hdr->shost = netcfg.mac;
+	eth_hdr->dhost = dhost;
+	eth_hdr->type = hton16(type);
+	net_tx_raw(m);
+	return 0;
+}
+
+/**
+ * net_tx_ip - transmits an IP packet
+ * @m: the mbuf to transmit
+ * @proto: the transport protocol
+ * @daddr: the destination IP address (in native byte order)
+ *
+ * The payload must start with the transport (L4) header. The IPv4 (L3) and
+ * ethernet (L2) headers will be prepended by this function.
+ *
+ * @m must have been allocated with net_tx_alloc_mbuf().
+ *
+ * TODO: Support "don't fragment" (DF) flag?
+ *
+ * Returns 0 if successful. If successful, the mbuf will be freed when the
+ * transmit completes. Otherwise, the mbuf still belongs to the caller.
+ */
+int net_tx_ip(struct mbuf *m, uint8_t proto, uint32_t daddr)
+{
+	struct eth_addr dhost;
+	struct ip_hdr *iphdr;
+	int ret;
+
+	/* populate IP header */
+	iphdr = mbuf_push_hdr(m, *iphdr);
+	iphdr->version = IPVERSION;
+	iphdr->header_len = 5;
+	iphdr->tos = IPTOS_DSCP_CS0 | IPTOS_ECN_NOTECT;
+	iphdr->len = hton16(mbuf_length(m));
+	/* This must be unique across datagrams within a flow, see RFC 6864 */
+	iphdr->id = hash_crc32c_two(IP_ID_SEED, rdtsc() ^ proto,
+				    (uint64_t)daddr |
+				    ((uint64_t)netcfg.addr << 32));
+	iphdr->off = 0;
+	iphdr->ttl = 64;
+	iphdr->proto = proto;
+	iphdr->chksum = 0;
+	iphdr->saddr = hton32(netcfg.addr);
+	iphdr->daddr = hton32(daddr);
+
+	/* ask NIC to calculate IP checksum */
+	m->txflags |= OLFLAG_IP_CHKSUM | OLFLAG_IPV4;
+
+	/* simple IP routing */
+	if ((daddr & netcfg.netmask) != netcfg.network)
+		daddr = netcfg.gateway;
+
+	/* need to use ARP to resolve dhost */
+	ret = arp_lookup(daddr, &dhost, m);
+	if (unlikely(ret)) {
+		if (ret == -EINPROGRESS) {
+			/* ARP code now owns the mbuf */
+			return 0;
+		} else {
+			/* An unrecoverable error occurred */
+			mbuf_pull_hdr(m, *iphdr);
+			return ret;
+		}
+	}
+
+	ret = net_tx_eth(m, ETHTYPE_IP, dhost);
+	assert(!ret); /* can't fail as implemented so far */
 	return 0;
 }
 
