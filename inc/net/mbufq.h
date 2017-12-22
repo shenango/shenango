@@ -44,6 +44,17 @@ static inline struct mbuf *mbufq_pop_head(struct mbufq *q)
 }
 
 /**
+ * mbufq_peak_head - reads the head of the queue without popping
+ * @q: the mbuf queue
+ *
+ * Returns an mbuf or NULL if the queue is empty.
+ */
+static inline struct mbuf *mbufq_peak_head(struct mbufq *q)
+{
+	return q->head;
+}
+
+/**
  * mbufq_merge_to_tail - merges a queue to the end of another queue
  * @dst: the destination queue (will contain all the mbufs)
  * @src: the source queue (will become empty)

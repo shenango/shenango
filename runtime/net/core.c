@@ -32,6 +32,35 @@ static struct mempool net_tx_buf_mp;
 static struct tcache *net_tx_buf_tcache;
 static __thread struct tcache_perthread net_tx_buf_pt;
 
+static void net_drain_overflow(void)
+{
+	shmptr_t shm;
+	struct mbuf *m;
+	struct rx_net_hdr *rxhdr;
+	struct kthread *kth = myk();
+
+	/* drain TX packets */
+	while (!mbufq_empty(&kth->txpktq_overflow)) {
+		m = mbufq_peak_head(&kth->txpktq_overflow);
+		shm = ptr_to_shmptr(&netcfg.tx_region,
+				    mbuf_data(m), mbuf_length(m));
+		if (!lrpc_send(&kth->txpktq, TXPKT_NET_XMIT, shm))
+			break;
+		mbufq_pop_head(&kth->txpktq_overflow);
+	}
+
+	/* drain RX completions */
+	while (!mbufq_empty(&kth->txcmdq_overflow)) {
+		m = mbufq_peak_head(&kth->txcmdq_overflow);
+		rxhdr = container_of((void *)m->head, struct rx_net_hdr,
+				     payload);
+		if (!lrpc_send(&myk()->txcmdq, TXCMD_NET_COMPLETE,
+			       rxhdr->completion_data))
+			break;
+		mbufq_pop_head(&kth->txcmdq_overflow);
+	}
+}
+
 
 /*
  * RX Networking Functions
@@ -184,6 +213,8 @@ static void net_rx_schedule(struct kthread *k, unsigned int budget)
 		}
 	}
 
+	net_drain_overflow();
+
 	/* Step 2: Complete TX requests and free packets */
 	for (i = 0; i < completion_cnt; i++)
 		mbuf_free(completion_reqs[i]);
@@ -258,7 +289,7 @@ static void net_tx_raw(struct mbuf *m)
 /**
  * net_tx_eth - transmits an ethernet packet
  * @m: the mbuf to transmit
- * @type: the ethernet type
+ * @type: the ethernet type (in native byte order)
  * @dhost: the destination MAC address
  *
  * The payload must start with the network (L3) header. The ethernet (L2)
@@ -277,6 +308,7 @@ int net_tx_eth(struct mbuf *m, uint16_t type, struct eth_addr dhost)
 	eth_hdr->shost = netcfg.mac;
 	eth_hdr->dhost = dhost;
 	eth_hdr->type = hton16(type);
+	net_drain_overflow();
 	net_tx_raw(m);
 	return 0;
 }

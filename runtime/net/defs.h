@@ -48,7 +48,7 @@ extern int net_tx_icmp(struct mbuf *m, uint8_t type, uint8_t code,
 /**
  * net_tx_eth - transmits an ethernet packet, or frees it on failure
  * @m: the mbuf to transmit
- * @type: the ethernet type
+ * @type: the ethernet type (in native byte order)
  * @dhost: the destination MAC address
  *
  * The payload must start with the network (L3) header. The ethernet (L2)

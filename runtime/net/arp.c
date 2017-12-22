@@ -149,7 +149,7 @@ void net_rx_arp(struct mbuf *m)
 	sender_mac = arp_hdr_ethip->sender_mac;
 
 	/* refuse ARP packets with multicast source MAC's */
-	if (sender_mac.addr[0] & ETH_ADDR_GROUP)
+	if (eth_addr_is_multicast(&sender_mac))
 		goto out;
 
 	am_target = (netcfg.addr == target_ip);
