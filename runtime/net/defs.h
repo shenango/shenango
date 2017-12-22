@@ -43,7 +43,7 @@ extern int net_tx_eth(struct mbuf *m, uint16_t proto,
 extern int net_tx_ip(struct mbuf *m, uint8_t proto,
 		     uint32_t daddr) __must_use_return;
 extern int net_tx_icmp(struct mbuf *m, uint8_t type, uint8_t code,
-		       uint32_t daddr, uint32_t header_data) __must_use_return;
+		uint32_t daddr, uint16_t id, uint16_t seq) __must_use_return;
 
 /**
  * net_tx_eth - transmits an ethernet packet, or frees it on failure

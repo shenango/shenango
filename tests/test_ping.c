@@ -5,6 +5,7 @@
 #include <unistd.h>
 
 #include <base/log.h>
+#include <base/time.h>
 #include <net/ping.h>
 #include <runtime/thread.h>
 
@@ -13,12 +14,23 @@
 
 static void main_handler(void *arg)
 {
-	int i;
+	int i, ret;
+	uint64_t next_ping_time;
 
+	ret = net_ping_init();
+	if (ret) {
+		log_err("failed to init ping");
+		return;
+	}
+
+	next_ping_time = microtime();
 	for (i = 0; i < N_PINGS; i++) {
-		net_send_ping(rand(), i, DEST_IP_ADDR);
-		sleep(1);
-		thread_yield();
+		net_send_ping(i, DEST_IP_ADDR);
+
+		/* wait 1 second before sending next ping */
+		next_ping_time += 1000 * 1000;
+		while (microtime() < next_ping_time)
+			thread_yield();
 	}
 }
 
