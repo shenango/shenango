@@ -93,7 +93,7 @@ void rcu_free(struct rcu_head *head, rcu_callback_t func)
 }
 
 /* internal cold-path handler for reschedules */
-void __rcu_schedule(void)
+void __rcu_recurrent(void)
 {
 	rcu_tlgen = rcu_gen; /* prevents future invocations for this gen */
 

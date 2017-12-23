@@ -32,32 +32,34 @@ static struct mempool net_tx_buf_mp;
 static struct tcache *net_tx_buf_tcache;
 static __thread struct tcache_perthread net_tx_buf_pt;
 
-static void net_drain_overflow(void)
+/* drains overflow queues */
+void __noinline __net_recurrent(void)
 {
 	shmptr_t shm;
 	struct mbuf *m;
 	struct rx_net_hdr *rxhdr;
-	struct kthread *kth = myk();
+	struct kthread *k = myk();
 
 	/* drain TX packets */
-	while (!mbufq_empty(&kth->txpktq_overflow)) {
-		m = mbufq_peak_head(&kth->txpktq_overflow);
+	while (!mbufq_empty(&k->txpktq_overflow)) {
+		m = mbufq_peak_head(&k->txpktq_overflow);
 		shm = ptr_to_shmptr(&netcfg.tx_region,
 				    mbuf_data(m), mbuf_length(m));
-		if (!lrpc_send(&kth->txpktq, TXPKT_NET_XMIT, shm))
+		if (!lrpc_send(&k->txpktq, TXPKT_NET_XMIT, shm))
 			break;
-		mbufq_pop_head(&kth->txpktq_overflow);
+		mbufq_pop_head(&k->txpktq_overflow);
 	}
 
 	/* drain RX completions */
-	while (!mbufq_empty(&kth->txcmdq_overflow)) {
-		m = mbufq_peak_head(&kth->txcmdq_overflow);
+	while (!mbufq_empty(&k->txcmdq_overflow)) {
+		m = mbufq_peak_head(&k->txcmdq_overflow);
 		rxhdr = container_of((void *)m->head, struct rx_net_hdr,
 				     payload);
-		if (!lrpc_send(&myk()->txcmdq, TXCMD_NET_COMPLETE,
+		if (!lrpc_send(&k->txcmdq, TXCMD_NET_COMPLETE,
 			       rxhdr->completion_data))
 			break;
-		mbufq_pop_head(&kth->txcmdq_overflow);
+		mbufq_pop_head(&k->txcmdq_overflow);
+		tcache_free(&net_mbuf_pt, m);
 	}
 }
 
@@ -179,14 +181,49 @@ drop:
 	mbuf_free(m);
 }
 
-static void net_rx_schedule(struct kthread *k, unsigned int budget)
-{
+struct net_rx_closure {
+	unsigned int recv_cnt, compl_cnt;
 	struct rx_net_hdr *recv_reqs[MAX_BUDGET];
-	struct mbuf *completion_reqs[MAX_BUDGET];
-	int recv_cnt = 0, completion_cnt = 0;
+	struct mbuf *compl_reqs[MAX_BUDGET];
+};
+
+static void net_rx_worker(void *arg)
+{
+	struct net_rx_closure *c = arg;
 	int i;
 
-	/* Step 1: Pull available IOKERNEL commands from the RXQ */
+	/* complete TX requests and free packets */
+	for (i = 0; i < c->compl_cnt; i++)
+		mbuf_free(c->compl_reqs[i]);
+
+	/* deliver new RX packets to the runtime */
+	for (i = 0; i < c->recv_cnt; i++)
+		net_rx_one(c->recv_reqs[i]);
+}
+
+/**
+ * net_run - creates a closure for network receive processing
+ * @k: the kthread from which to take RX queue commands
+ * @budget: the maximum number of commands to process
+ *
+ * Returns a thread that handles receive processing when executed or
+ * NULL if no receive processing work is available.
+ */
+thread_t *net_run(struct kthread *k, unsigned int budget)
+{
+	thread_t *th;
+	struct net_rx_closure *c;
+	unsigned int recv_cnt = 0, compl_cnt = 0;
+
+	assert_spin_lock_held(&k->lock);
+
+	if (lrpc_empty(&k->rxq))
+		return NULL;
+
+	th = thread_create_with_buf(net_rx_worker, (void **)&c, sizeof(*c));
+	if (unlikely(!th))
+		return NULL;
+
 	budget = min(budget, MAX_BUDGET);
 	while (budget--) {
 		uint64_t cmd;
@@ -197,15 +234,14 @@ static void net_rx_schedule(struct kthread *k, unsigned int budget)
 
 		switch (cmd) {
 		case RX_NET_RECV:
-			recv_reqs[recv_cnt] = shmptr_to_ptr(&netcfg.rx_region,
+			c->recv_reqs[recv_cnt] = shmptr_to_ptr(&netcfg.rx_region,
 				(shmptr_t)payload, MBUF_DEFAULT_LEN);
-			BUG_ON(recv_reqs[recv_cnt] == NULL);
+			BUG_ON(c->recv_reqs[recv_cnt] == NULL);
 			recv_cnt++;
 			break;
 
 		case RX_NET_COMPLETE:
-			completion_reqs[completion_cnt++] =
-				(struct mbuf *)payload;
+			c->compl_reqs[compl_cnt++] = (struct mbuf *)payload;
 			break;
 
 		default:
@@ -213,15 +249,11 @@ static void net_rx_schedule(struct kthread *k, unsigned int budget)
 		}
 	}
 
-	net_drain_overflow();
-
-	/* Step 2: Complete TX requests and free packets */
-	for (i = 0; i < completion_cnt; i++)
-		mbuf_free(completion_reqs[i]);
-
-	/* Step 3: Deliver new RX packets to the runtime */
-	for (i = 0; i < recv_cnt; i++)
-		net_rx_one(recv_reqs[i]);
+	assert(recv_cnt + compl_cnt > 0);
+	c->recv_cnt = recv_cnt;
+	c->compl_cnt = compl_cnt;
+	th->state = THREAD_STATE_RUNNABLE;
+	return th;
 }
 
 
@@ -276,6 +308,9 @@ static void net_tx_raw(struct mbuf *m)
 	struct tx_net_hdr *hdr;
 	unsigned int len = mbuf_length(m);
 
+	/* drain pending overflow packets first */
+	net_recurrent();
+
 	hdr = mbuf_push_hdr(m, *hdr);
 	hdr->completion_data = (unsigned long)m;
 	hdr->len = len;
@@ -308,7 +343,6 @@ int net_tx_eth(struct mbuf *m, uint16_t type, struct eth_addr dhost)
 	eth_hdr->shost = netcfg.mac;
 	eth_hdr->dhost = dhost;
 	eth_hdr->type = hton16(type);
-	net_drain_overflow();
 	net_tx_raw(m);
 	return 0;
 }
@@ -375,11 +409,6 @@ int net_tx_ip(struct mbuf *m, uint8_t proto, uint32_t daddr)
 	ret = net_tx_eth(m, ETHTYPE_IP, dhost);
 	assert(!ret); /* can't fail as implemented so far */
 	return 0;
-}
-
-void net_schedule(struct kthread *k, unsigned int budget)
-{
-	net_rx_schedule(k, budget);
 }
 
 /**

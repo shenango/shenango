@@ -133,5 +133,17 @@ static inline bool lrpc_recv(struct lrpc_chan_in *chan, uint64_t *cmd_out,
 	return true;
 }
 
+/**
+ * lrpc_empty - returns true if the channel has no available messages
+ * @chan: the ingress channel
+ */
+static inline bool lrpc_empty(struct lrpc_chan_in *chan)
+{
+	struct lrpc_msg *m = &chan->tbl[chan->recv_head & (chan->size - 1)];
+	uint64_t parity = (chan->recv_head & chan->size) ?
+			  0 : LRPC_DONE_PARITY;
+	return (ACCESS_ONCE(m->cmd) & LRPC_DONE_PARITY) != parity;
+}
+
 extern int lrpc_init_in(struct lrpc_chan_in *chan, struct lrpc_msg *tbl,
 			unsigned int size, uint32_t *recv_head_wb);

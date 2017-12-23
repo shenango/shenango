@@ -87,7 +87,7 @@ static void drain_overflow(struct kthread *l)
 	}
 }
 
-static bool steal_tasks(struct kthread *l, struct kthread *r)
+static bool steal_work(struct kthread *l, struct kthread *r)
 {
 	thread_t *th;
 	uint32_t i, avail, rq_tail;
@@ -101,6 +101,11 @@ static bool steal_tasks(struct kthread *l, struct kthread *r)
 	if (!avail) {
 		/* check for overflow tasks */
 		th = list_pop(&r->rq_overflow, thread_t, link);
+
+		/* check the network queues */
+		if (!th)
+			th = net_run(r, RUNTIME_NET_BUDGET);
+
 		if (th)
 			l->rq[l->rq_head++] = th;
 		spin_unlock(&r->lock);
@@ -127,6 +132,11 @@ static __noreturn void schedule(void)
 	struct kthread *r, *l = myk();
 	int i;
 
+	/* mark the end of the RCU quiescent period */
+	rcu_recurrent();
+	/* drain overflow packets */
+	net_recurrent();
+
 	__self = NULL;
 	spin_lock(&l->lock);
 
@@ -135,12 +145,6 @@ static __noreturn void schedule(void)
 		drain_overflow(l);
 
 again:
-	/* mark the end of the RCU quiescent period */
-	rcu_schedule();
-
-	/* perform network functions */
-	net_schedule(l, 512);
-
 	/* first try the local runqueue */
 	if (l->rq_head != l->rq_tail)
 		goto done;
@@ -148,19 +152,27 @@ again:
 	/* reset the local runqueue since it's empty */
 	l->rq_head = l->rq_tail = 0;
 
-	/* then attempt to steal tasks from a random kthread */
+	/* then try the local network queues */
+	th = net_run(l, RUNTIME_NET_BUDGET);
+	if (th) {
+		l->rq[l->rq_head++] = th;
+		goto done;
+	}
+
+	/* then attempt to steal tasks or packets from a random kthread */
 	r = ks[rand_crc32c((uintptr_t)l) % nrks];
-	if (steal_tasks(l, r))
+	if (steal_work(l, r))
 		goto done;
 
 	/* finally try to steal from every kthread */
 	for (i = 0; i < nrks; i++) {
-		if (steal_tasks(l, r))
+		if (steal_work(l, r))
 			goto done;
 	}
 
 	/* did not find anything to run */
 	cpu_relax();
+	/* TODO: park the kthread here instead of trying again */
 	goto again;
 
 done:

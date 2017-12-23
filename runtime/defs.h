@@ -24,6 +24,7 @@
 #define RUNTIME_STACK_SIZE	128 * KB
 #define RUNTIME_GUARD_SIZE	128 * KB
 #define RUNTIME_RQ_SIZE		32
+#define RUNTIME_NET_BUDGET	16
 
 
 /*
@@ -268,20 +269,21 @@ extern void kthread_detach(void);
 
 extern unsigned int rcu_gen;
 extern __thread unsigned int rcu_tlgen;
-extern void __rcu_schedule(void);
+extern void __rcu_recurrent(void);
 
 /**
- * rcu_schedule - called during each reschedule to advance to the next quiescent
- * period
+ * rcu_poll - advances to the next quiescent period
+ *
+ * Called during each schedule() invocation.
  */
-static inline void rcu_schedule(void)
+static inline void rcu_recurrent(void)
 {
 #ifdef DEBUG
 	assert(rcu_read_count == 0);
 #endif /* DEBUG */
 
 	if (unlikely(load_acquire(&rcu_gen) != rcu_tlgen))
-		__rcu_schedule();
+		__rcu_recurrent();
 }
 
 
@@ -302,9 +304,22 @@ struct net_cfg {
 } __packed;
 
 extern struct net_cfg netcfg;
-extern int net_init(void);
-extern int net_init_thread(void);
-extern void net_schedule(struct kthread *k, unsigned int budget);
+
+extern thread_t *net_run(struct kthread *k, unsigned int budget);
+extern void __net_recurrent(void);
+
+/**
+ * net_recurrent - flush overflow packets
+ *
+ * Called during each schedule() invocation and during TX.
+ */
+static inline void net_recurrent(void)
+{
+	struct kthread *k = myk();
+	if (!mbufq_empty(&k->txpktq_overflow) ||
+	    !mbufq_empty(&k->txcmdq_overflow))
+		__net_recurrent();
+}
 
 
 /*
@@ -316,6 +331,8 @@ extern int ioqueues_init(unsigned int threads);
 extern int ioqueues_init_thread(void);
 extern int stack_init_thread(void);
 extern int stack_init(void);
+extern int net_init(void);
+extern int net_init_thread(void);
 extern int sched_init_thread(void);
 extern int sched_init(void);
 extern void sched_start(void) __noreturn;
