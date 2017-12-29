@@ -16,15 +16,18 @@
 #include <runtime/thread.h>
 #include <runtime/rcu.h>
 
+
 /*
  * constant limits
  * TODO: make these configurable?
  */
+
 #define RUNTIME_MAX_THREADS	100000
 #define RUNTIME_STACK_SIZE	128 * KB
 #define RUNTIME_GUARD_SIZE	128 * KB
 #define RUNTIME_RQ_SIZE		32
 #define RUNTIME_NET_BUDGET	16
+#define RUNTIME_MAX_TIMERS	4096
 
 
 /*
@@ -223,6 +226,8 @@ extern struct iokernel_control iok;
  * Per-kernel-thread State
  */
 
+struct timer_idx;
+
 struct kthread {
 	/* 1st cache-line */
 	spinlock_t		lock;
@@ -243,7 +248,20 @@ struct kthread {
 	/* 7th cache-line */
 	struct mbufq		txpktq_overflow;
 	struct mbufq		txcmdq_overflow;
+	unsigned long		pad2[4];
+
+	/* 8th cache-line */
+	spinlock_t		timer_lock;
+	unsigned int		timern;
+	struct timer_idx	*timers;
 };
+
+/* compile-time verification of cache-line alignment */
+BUILD_ASSERT(offsetof(struct kthread, lock) % CACHE_LINE_SIZE == 0 &&
+	     offsetof(struct kthread, rq) % CACHE_LINE_SIZE == 0 &&
+	     offsetof(struct kthread, txpktq) % CACHE_LINE_SIZE == 0 &&
+	     offsetof(struct kthread, txpktq_overflow) % CACHE_LINE_SIZE == 0 &&
+	     offsetof(struct kthread, timer_lock) % CACHE_LINE_SIZE == 0);
 
 extern __thread struct kthread *mykthread;
 
@@ -323,17 +341,30 @@ static inline void net_recurrent(void)
 
 
 /*
- * init
+ * Timer support
  */
 
+extern thread_t *timer_run(struct kthread *k);
+
+
+/*
+ * Init
+ */
+
+/* per-thread initialization */
 extern int kthread_init_thread(void);
-extern int ioqueues_init(unsigned int threads);
 extern int ioqueues_init_thread(void);
 extern int stack_init_thread(void);
-extern int stack_init(void);
-extern int net_init(void);
 extern int net_init_thread(void);
 extern int sched_init_thread(void);
+extern int timer_init_thread(void);
+
+/* global initialization */
+extern int ioqueues_init(unsigned int threads);
+extern int stack_init(void);
+extern int net_init(void);
 extern int sched_init(void);
+
+/* runtime entry helpers */
 extern void sched_start(void) __noreturn;
 extern int thread_spawn_main(thread_fn_t fn, void *arg);

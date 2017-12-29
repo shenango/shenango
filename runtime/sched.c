@@ -102,6 +102,10 @@ static bool steal_work(struct kthread *l, struct kthread *r)
 		/* check for overflow tasks */
 		th = list_pop(&r->rq_overflow, thread_t, link);
 
+		/* check for timeouts */
+		if (!th)
+			th = timer_run(r);
+
 		/* check the network queues */
 		if (!th)
 			th = net_run(r, RUNTIME_NET_BUDGET);
@@ -151,6 +155,13 @@ again:
 
 	/* reset the local runqueue since it's empty */
 	l->rq_head = l->rq_tail = 0;
+
+	/* then check for local timeouts */
+	th = timer_run(l);
+	if (th) {
+		l->rq[l->rq_head++] = th;
+		goto done;
+	}
 
 	/* then try the local network queues */
 	th = net_run(l, RUNTIME_NET_BUDGET);

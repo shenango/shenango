@@ -46,6 +46,12 @@ static int runtime_init_thread(void)
 		return ret;
 	}
 
+	ret = timer_init_thread();
+	if (ret) {
+		log_err("timer_init_thread() failed, ret = %d", ret);
+		return ret;
+	}
+
 	ret = sched_init_thread();
 	if (ret) {
 		log_err("sched_init_thread() failed, ret = %d", ret);
