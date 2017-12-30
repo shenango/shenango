@@ -12,53 +12,73 @@
 
 #include "defs.h"
 
+struct init_entry {
+	const char *name;
+	int (*init)(void);
+};
+
+#define GLOBAL_INITIALIZER(name) \
+	{__cstr(name), &name ## _init}
+
+/* global subsystem initialization */
+static const struct init_entry global_init_handlers[] = {
+	/* runtime core */
+	GLOBAL_INITIALIZER(stack),
+	GLOBAL_INITIALIZER(sched),
+
+	/* network stack */
+	GLOBAL_INITIALIZER(net),
+	GLOBAL_INITIALIZER(arp),
+	GLOBAL_INITIALIZER(usocket),
+};
+
+#define THREAD_INITIALIZER(name) \
+	{__cstr(name), &name ## _init_thread}
+
+/* per-kthread subsystem initialization */
+static const struct init_entry thread_init_handlers[] = {
+	/* runtime core */
+	THREAD_INITIALIZER(kthread),
+	THREAD_INITIALIZER(ioqueues),
+	THREAD_INITIALIZER(stack),
+	THREAD_INITIALIZER(timer),
+	THREAD_INITIALIZER(sched),
+
+	/* network stack */
+	THREAD_INITIALIZER(net),
+	THREAD_INITIALIZER(usocket),
+};
+
+static int run_init_handlers(const char *phase,
+			     const struct init_entry *h, int nr)
+{
+	int i, ret;
+
+	log_debug("entering '%s' init phase", phase);
+	for (i = 0; i < nr; i++) {
+		log_debug("init -> %s", h[0].name);
+		ret = h[i].init();
+		if (ret) {
+			log_debug("failed, ret = %d", ret);
+			return ret;
+		}
+	}
+
+	return 0;
+}
+
 static int runtime_init_thread(void)
 {
 	int ret;
 
 	ret = base_init_thread();
 	if (ret) {
-		log_err("base_init_thread() failed, ret = %d", ret);
+		log_err("base library per-thread init failed, ret = %d", ret);
 		return ret;
 	}
 
-	ret = kthread_init_thread();
-	if (ret) {
-		log_err("kthread_init_thread() failed, ret = %d", ret);
-		return ret;
-	}
-
-	ret = stack_init_thread();
-	if (ret) {
-		log_err("stack_init_thread() failed, ret = %d", ret);
-		return ret;
-	}
-
-	ret = ioqueues_init_thread();
-	if (ret) {
-		log_err("ioqueues_init_thread() failed, ret = %d", ret);
-		return ret;
-	}
-
-	ret = net_init_thread();
-	if (ret) {
-		log_err("net_init_thread() failed, ret = %d", ret);
-		return ret;
-	}
-
-	ret = timer_init_thread();
-	if (ret) {
-		log_err("timer_init_thread() failed, ret = %d", ret);
-		return ret;
-	}
-
-	ret = sched_init_thread();
-	if (ret) {
-		log_err("sched_init_thread() failed, ret = %d", ret);
-		return ret;
-	}
-
-	return 0;
+	return run_init_handlers("per-thread", thread_init_handlers,
+				 ARRAY_SIZE(thread_init_handlers));
 }
 
 static void *pthread_entry(void *data)
@@ -89,41 +109,28 @@ int runtime_init(thread_fn_t main_fn, void *arg, unsigned int threads)
 	pthread_t tid[NCPU];
 	int ret, i;
 
-	if (threads < 1)
-		return -EINVAL;
-
 	ret = base_init();
 	if (ret) {
-		log_err("base_init() failed, ret = %d", ret);
+		log_err("base library global init failed, ret = %d", ret);
 		return ret;
 	}
 
-	if (threads > cpu_count - 1)
+	if (threads < 1 || threads > cpu_count - 1) {
+		log_err("invalid number of kthreads, requested %d, detected %d",
+			threads, cpu_count);
 		return -EINVAL;
-
-	ret = stack_init();
-	if (ret) {
-		log_err("stack_init() failed, ret = %d", ret);
-		return ret;
 	}
 
 	ret = ioqueues_init(threads);
 	if (ret) {
-		log_err("ioqueues_init() failed, ret = %d", ret);
+		log_err("couldn't connect to iokernel, ret = %d", ret);
 		return ret;
 	}
 
-	ret = net_init();
-	if (ret) {
-		log_err("net_init() failed, ret = %d", ret);
+        ret = run_init_handlers("global", global_init_handlers,
+                                ARRAY_SIZE(global_init_handlers));
+	if (ret)
 		return ret;
-	}
-
-	ret = sched_init();
-	if (ret) {
-		log_err("sched_init() failed, ret = %d", ret);
-		return ret;
-	}
 
 	/* point of no return starts here */
 

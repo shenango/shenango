@@ -234,11 +234,11 @@ int arp_lookup(uint32_t daddr, struct eth_addr *dhost_out, struct mbuf *m)
 }
 
 /**
- * net_arp_init - initializes the ARP subsystem
+ * arp_init - initializes the ARP subsystem
  *
  * Always returns 0 for success.
  */
-int net_arp_init(void)
+int arp_init(void)
 {
 	int i;
 

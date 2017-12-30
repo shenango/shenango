@@ -355,15 +355,18 @@ extern thread_t *timer_run(struct kthread *k);
 extern int kthread_init_thread(void);
 extern int ioqueues_init_thread(void);
 extern int stack_init_thread(void);
-extern int net_init_thread(void);
-extern int sched_init_thread(void);
 extern int timer_init_thread(void);
+extern int sched_init_thread(void);
+extern int net_init_thread(void);
+extern int usocket_init_thread(void);
 
 /* global initialization */
 extern int ioqueues_init(unsigned int threads);
 extern int stack_init(void);
-extern int net_init(void);
 extern int sched_init(void);
+extern int net_init(void);
+extern int arp_init(void);
+extern int usocket_init(void);
 
 /* runtime entry helpers */
 extern void sched_start(void) __noreturn;

@@ -418,15 +418,8 @@ int net_tx_ip(struct mbuf *m, uint8_t proto, uint32_t daddr)
  */
 int net_init_thread(void)
 {
-	int ret;
-
 	tcache_init_perthread(net_mbuf_tcache, &net_mbuf_pt);
 	tcache_init_perthread(net_tx_buf_tcache, &net_tx_buf_pt);
-
-	ret = usocket_init_thread();
-	if (ret)
-		return ret;
-
 	return 0;
 }
 
@@ -466,14 +459,5 @@ int net_init(void)
 	netcfg.broadcast = netcfg.network | ~netcfg.netmask;
 
 	BUILD_ASSERT(sizeof(struct net_cfg) == CACHE_LINE_SIZE);
-
-	ret = net_arp_init();
-	if (ret)
-		return ret;
-
-	ret = usocket_init();
-	if (ret)
-		return ret;
-
 	return 0;
 }
