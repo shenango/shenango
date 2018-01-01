@@ -9,22 +9,41 @@
 #include <base/hash.h>
 #include <net/arp.h>
 #include <runtime/rculist.h>
+#include <runtime/timer.h>
 
 #include "defs.h"
 
 #define ARP_SEED		0xD4812A53
 #define ARP_TABLE_CAPACITY	1024
-#define ARP_EXPIRATION		(1000 * ONE_SECOND)
+#define ARP_RETRIES		3
+#define ARP_RETRY_TIME		ONE_SECOND
+#define ARP_REPROBE_TIME	(5 * ONE_SECOND)
 
-/*
- * A single entry in the ARP table.
- */
+enum {
+	/* the MAC address is being probed */
+	ARP_STATE_PROBING = 0,
+	/* the MAC address is valid */
+	ARP_STATE_VALID,
+	/* the MAC address is probably valid but is being confirmed */
+	ARP_STATE_VALID_BUT_REPROBING,
+};
+
+/* A single entry in the ARP table. */
 struct arp_entry {
-	uint32_t		valid;
+	/* accessed by RCU sections */
+	uint32_t		state;
 	uint32_t		ip;
 	struct eth_addr		eth;
-	struct mbufq		q;
 	struct rcu_hlist_node	link;
+
+	/* accessed only with @arp_lock */
+	union {
+		struct mbufq	q;
+		struct rcu_head rcuh;
+	};
+	uint64_t		ts;
+	int			tries_left;
+	int			pad;
 };
 
 static DEFINE_SPINLOCK(arp_lock);
@@ -49,6 +68,25 @@ static struct arp_entry *lookup_entry(int idx, uint32_t daddr)
 	return NULL;
 }
 
+static void release_entry(struct rcu_head *h)
+{
+	struct arp_entry *e = container_of(h, struct arp_entry, rcuh);
+	free(e);
+}
+
+static void delete_entry(struct arp_entry *e)
+{
+	rcu_hlist_del(&e->link);
+
+	/* free any mbufs waiting for an ARP response */
+	while (!mbufq_empty(&e->q)) {
+		struct mbuf *m = mbufq_pop_head(&e->q);
+		mbuf_free(m);
+	}
+
+	rcu_free(&e->rcuh, release_entry);
+}
+
 static struct arp_entry *create_entry(uint32_t daddr)
 {
 	struct arp_entry *e = malloc(sizeof(*e));
@@ -56,40 +94,11 @@ static struct arp_entry *create_entry(uint32_t daddr)
 		return NULL;
 
 	e->ip = daddr;
-	e->valid = false;
+	e->state = ARP_STATE_PROBING;
+	e->ts = microtime();
+	e->tries_left = ARP_RETRIES;
 	mbufq_init(&e->q);
 	return e;
-}
-
-static void update_entry(uint32_t daddr, struct eth_addr dhost)
-{
-	struct mbufq q;
-	int idx = hash_ip(daddr);
-	struct arp_entry *e;
-
-	mbufq_init(&q);
-
-	spin_lock(&arp_lock);
-	e = lookup_entry(idx, daddr);
-	if (!e) {
-		e = create_entry(daddr);
-		if (unlikely(!e)) {
-			spin_unlock(&arp_lock);
-			return;
-		}
-
-		rcu_hlist_add_head(&arp_tbl[idx], &e->link);
-	}
-	e->eth = dhost;
-	store_release(&e->valid, true);
-	mbufq_merge_to_tail(&q, &e->q);
-	spin_unlock(&arp_lock);
-
-	/* drain mbufs waiting for ARP response */
-	while (!mbufq_empty(&q)) {
-		struct mbuf *m = mbufq_pop_head(&q);
-		net_tx_eth_or_free(m, ETHTYPE_IP, dhost);
-	}
 }
 
 static void arp_send(uint16_t op, struct eth_addr dhost, uint32_t daddr)
@@ -116,6 +125,92 @@ static void arp_send(uint16_t op, struct eth_addr dhost, uint32_t daddr)
 	arp_hdr_ethip->target_ip = hton32(daddr);
 
 	net_tx_eth_or_free(m, ETHTYPE_ARP, dhost);
+}
+
+static void arp_age_entry(uint64_t now_us, struct arp_entry *e)
+{
+	/* check if this entry has timed out */
+	if (now_us - e->ts < (e->state == ARP_STATE_VALID) ?
+	    ARP_REPROBE_TIME : ARP_RETRY_TIME)
+		return;
+
+	switch (e->state) {
+	case ARP_STATE_PROBING:
+	case ARP_STATE_VALID_BUT_REPROBING:
+		if (e->tries_left == 0) {
+			delete_entry(e);
+			return;
+		}
+		e->tries_left--;
+		arp_send(ARP_OP_REQUEST, eth_addr_broadcast, e->ip);
+		break;
+
+	case ARP_STATE_VALID:
+		e->state = ARP_STATE_VALID_BUT_REPROBING;
+		e->tries_left = ARP_RETRIES;
+		arp_send(ARP_OP_REQUEST, eth_addr_broadcast, e->ip);
+		break;
+
+	default:
+		panic("arp: invalid entry state %d", e->state);
+	}
+
+	e->ts = microtime();
+}
+
+static void arp_worker(void *arg)
+{
+	struct arp_entry *e;
+	struct rcu_hlist_node *node;
+	uint64_t now_us = microtime();
+	int i;
+
+	/* wake up each second and update the ARP table */
+	while (true) {
+		spin_lock(&arp_lock);
+		for (i = 0; i < ARP_TABLE_CAPACITY; i++) {
+			rcu_hlist_for_each(&arp_tbl[i], node, true) {
+				e = rcu_hlist_entry(node,
+						    struct arp_entry, link);
+				arp_age_entry(now_us, e);
+			}
+		}
+		spin_unlock(&arp_lock);
+
+		timer_sleep(ONE_SECOND);
+	}
+}
+
+static void arp_update(uint32_t daddr, struct eth_addr dhost)
+{
+	struct mbufq q;
+	int idx = hash_ip(daddr);
+	struct arp_entry *e;
+
+	mbufq_init(&q);
+
+	spin_lock(&arp_lock);
+	e = lookup_entry(idx, daddr);
+	if (!e) {
+		e = create_entry(daddr);
+		if (unlikely(!e)) {
+			spin_unlock(&arp_lock);
+			return;
+		}
+
+		rcu_hlist_add_head(&arp_tbl[idx], &e->link);
+	}
+	e->eth = dhost;
+	e->ts = microtime();
+	store_release(&e->state, ARP_STATE_VALID);
+	mbufq_merge_to_tail(&q, &e->q);
+	spin_unlock(&arp_lock);
+
+	/* drain mbufs waiting for ARP response */
+	while (!mbufq_empty(&q)) {
+		struct mbuf *m = mbufq_pop_head(&q);
+		net_tx_eth_or_free(m, ETHTYPE_IP, dhost);
+	}
 }
 
 /**
@@ -153,7 +248,7 @@ void net_rx_arp(struct mbuf *m)
 		goto out;
 
 	am_target = (netcfg.addr == target_ip);
-	update_entry(sender_ip, sender_mac);
+	arp_update(sender_ip, sender_mac);
 
 	if (am_target && op == ARP_OP_REQUEST) {
 		log_debug("arp: responding to arp request "
@@ -189,7 +284,7 @@ int arp_lookup(uint32_t daddr, struct eth_addr *dhost_out, struct mbuf *m)
 	/* hot-path: @daddr hits in ARP cache */
 	rcu_read_lock();
 	e = lookup_entry(idx, daddr);
-	if (likely(e && load_acquire(&e->valid))) {
+	if (likely(e && load_acquire(&e->state) != ARP_STATE_PROBING)) {
 		*dhost_out = e->eth;
 		rcu_read_unlock();
 		return 0;
@@ -209,8 +304,8 @@ int arp_lookup(uint32_t daddr, struct eth_addr *dhost_out, struct mbuf *m)
 	e = lookup_entry(idx, daddr);
 	if (e) {
 		/* entry already exists */
-		free (newe);
-		if (e->valid) {
+		free(newe);
+		if (e->state != ARP_STATE_PROBING) {
 			*dhost_out = e->eth;
 			spin_unlock(&arp_lock);
 			return 0;
@@ -247,4 +342,14 @@ int arp_init(void)
 		rcu_hlist_init_head(&arp_tbl[i]);
 
 	return 0;
+}
+
+/**
+ * arp_init_late - starts the ARP worker thread
+ *
+ * Returns 0 if successful.
+ */
+int arp_init_late(void)
+{
+	return thread_spawn(arp_worker, NULL);
 }

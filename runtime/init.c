@@ -49,6 +49,14 @@ static const struct init_entry thread_init_handlers[] = {
 	THREAD_INITIALIZER(usocket),
 };
 
+#define LATE_INITIALIZER(name) \
+	{__cstr(name), &name ## _init_late}
+
+static const struct init_entry late_init_handlers[] = {
+	/* network stack */
+	LATE_INITIALIZER(arp),
+};
+
 static int run_init_handlers(const char *phase,
 			     const struct init_entry *h, int nr)
 {
@@ -146,6 +154,11 @@ int runtime_init(thread_fn_t main_fn, void *arg, unsigned int threads)
 	BUG_ON(ret);
 
 	kthread_attach();
+
+        ret = run_init_handlers("late", late_init_handlers,
+                                ARRAY_SIZE(late_init_handlers));
+	BUG_ON(ret);
+
 	sched_start();
 
 	/* never reached unless things are broken */

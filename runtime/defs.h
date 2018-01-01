@@ -368,6 +368,9 @@ extern int net_init(void);
 extern int arp_init(void);
 extern int usocket_init(void);
 
+/* late initialization */
+extern int arp_init_late(void);
+
 /* runtime entry helpers */
 extern void sched_start(void) __noreturn;
 extern int thread_spawn_main(thread_fn_t fn, void *arg);
