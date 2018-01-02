@@ -184,7 +184,7 @@ fail:
  * memory.
  */
 static struct rte_mempool *dpdk_pktmbuf_completion_pool_create(const char *name,
-		unsigned n, unsigned cache_size, uint16_t priv_size, int socket_id)
+		unsigned n, uint16_t priv_size, int socket_id)
 {
 	struct rte_mempool *mp;
 	struct rte_pktmbuf_pool_private mbp_priv;
@@ -786,8 +786,8 @@ int dpdk_init(uint8_t port)
 
 	/* Create a new dummy mempool to handle completions for egress packets. */
 	egress_mbuf_pool = dpdk_pktmbuf_completion_pool_create("EGRESS_MBUF_POOL",
-			NUM_MBUFS * nb_ports, MBUF_CACHE_SIZE,
-			sizeof(struct egress_pktmbuf_priv), rte_socket_id());
+			NUM_MBUFS * nb_ports, sizeof(struct egress_pktmbuf_priv),
+			rte_socket_id());
 
 	if (egress_mbuf_pool == NULL)
 		rte_exit(EXIT_FAILURE, "Cannot create egress mbuf pool\n");
