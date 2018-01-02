@@ -15,10 +15,6 @@
 /* the maximum number of packets to process per scheduler invocation */
 #define MAX_BUDGET	512
 
-#define TEMP_IP_ADDR 3232235781 // 192.168.1.5
-#define TEMP_NETMASK 0xffffff00 // 255.255.255.0
-#define TEMP_GATEWAY 0
-
 /* important global state */
 struct net_cfg netcfg __aligned(CACHE_LINE_SIZE);
 
@@ -390,7 +386,7 @@ int net_tx_ip(struct mbuf *m, uint8_t proto, uint32_t daddr)
 	m->txflags |= OLFLAG_IP_CHKSUM | OLFLAG_IPV4;
 
 	/* simple IP routing */
-	if ((daddr & netcfg.netmask) != netcfg.network)
+	if ((daddr & netcfg.netmask) != (netcfg.addr & netcfg.netmask))
 		daddr = netcfg.gateway;
 
 	/* need to use ARP to resolve dhost */
@@ -423,6 +419,20 @@ int net_init_thread(void)
 	return 0;
 }
 
+
+static void net_dump_config(void)
+{
+	char buf[IP_ADDR_STR_LEN];
+
+	log_info("net: using the following configuration:");
+	log_info("  addr:\t%s", ip_addr_to_str(netcfg.addr, buf));
+	log_info("  netmask:\t%s", ip_addr_to_str(netcfg.netmask, buf));
+	log_info("  gateway:\t%s", ip_addr_to_str(netcfg.gateway, buf));
+	log_info("  mac:\t%02X:%02X:%02X:%02X:%02X:%02X",
+		 netcfg.mac.addr[0], netcfg.mac.addr[1], netcfg.mac.addr[2],
+		 netcfg.mac.addr[3], netcfg.mac.addr[4], netcfg.mac.addr[5]);
+}
+
 /**
  * net_init - initializes the network stack
  *
@@ -452,12 +462,7 @@ int net_init(void)
 	if (!net_tx_buf_tcache)
 		return -ENOMEM;
 
-	netcfg.addr = TEMP_IP_ADDR;
-	netcfg.netmask = TEMP_NETMASK;
-	netcfg.gateway = TEMP_GATEWAY;
-	netcfg.network = netcfg.addr & netcfg.netmask;
-	netcfg.broadcast = netcfg.network | ~netcfg.netmask;
-
-	BUILD_ASSERT(sizeof(struct net_cfg) == CACHE_LINE_SIZE);
+	log_info("net: started network stack");
+	net_dump_config();
 	return 0;
 }

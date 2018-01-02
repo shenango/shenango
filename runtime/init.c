@@ -64,7 +64,7 @@ static int run_init_handlers(const char *phase,
 
 	log_debug("entering '%s' init phase", phase);
 	for (i = 0; i < nr; i++) {
-		log_debug("init -> %s", h[0].name);
+		log_debug("init -> %s", h[i].name);
 		ret = h[i].init();
 		if (ret) {
 			log_debug("failed, ret = %d", ret);
@@ -106,13 +106,13 @@ static void *pthread_entry(void *data)
 
 /**
  * runtime_init - starts the runtime
+ * @cfgpath: the path to the configuration file
  * @main_fn: the first function to run as a thread
  * @arg: an argument to @main_fn
- * @threads: the number of threads to use
  *
  * Does not return if successful, otherwise return  < 0 if an error.
  */
-int runtime_init(thread_fn_t main_fn, void *arg, unsigned int threads)
+int runtime_init(const char *cfgpath, thread_fn_t main_fn, void *arg)
 {
 	pthread_t tid[NCPU];
 	int ret, i;
@@ -123,13 +123,11 @@ int runtime_init(thread_fn_t main_fn, void *arg, unsigned int threads)
 		return ret;
 	}
 
-	if (threads < 1 || threads > cpu_count - 1) {
-		log_err("invalid number of kthreads, requested %d, detected %d",
-			threads, cpu_count);
-		return -EINVAL;
-	}
+	ret = cfg_load(cfgpath);
+	if (ret)
+		return ret;
 
-	ret = ioqueues_init(threads);
+	ret = ioqueues_init(maxks);
 	if (ret) {
 		log_err("couldn't connect to iokernel, ret = %d", ret);
 		return ret;
@@ -142,7 +140,8 @@ int runtime_init(thread_fn_t main_fn, void *arg, unsigned int threads)
 
 	/* point of no return starts here */
 
-	for (i = 1; i < threads; i++) {
+	log_info("spawning %d kthreads", maxks);
+	for (i = 1; i < maxks; i++) {
 		ret = pthread_create(&tid[i], NULL, pthread_entry, NULL);
 		BUG_ON(ret);
 	}

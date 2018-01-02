@@ -2,6 +2,8 @@
  * test_runtime_thread.c - tests basic thread spawning
  */
 
+#include <stdio.h>
+
 #include <base/stddef.h>
 #include <base/log.h>
 #include <base/time.h>
@@ -11,7 +13,6 @@
 
 #define WORKERS		1000
 #define N		100000
-#define NCORES		4
 
 static void work_handler(void *arg)
 {
@@ -44,17 +45,21 @@ static void main_handler(void *arg)
 	waitgroup_wait(&wg);
 	timeouts_per_second = (double)(WORKERS * N) /
 		((microtime() - start_us) * 0.000001);
-	log_info("handled %f timeouts / second / core",
-		 timeouts_per_second / NCORES);
+	log_info("handled %f timeouts / second", timeouts_per_second);
 }
 
 int main(int argc, char *argv[])
 {
 	int ret;
 
-	ret = runtime_init(main_handler, NULL, NCORES);
+	if (argc < 2) {
+		printf("arg must be config file\n");
+		return -EINVAL;
+	}
+
+	ret = runtime_init(argv[1], main_handler, NULL);
 	if (ret) {
-		log_err("failed to start runtime");
+		printf("failed to start runtime\n");
 		return ret;
 	}
 

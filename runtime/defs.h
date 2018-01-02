@@ -274,6 +274,7 @@ static inline struct kthread *myk(void)
 }
 
 DECLARE_SPINLOCK(klock);
+extern unsigned int maxks;
 extern unsigned int nrks;
 extern struct kthread *ks[NCPU];
 
@@ -315,11 +316,11 @@ struct net_cfg {
 	uint32_t		addr;
 	uint32_t		netmask;
 	uint32_t		gateway;
-	uint32_t		broadcast;
-	uint32_t		network;
 	struct eth_addr		mac;
-	uint8_t			pad[6];
+	uint8_t			pad[14];
 } __packed;
+
+BUILD_ASSERT(sizeof(struct net_cfg) == CACHE_LINE_SIZE);
 
 extern struct net_cfg netcfg;
 
@@ -370,6 +371,9 @@ extern int usocket_init(void);
 
 /* late initialization */
 extern int arp_init_late(void);
+
+/* configuration loading */
+extern int cfg_load(const char *path);
 
 /* runtime entry helpers */
 extern void sched_start(void) __noreturn;

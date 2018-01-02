@@ -116,11 +116,12 @@ void dump_udp_pkt(int loglvl, uint32_t saddr, struct udp_hdr *udp_hdr,
  *
  * The buffer must be IP_ADDR_STR_LEN in size.
  */
-void ip_addr_to_str(uint32_t addr, char *str)
+char *ip_addr_to_str(uint32_t addr, char *str)
 {
 	snprintf(str, IP_ADDR_STR_LEN, "%d.%d.%d.%d",
 		 ((addr >> 24) & 0xff),
                  ((addr >> 16) & 0xff),
                  ((addr >> 8) & 0xff),
                  (addr & 0xff));
+	return str;
 }

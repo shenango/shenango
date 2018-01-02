@@ -201,7 +201,7 @@ static struct rte_mempool *dpdk_pktmbuf_completion_pool_create(const char *name,
 	mbp_priv.mbuf_data_room_size = 0;
 	mbp_priv.mbuf_priv_size = priv_size;
 
-	mp = rte_mempool_create_empty(name, n, elt_size, cache_size,
+	mp = rte_mempool_create_empty(name, n, elt_size, 0,
 		 sizeof(struct rte_pktmbuf_pool_private), socket_id, 0);
 	if (mp == NULL)
 		return NULL;

@@ -13,6 +13,8 @@
 
 /* protects @ks and @nrks below */
 DEFINE_SPINLOCK(klock);
+/* the maximum number of kthreads */
+unsigned int maxks;
 /* the total number of kthreads (i.e. the size of @ks) */
 unsigned int nrks;
 /* an array of all the kthreads (for work-stealing) */
@@ -59,7 +61,7 @@ int kthread_init_thread(void)
 void kthread_attach(void)
 {
 	spin_lock(&klock);
-	assert(nrks < cpu_count - 1);
+	assert(nrks < maxks);
 	ks[nrks++] = mykthread;
 	rcu_tlgen = rcu_gen;
 	spin_unlock(&klock);

@@ -1,8 +1,9 @@
 /*
- * test_runtime_thread.c - tests basic thread spawning
+ * test_udp_echo.c - echoes UDP packets
  */
 
 #include <string.h>
+#include <stdio.h>
 
 #include <base/stddef.h>
 #include <base/log.h>
@@ -54,9 +55,14 @@ int main(int argc, char *argv[])
 {
 	int ret;
 
-	ret = runtime_init(main_handler, NULL, NCORES);
+	if (argc < 2) {
+		printf("arg must be config file\n");
+		return -EINVAL;
+	}
+
+	ret = runtime_init(argv[1], main_handler, NULL);
 	if (ret) {
-		log_err("failed to start runtime");
+		printf("failed to start runtime\n");
 		return ret;
 	}
 

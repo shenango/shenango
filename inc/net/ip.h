@@ -49,7 +49,7 @@
 
 #define IP_ADDR_STR_LEN	16
 
-extern void ip_addr_to_str(uint32_t addr, char *str);
+extern char *ip_addr_to_str(uint32_t addr, char *str);
 
 /*
  * Structure of an internet header, naked of options.

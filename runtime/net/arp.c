@@ -17,7 +17,7 @@
 #define ARP_TABLE_CAPACITY	1024
 #define ARP_RETRIES		3
 #define ARP_RETRY_TIME		ONE_SECOND
-#define ARP_REPROBE_TIME	(5 * ONE_SECOND)
+#define ARP_REPROBE_TIME	(10 * ONE_SECOND)
 
 enum {
 	/* the MAC address is being probed */
@@ -130,8 +130,8 @@ static void arp_send(uint16_t op, struct eth_addr dhost, uint32_t daddr)
 static void arp_age_entry(uint64_t now_us, struct arp_entry *e)
 {
 	/* check if this entry has timed out */
-	if (now_us - e->ts < (e->state == ARP_STATE_VALID) ?
-	    ARP_REPROBE_TIME : ARP_RETRY_TIME)
+	if (now_us - e->ts < ((e->state == ARP_STATE_VALID) ?
+			      ARP_REPROBE_TIME : ARP_RETRY_TIME))
 		return;
 
 	switch (e->state) {
@@ -162,11 +162,13 @@ static void arp_worker(void *arg)
 {
 	struct arp_entry *e;
 	struct rcu_hlist_node *node;
-	uint64_t now_us = microtime();
+	uint64_t now_us;
 	int i;
 
 	/* wake up each second and update the ARP table */
 	while (true) {
+		now_us = microtime();
+
 		spin_lock(&arp_lock);
 		for (i = 0; i < ARP_TABLE_CAPACITY; i++) {
 			rcu_hlist_for_each(&arp_tbl[i], node, true) {

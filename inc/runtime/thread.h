@@ -42,4 +42,4 @@ extern int thread_spawn(thread_fn_t fn, void *arg);
 extern void thread_exit(void) __noreturn;
 
 /* main initialization */
-extern int runtime_init(thread_fn_t main_fn, void *arg, unsigned int cores);
+extern int runtime_init(const char *cfgpath, thread_fn_t main_fn, void *arg);
