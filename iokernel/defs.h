@@ -22,7 +22,6 @@ struct thread {
 
 struct proc {
 	pid_t			pid;
-	mem_key_t		key;
 	struct shm_region	region;
 	bool			removed;
 

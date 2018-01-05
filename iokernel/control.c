@@ -109,12 +109,13 @@ static struct proc *control_create_proc(mem_key_t key, size_t len, pid_t pid)
 	memcpy(threads, ((struct control_hdr *)shbuf)->threads,
 	       sizeof(*threads) * hdr.thread_count);
 
-	p->thread_count = hdr.thread_count;
-	p->sched_cfg = hdr.sched_cfg;
+	p->pid = pid;
 	reg.base = shbuf;
 	reg.len = len;
 	p->region = reg;
 	p->removed = false;
+	p->sched_cfg = hdr.sched_cfg;
+	p->thread_count = hdr.thread_count;
 	if (eth_addr_is_multicast(&hdr.mac) || eth_addr_is_zero(&hdr.mac))
 		goto fail_free_proc;
 	p->mac = hdr.mac;

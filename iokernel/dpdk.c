@@ -63,6 +63,7 @@
 #define CONTROL_BURST_SIZE 8
 #define CMD_BURST_SIZE 32
 #define MAC_TO_PROC_ENTRIES	128
+#define PID_TO_PROC_ENTRIES	128
 
 static const struct rte_eth_conf port_conf_default = {
 	.rxmode = {
@@ -77,13 +78,15 @@ static struct proc *clients[IOKERNEL_MAX_PROC];
 static int nr_clients = 0;
 struct rte_mempool *egress_mbuf_pool;
 static struct rte_hash *mac_to_proc;
+static struct rte_hash *pid_to_proc;
 
 /*
  * Private data stored in egress mbufs, used to send completions to runtimes.
  */
 struct egress_pktmbuf_priv {
-	struct thread *thread;
-	unsigned long completion_data;
+	pid_t			pid;
+	struct thread	*thread;
+	unsigned long	completion_data;
 };
 
 static inline struct egress_pktmbuf_priv *egress_get_priv(struct rte_mbuf *buf)
@@ -399,6 +402,7 @@ static void dpdk_prepare_tx_mbuf(struct rte_mbuf *buf,
 
 	/* initialize the private data, used to send completion events */
 	priv_data = egress_get_priv(buf);
+	priv_data->pid = p->pid;
 	priv_data->thread = thread;
 	priv_data->completion_data = net_hdr->completion_data;
 }
@@ -425,15 +429,24 @@ static bool dpdk_enqueue_to_runtime(struct rx_net_hdr *net_hdr, struct proc *p)
 bool dpdk_send_completion(void *obj) {
 	struct rte_mbuf *buf;
 	struct egress_pktmbuf_priv *priv_data;
+	int ret;
+	void *data;
 	struct thread *t;
 
 	if (unlikely(nr_clients == 0))
 		return true;
 
-	/* TODO: verify that this proc is still registered */
-
+	/* check if runtime is still registered */
 	buf = (struct rte_mbuf *) obj;
 	priv_data = egress_get_priv(buf);
+	ret = rte_hash_lookup_data(pid_to_proc, &priv_data->pid, &data);
+	if (ret < 0) {
+		log_debug("dpdk: received completion for unregistered pid %u",
+				priv_data->pid);
+		return true; /* no need to send a completion */
+	}
+
+	/* send completion to runtime */
 	t = priv_data->thread;
 	if (!lrpc_send(&t->rxq, RX_NET_COMPLETE, priv_data->completion_data)) {
 		log_warn("dpdk: failed to enqueue completion event to runtime");
@@ -626,6 +639,10 @@ static inline void dpdk_add_client(struct proc *p)
 	ret = rte_hash_add_key_data(mac_to_proc, &p->mac.addr[0], p);
 	if (ret < 0)
 		log_err("dpdk: failed to add MAC to hash table in add_client");
+
+	ret = rte_hash_add_key_data(pid_to_proc, &p->pid, p);
+	if (ret < 0)
+		log_err("dpdk: failed to add PID to hash table in add_client");
 }
 
 /*
@@ -652,6 +669,10 @@ static inline void dpdk_remove_client(struct proc *p)
 	ret = rte_hash_del_key(mac_to_proc, &p->mac.addr[0]);
 	if (ret < 0)
 		log_err("dpdk: failed to remove MAC from hash table in remove client");
+
+	ret = rte_hash_del_key(pid_to_proc, &p->pid);
+	if (ret < 0)
+		log_err("dpdk: failed to remove PID from hash table in remove client");
 
 	/* TODO: free queued packets/commands? */
 
@@ -802,6 +823,17 @@ int dpdk_init(uint8_t port)
 	mac_to_proc = rte_hash_create(&hash_params);
 	if (mac_to_proc == NULL)
 		rte_exit(EXIT_FAILURE, "Failed to create MAC to proc hash table");
+
+	/* Initialize the hash table for mapping PIDs to runtimes. */
+	hash_params.name = "pid_to_proc_hash_table";
+	hash_params.entries = PID_TO_PROC_ENTRIES;
+	hash_params.key_len = sizeof(pid_t);
+	hash_params.hash_func = rte_jhash;
+	hash_params.hash_func_init_val = 0;
+	hash_params.socket_id = rte_socket_id();
+	pid_to_proc = rte_hash_create(&hash_params);
+	if (pid_to_proc == NULL)
+		rte_exit(EXIT_FAILURE, "Failed to create PID to proc hash table");
 
 	if (dpdk_init_control_comm() < 0)
 		rte_exit(EXIT_FAILURE,
