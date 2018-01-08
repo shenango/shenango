@@ -177,7 +177,9 @@ again:
 
 	/* finally try to steal from every kthread */
 	for (i = 0; i < nrks; i++) {
-		if (steal_work(l, r))
+		if (ks[i] == l)
+			continue;
+		if (steal_work(l, ks[i]))
 			goto done;
 	}
 
