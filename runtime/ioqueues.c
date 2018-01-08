@@ -14,6 +14,8 @@
 #include <base/lrpc.h>
 #include <base/mem.h>
 
+#include <iokernel/shm.h>
+
 #include <net/ethernet.h>
 #include <net/mbuf.h>
 
@@ -212,42 +214,6 @@ fail:
 
 }
 
-static int ioqueue_attach_lrpc_in(struct shm_region *r, struct queue_spec *s,
-				  struct lrpc_chan_in *c)
-{
-	struct lrpc_msg *tbl;
-	uint32_t *wb;
-
-	tbl = (struct lrpc_msg *)shmptr_to_ptr(
-	    r, s->msg_buf, sizeof(struct lrpc_msg) * s->msg_count);
-	if (!tbl)
-		return -EINVAL;
-
-	wb = (uint32_t *)shmptr_to_ptr(r, s->wb, sizeof(*wb));
-	if (!wb)
-		return -EINVAL;
-
-	return lrpc_init_in(c, tbl, s->msg_count, wb);
-}
-
-static int ioqueue_attach_lprc_out(struct shm_region *r, struct queue_spec *s,
-				   struct lrpc_chan_out *c)
-{
-	struct lrpc_msg *tbl;
-	uint32_t *wb;
-
-	tbl = (struct lrpc_msg *)shmptr_to_ptr(
-	    r, s->msg_buf, sizeof(struct lrpc_msg) * s->msg_count);
-	if (!tbl)
-		return -EINVAL;
-
-	wb = (uint32_t *)shmptr_to_ptr(r, s->wb, sizeof(*wb));
-	if (!wb)
-		return -EINVAL;
-
-	return lrpc_init_out(c, tbl, s->msg_count, wb);
-}
-
 int ioqueues_init_thread(void)
 {
 	int ret;
@@ -258,13 +224,13 @@ int ioqueues_init_thread(void)
 	struct thread_spec *ts = &iok.threads[nrqs++];
 	spin_unlock(&qlock);
 
-	ret = ioqueue_attach_lrpc_in(r, &ts->rxq, &myk()->rxq);
+	ret = shm_init_lrpc_in(r, &ts->rxq, &myk()->rxq);
 	BUG_ON(ret);
 
-	ret = ioqueue_attach_lprc_out(r, &ts->txpktq, &myk()->txpktq);
+	ret = shm_init_lrpc_out(r, &ts->txpktq, &myk()->txpktq);
 	BUG_ON(ret);
 
-	ret = ioqueue_attach_lprc_out(r, &ts->txcmdq, &myk()->txcmdq);
+	ret = shm_init_lrpc_out(r, &ts->txcmdq, &myk()->txcmdq);
 	BUG_ON(ret);
 
 	return 0;

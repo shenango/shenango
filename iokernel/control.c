@@ -28,51 +28,6 @@ struct lrpc_params lrpc_data_to_control_params;
 static struct lrpc_chan_out lrpc_control_to_data;
 static struct lrpc_chan_in lrpc_data_to_control;
 
-static int control_init_lrpc_in(struct shm_region *r, struct queue_spec *s,
-				struct lrpc_chan_in *c)
-{
-	struct lrpc_msg *tbl;
-	uint32_t *wb;
-
-	if (!is_power_of_two(s->msg_count))
-		return -EINVAL;
-
-	tbl = (struct lrpc_msg *)shmptr_to_ptr(r, s->msg_buf,
-		sizeof(struct lrpc_msg) * s->msg_count);
-	if (!tbl)
-		return -EINVAL;
-
-	wb = (uint32_t *)shmptr_to_ptr(r, s->wb, sizeof(*wb));
-	if (!wb)
-		return -EINVAL;
-
-	lrpc_init_in(c, tbl, s->msg_count, wb);
-	return 0;
-}
-
-static int control_init_lrpc_out(struct shm_region *r, struct queue_spec *s,
-				 struct lrpc_chan_out *c)
-{
-	struct lrpc_msg *tbl;
-	uint32_t *wb;
-
-	if (!is_power_of_two(s->msg_count))
-		return -EINVAL;
-
-	tbl = (struct lrpc_msg *)shmptr_to_ptr(r, s->msg_buf,
-		sizeof(struct lrpc_msg) * s->msg_count);
-	if (!tbl)
-		return -EINVAL;
-
-	wb = (uint32_t *)shmptr_to_ptr(r, s->wb, sizeof(*wb));
-	if (!wb)
-		return -EINVAL;
-
-	lrpc_init_out(c, tbl, s->msg_count, wb);
-	return 0;
-
-}
-
 static struct proc *control_create_proc(mem_key_t key, size_t len, pid_t pid)
 {
 	struct control_hdr hdr;
@@ -126,17 +81,17 @@ static struct proc *control_create_proc(mem_key_t key, size_t len, pid_t pid)
 		struct thread_spec *s = &threads[i];
 
 		/* attach the RX queue */
-		ret = control_init_lrpc_out(&reg, &s->rxq, &th->rxq);
+		ret = shm_init_lrpc_out(&reg, &s->rxq, &th->rxq);
 		if (ret)
 			goto fail_free_proc;
 
 		/* attach the TX packet queue */
-		ret = control_init_lrpc_in(&reg, &s->txpktq, &th->txpktq);
+		ret = shm_init_lrpc_in(&reg, &s->txpktq, &th->txpktq);
 		if (ret)
 			goto fail_free_proc;
 
 		/* attach the TX command queue */
-		ret = control_init_lrpc_in(&reg, &s->txcmdq, &th->txcmdq);
+		ret = shm_init_lrpc_in(&reg, &s->txcmdq, &th->txcmdq);
 		if (ret)
 			goto fail_free_proc;
 	}

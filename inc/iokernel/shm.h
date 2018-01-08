@@ -6,8 +6,9 @@
 
 #include <limits.h>
 
-#include <base/stddef.h>
 #include <base/atomic.h>
+#include <base/stddef.h>
+#include <base/lrpc.h>
 
 #define INGRESS_MBUF_SHM_KEY 0x696d736b /* "imsk" */
 #define INGRESS_MBUF_SHM_SIZE 0x20000000
@@ -102,4 +103,51 @@ shm_chain_set_next(struct shm_region *r, struct shm_chain *c,
 	shmptr_t shmptr = ptr_to_shmptr(r, next, len);
 	assert(c->next == SHMPTR_NULL);
 	store_release(&c->next, shmptr);
+}
+
+/**
+ * Functions for initializing lrpc channels in shared memory.
+ */
+
+/* describes a shared memory queue */
+struct queue_spec {
+	size_t			msg_count;
+	shmptr_t		msg_buf;
+	shmptr_t		wb;
+};
+
+static inline int shm_init_lrpc_in(struct shm_region *r, struct queue_spec *s,
+		struct lrpc_chan_in *c)
+{
+	struct lrpc_msg *tbl;
+	uint32_t *wb;
+
+	tbl = (struct lrpc_msg *) shmptr_to_ptr(r, s->msg_buf,
+			sizeof(struct lrpc_msg) * s->msg_count);
+	if (!tbl)
+		return -EINVAL;
+
+	wb = (uint32_t *) shmptr_to_ptr(r, s->wb, sizeof(*wb));
+	if (!wb)
+		return -EINVAL;
+
+	return lrpc_init_in(c, tbl, s->msg_count, wb);
+}
+
+static inline int shm_init_lrpc_out(struct shm_region *r, struct queue_spec *s,
+		struct lrpc_chan_out *c)
+{
+	struct lrpc_msg *tbl;
+	uint32_t *wb;
+
+	tbl = (struct lrpc_msg *) shmptr_to_ptr(r, s->msg_buf,
+			sizeof(struct lrpc_msg) * s->msg_count);
+	if (!tbl)
+		return -EINVAL;
+
+	wb = (uint32_t *) shmptr_to_ptr(r, s->wb, sizeof(*wb));
+	if (!wb)
+		return -EINVAL;
+
+	return lrpc_init_out(c, tbl, s->msg_count, wb);
 }

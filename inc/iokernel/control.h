@@ -11,13 +11,6 @@
 /* The abstract namespace path for the control socket. */
 #define CONTROL_SOCK_PATH	"\0/control/iokernel.sock"
 
-/* describes a shared memory queue */
-struct queue_spec {
-	size_t			msg_count;
-	shmptr_t		msg_buf;
-	shmptr_t		wb;
-};
-
 /* describes a runtime kernel thread */
 struct thread_spec {
 	struct queue_spec 	rxq;
