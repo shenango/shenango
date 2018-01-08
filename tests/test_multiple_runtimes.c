@@ -3,25 +3,29 @@
  */
 
 #include <stdio.h>
-#include <unistd.h>
 
 #include <base/log.h>
-#include <runtime/thread.h>
+#include <runtime/timer.h>
 
-#define N_RUNTIMES	8
+#define N_RUNTIMES	2
 #define SLEEP_S		5
 
 static void main_handler(void *arg)
 {
-	sleep(SLEEP_S);
+	int i;
+
+	for (i = 0; i < SLEEP_S; i++)
+		timer_sleep(1000*1000);
+
+	log_info("exiting runtime");
 }
 
 int main(int argc, char *argv[])
 {
 	int i, pid, ret;
 
-	if (argc < 2) {
-		printf("arg must be config file\n");
+	if (argc < 1 + N_RUNTIMES) {
+		printf("arg must provide a config file for each runtime\n");
 		return -EINVAL;
 	}
 
@@ -30,7 +34,7 @@ int main(int argc, char *argv[])
 		BUG_ON(pid == -1);
 
 		if (pid == 0) {
-			ret = runtime_init(argv[1], main_handler, NULL);
+			ret = runtime_init(argv[1 + i], main_handler, NULL);
 			BUG_ON(ret < 0);
 		}
 

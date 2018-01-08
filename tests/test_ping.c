@@ -2,13 +2,11 @@
  * test_ping.c - sends ping echo requests
  */
 
-#include <unistd.h>
 #include <stdio.h>
 
 #include <base/log.h>
-#include <base/time.h>
 #include <net/ping.h>
-#include <runtime/thread.h>
+#include <runtime/timer.h>
 
 #define N_PINGS 10
 #define DEST_IP_ADDR 3232235778 // 192.168.1.2
@@ -16,7 +14,6 @@
 static void main_handler(void *arg)
 {
 	int i, ret;
-	uint64_t next_ping_time;
 
 	ret = net_ping_init();
 	if (ret) {
@@ -24,14 +21,11 @@ static void main_handler(void *arg)
 		return;
 	}
 
-	next_ping_time = microtime();
 	for (i = 0; i < N_PINGS; i++) {
 		net_send_ping(i, DEST_IP_ADDR);
 
 		/* wait 1 second before sending next ping */
-		next_ping_time += 1000 * 1000;
-		while (microtime() < next_ping_time)
-			thread_yield();
+		timer_sleep(1000*1000);
 	}
 }
 
