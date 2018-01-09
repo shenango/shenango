@@ -3,8 +3,10 @@
  */
 
 #include <stdio.h>
+#include <unistd.h>
 
 #include <base/log.h>
+#include <runtime/thread.h>
 #include <runtime/timer.h>
 
 #define N_RUNTIMES	2
