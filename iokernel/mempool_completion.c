@@ -17,7 +17,7 @@ static int completion_enqueue(struct rte_mempool *mp, void * const *obj_table,
 	unsigned i;
 
 	for (i = 0; i < n; i++) {
-		if (!dpdk_send_completion(obj_table[i]))
+		if (!tx_send_completion(obj_table[i]))
 			return -ENOBUFS;
 	}
 

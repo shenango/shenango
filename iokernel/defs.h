@@ -8,11 +8,18 @@
 #include <iokernel/control.h>
 #include <net/ethernet.h>
 
+/*
+ * Constant limits
+ */
+#define IOKERNEL_MAX_PROC 1024
+#define IOKERNEL_NUM_MBUFS	8191
+#define IOKERNEL_PKT_BURST_SIZE	32
+#define IOKERNEL_CONTROL_BURST_SIZE 8
+#define IOKERNEL_CMD_BURST_SIZE 32
 
 /*
  * Process Support
  */
-#define IOKERNEL_MAX_PROC 1024
 
 struct thread {
 	struct lrpc_chan_out	rxq;
@@ -68,14 +75,40 @@ enum {
 };
 
 /*
+ * Dataplane state
+ */
+struct dataplane {
+	uint8_t				port;
+	struct rte_mempool	*rx_mbuf_pool;
+
+	struct proc			*clients[IOKERNEL_MAX_PROC];
+	int					nr_clients;
+	struct rte_hash		*mac_to_proc;
+	struct rte_hash		*pid_to_proc;
+};
+
+extern struct dataplane dp;
+
+/*
  * Initialization
  */
 
 extern int control_init(void);
-extern int dpdk_init(uint8_t port);
+extern int dpdk_init();
+extern int rx_init();
+extern int tx_init();
+extern int dp_clients_init();
+extern int dpdk_late_init();
 
 /*
- * DPDK functions
+ * dataplane RX/TX functions
  */
-extern void dpdk_loop(uint8_t port) __noreturn;
-extern bool dpdk_send_completion(void *buf);
+extern void rx_burst();
+extern void tx_burst();
+extern bool tx_send_completion(void *obj);
+
+/*
+ * dataplane functions for communicating with runtimes and the control plane
+ */
+extern void dp_clients_rx_control_lrpcs();
+extern void commands_rx();
