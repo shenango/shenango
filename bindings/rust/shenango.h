@@ -4,6 +4,7 @@
 #include <base/assert.h>
 #include <base/init.h>
 #include <base/log.h>
+#include <base/lock.h>
 #include <base/slab.h>
 #include <base/smalloc.h>
 #include <base/tcache.h>

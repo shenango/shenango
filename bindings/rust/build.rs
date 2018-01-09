@@ -19,6 +19,8 @@ fn main() {
         // The input header we would like to generate
         // bindings for.
         .header("shenango.h")
+        // See github.com/rust-lang-nursery/rust-bindgen/issues/550
+        .blacklist_type("max_align_t")
         // Finish the builder and generate the bindings.
         .generate()
         // Unwrap the Result and panic on failure.

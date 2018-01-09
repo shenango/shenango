@@ -27,6 +27,13 @@ static struct tcache *thread_tcache;
 static __thread struct tcache_perthread thread_pt;
 
 /**
+ * In inc/runtime/thread.h, this function is declared inline (rather than static
+ * inline) so that it is accessible to the Rust bindings. As a result, it must
+ * also appear in a source file to avoid linker errors.
+ */
+thread_t *thread_self(void);
+
+/**
  * call_thread - runs a thread, popping its trap frame
  * @th: the thread to run
  *

@@ -2,12 +2,35 @@
 #![allow(non_camel_case_types)]
 #![allow(non_snake_case)]
 #![feature(asm)]
+#![feature(integer_atomics)]
+#![feature(thread_local)]
 
+use std::cell::UnsafeCell;
+use std::ffi::CString;
 use std::os::raw::{c_int, c_void};
-use std::{mem, panic};
+use std::sync::atomic::{AtomicI32, Ordering};
+use std::mem;
 
 pub mod ffi {
     include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
+}
+
+mod asm;
+pub mod thread;
+
+pub use asm::*;
+
+extern "C" {
+    #[link_name = "__self"]
+    #[thread_local]
+    pub static mut __self: *mut ffi::thread_t;
+}
+
+pub fn thread_yield() {
+    unsafe { ffi::thread_yield() }
+}
+pub fn thread_self() -> *mut ffi:: thread_t {
+    unsafe { ffi::thread_self() }
 }
 
 fn convert_error(ret: c_int) -> Result<(), i32> {
@@ -28,88 +51,21 @@ pub fn base_init_thread() -> Result<(), i32> {
 pub fn delay_us(microseconds: u64) {
     unsafe { ffi::__time_delay_us(microseconds) }
 }
-pub fn thread_yield() {
-    unsafe { ffi::thread_yield() }
-}
-
-pub fn rdtsc() -> u64 {
-    let a: u32;
-    let d: u32;
-    unsafe { asm!("rdtsc" : "={eax}"(a), "={edx}"(d) : : : "volatile" ) };
-    (a as u64) | ((d as u64) << 32)
-}
-pub fn rdtscp() -> (u64, u32) {
-    let a: u32;
-    let d: u32;
-    let c: u32;
-    unsafe { asm!("rdtscp" : "={eax}"(a), "={edx}"(d), "={ecx}"(c) : : : "volatile") };
-
-    ((a as u64) | ((d as u64) << 32), c)
-}
-pub fn cpu_serialize() {
-    unsafe { asm!("cpuid" : : : "rax", "rbx", "rcx", "rdx": "volatile") }
-}
-
-
+#[inline]
 pub fn microtime() -> u64 {
     unsafe { (rdtsc() - ffi::start_tsc as u64) / ffi::cycles_per_us as u64 }
 }
 
-extern "C" fn trampoline<F>(arg: *mut c_void)
-where
-    F: FnOnce(),
-    F: Send + 'static,
-{
-    let f = arg as *mut F;
-    let f: F = unsafe { mem::transmute_copy(&*f as &F) };
-    let _result = panic::catch_unwind(panic::AssertUnwindSafe(move || f()));
-}
-
-extern "C" fn box_trampoline<F>(arg: *mut c_void)
-where
-    F: FnOnce(),
-    F: Send + 'static,
-{
-    let f = unsafe { Box::from_raw(arg as *mut F) };
-    let _result = panic::catch_unwind(panic::AssertUnwindSafe(move || f()));
-}
-
-pub fn thread_spawn<F>(mut f: F)
-where
-    F: FnOnce(),
-    F: Send + 'static,
-{
-    let mut buf: *mut F = ::std::ptr::null_mut();
-    let th = unsafe {
-        ffi::thread_create_with_buf(
-            Some(trampoline::<F>),
-            &mut buf as *mut *mut F as *mut *mut c_void,
-            mem::size_of::<F>(),
-        )
-    };
-    assert!(!th.is_null());
-    assert!(!buf.is_null());
-    unsafe {
-        ffi::memcpy(
-            buf as *mut c_void,
-            &mut f as *mut F as *mut c_void,
-            mem::size_of::<F>(),
-        );
-        mem::forget(f);
-        ffi::thread_ready(th)
-    };
-}
-
-pub fn runtime_init<F>(f: F, ncores: u32) -> Result<(), i32>
+pub fn runtime_init<F>(cfgpath: String, f: F) -> Result<(), i32>
 where
     F: FnOnce(),
     F: Send + 'static,
 {
     convert_error(unsafe {
         ffi::runtime_init(
-            Some(box_trampoline::<F>),
+            CString::new(cfgpath).unwrap().into_raw(),
+            Some(thread::box_trampoline::<F>),
             Box::into_raw(Box::new(f)) as *mut c_void,
-            ncores,
         )
     })
 }
@@ -135,3 +91,63 @@ impl WaitGroup {
 }
 unsafe impl Send for WaitGroup {}
 unsafe impl Sync for WaitGroup {}
+
+pub struct SpinLock {
+    inner: UnsafeCell<ffi::spinlock_t>,
+}
+impl SpinLock {
+    pub fn new() -> Self {
+        Self {
+            inner: UnsafeCell::new(ffi::spinlock_t { locked: 0 }),
+        }
+    }
+
+    #[inline]
+    unsafe fn as_atomic(&self) -> &mut AtomicI32 {
+        mem::transmute(&mut (*self.inner.get()).locked)
+    }
+
+    #[inline]
+    fn as_raw(&self) -> *mut ffi::spinlock_t {
+        self.inner.get()
+    }
+
+    #[inline]
+    pub fn lock(&self) {
+        let inner = unsafe { self.as_atomic() };
+        while inner.swap(1, Ordering::Acquire) != 0 {
+            while inner.load(Ordering::Relaxed) != 0 {
+                cpu_relax();
+            }
+        }
+    }
+
+    #[inline]
+    pub fn try_lock(&self) -> bool {
+        let inner = unsafe { self.as_atomic() };
+        inner.swap(1, Ordering::Acquire) == 0
+    }
+
+    #[inline]
+    pub fn unlock(&self) {
+        let inner = unsafe { self.as_atomic() };
+        assert_eq!(inner.swap(0, Ordering::Release), 1);
+    }
+}
+unsafe impl Send for SpinLock {}
+unsafe impl Sync for SpinLock {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn spinlock() {
+        let lock = SpinLock::new();
+
+        lock.lock();
+        assert!(!lock.try_lock());
+        lock.unlock();
+        assert!(lock.try_lock());
+    }
+}

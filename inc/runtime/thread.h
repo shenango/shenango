@@ -27,7 +27,7 @@ extern __thread thread_t *__self;
 /**
  * thread_self - gets the currently running thread
  */
-static inline thread_t *thread_self(void)
+inline thread_t *thread_self(void)
 {
 	return __self;
 }

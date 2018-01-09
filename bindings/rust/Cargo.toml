@@ -5,13 +5,17 @@ authors = ["The Shenango Developers"]
 
 [dependencies]
 libc = "0.2"
-
+spin = "0.4.6"
 [build-dependencies]
-bindgen = "0.26.3"
+bindgen = "0.32.1"
 
 [[bin]]
 name = "runtime_threads"
 path = "src/test_runtime_threads.rs"
+
+[[bin]]
+name = "runtime_joinhandle"
+path = "src/test_runtime_joinhandle.rs"
 
 [[bin]]
 name = "hello"
