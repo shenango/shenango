@@ -3,6 +3,7 @@
  */
 
 #include <fcntl.h>
+#include <pthread.h>
 #include <string.h>
 #include <sys/ipc.h>
 #include <sys/socket.h>
@@ -25,9 +26,10 @@
 #define COMMAND_QUEUE_MCOUNT 8192
 
 DEFINE_SPINLOCK(qlock);
-unsigned int nrqs;
+unsigned int nrqs = 0;
 
 struct iokernel_control iok;
+pthread_barrier_t barrier;
 
 static int generate_random_mac(struct eth_addr *mac)
 {
@@ -93,9 +95,8 @@ static void ioqueue_alloc(struct shm_region *r, struct queue_spec *q,
 	q->msg_count = msg_count;
 }
 
-static int control_setup(unsigned int threads)
+static int ioqueues_shm_setup(unsigned int threads)
 {
-	struct control_hdr *hdr;
 	struct shm_region *r = &netcfg.tx_region, *ingress_region = &netcfg.rx_region;
 	char *ptr;
 	int i, ret;
@@ -105,11 +106,11 @@ static int control_setup(unsigned int threads)
 	if (ret < 0)
 		return ret;
 
-	shm_len = calculate_shm_space(threads);
-
 	BUILD_ASSERT(sizeof(netcfg.mac) >= sizeof(mem_key_t));
 	iok.key = *(mem_key_t*)(&netcfg.mac);
 
+	/* map shared memory for control header, command queues, and egress pkts */
+	shm_len = calculate_shm_space(threads);
 	r->len = shm_len;
 	r->base = mem_map_shm(iok.key, NULL, shm_len, PGSIZE_2MB, true);
 	if (r->base == MAP_FAILED) {
@@ -117,6 +118,7 @@ static int control_setup(unsigned int threads)
 		return -1;
 	}
 
+	/* map ingress memory */
 	ingress_region->base =
 	    mem_map_shm(INGRESS_MBUF_SHM_KEY, NULL, INGRESS_MBUF_SHM_SIZE,
 			PGSIZE_2MB, false);
@@ -127,30 +129,18 @@ static int control_setup(unsigned int threads)
 	}
 	ingress_region->len = INGRESS_MBUF_SHM_SIZE;
 
+	/* set up queues in shared memory */
 	iok.thread_count = threads;
-	hdr = r->base;
-	hdr->magic = CONTROL_HDR_MAGIC;
-	hdr->thread_count = threads;
-	hdr->mac = netcfg.mac;
-
-	hdr->sched_cfg.priority = SCHED_PRIORITY_NORMAL;
-	hdr->sched_cfg.max_cores = threads;
-	hdr->sched_cfg.congestion_latency_us = 0;
-	hdr->sched_cfg.scaleout_latency_us = 0;
-
 	ptr = r->base;
-	ptr += sizeof(*hdr) + sizeof(struct thread_spec) * hdr->thread_count;
+	ptr += sizeof(struct control_hdr) + sizeof(struct thread_spec) * threads;
 	ptr = (char *)align_up((uintptr_t)ptr, CACHE_LINE_SIZE);
 
-	for (i = 0; i < hdr->thread_count; i++) {
+	for (i = 0; i < threads; i++) {
 		struct thread_spec *tspec = &iok.threads[i];
 		ioqueue_alloc(r, &tspec->rxq, &ptr, PACKET_QUEUE_MCOUNT);
 		ioqueue_alloc(r, &tspec->txpktq, &ptr, PACKET_QUEUE_MCOUNT);
 		ioqueue_alloc(r, &tspec->txcmdq, &ptr, COMMAND_QUEUE_MCOUNT);
 	}
-
-	memcpy(hdr->threads, iok.threads,
-	       sizeof(struct thread_spec) * hdr->thread_count);
 
 	ptr = (char *)align_up((uintptr_t)ptr, PGSIZE_2MB);
 	iok.tx_buf = ptr;
@@ -164,19 +154,38 @@ static int control_setup(unsigned int threads)
 	return 0;
 }
 
-static void control_cleanup(void)
+static void ioqueues_shm_cleanup(void)
 {
 	mem_unmap_shm(netcfg.tx_region.base);
 	mem_unmap_shm(netcfg.rx_region.base);
 }
 
-
-static int register_iokernel(void)
+/*
+ * Register this runtime with the IOKernel. All threads must complete their
+ * per-thread ioqueues initialization before this function is called.
+ */
+int ioqueues_register_iokernel(void)
 {
-
+	struct control_hdr *hdr;
+	struct shm_region *r = &netcfg.tx_region;
+	struct sockaddr_un addr;
 	int ret;
 
-	struct sockaddr_un addr;
+	/* initialize control header */
+	hdr = r->base;
+	hdr->magic = CONTROL_HDR_MAGIC;
+	hdr->thread_count = iok.thread_count;
+	hdr->mac = netcfg.mac;
+
+	hdr->sched_cfg.priority = SCHED_PRIORITY_NORMAL;
+	hdr->sched_cfg.max_cores = iok.thread_count;
+	hdr->sched_cfg.congestion_latency_us = 0;
+	hdr->sched_cfg.scaleout_latency_us = 0;
+
+	memcpy(hdr->threads, iok.threads,
+			sizeof(struct thread_spec) * iok.thread_count);
+
+	/* register with iokernel */
 	BUILD_ASSERT(strlen(CONTROL_SOCK_PATH) <= sizeof(addr.sun_path) - 1);
 	memset(&addr, 0x0, sizeof(struct sockaddr_un));
 	addr.sun_family = AF_UNIX;
@@ -185,31 +194,33 @@ static int register_iokernel(void)
 	iok.fd = socket(AF_UNIX, SOCK_STREAM, 0);
 	if (iok.fd == -1) {
 		log_err("register_iokernel: socket() failed [%s]", strerror(errno));
-		return -errno;
+		goto fail;
 	}
 
 	if (connect(iok.fd, (struct sockaddr *)&addr,
 		 sizeof(struct sockaddr_un)) == -1) {
 		log_err("register_iokernel: connect() failed [%s]", strerror(errno));
-		goto fail;
+		goto fail_close_fd;
 	}
 
 	ret = write(iok.fd, &iok.key, sizeof(iok.key));
 	if (ret != sizeof(iok.key)) {
 		log_err("register_iokernel: write() failed [%s]", strerror(errno));
-		goto fail;
+		goto fail_close_fd;
 	}
 
 	ret = write(iok.fd, &netcfg.tx_region.len, sizeof(netcfg.tx_region.len));
 	if (ret != sizeof(netcfg.tx_region.len)) {
 		log_err("register_iokernel: write() failed [%s]", strerror(errno));
-		goto fail;
+		goto fail_close_fd;
 	}
 
 	return 0;
 
-fail:
+fail_close_fd:
 	close(iok.fd);
+fail:
+	ioqueues_shm_cleanup();
 	return -errno;
 
 }
@@ -233,25 +244,25 @@ int ioqueues_init_thread(void)
 	ret = shm_init_lrpc_out(r, &ts->txcmdq, &myk()->txcmdq);
 	BUG_ON(ret);
 
+	pthread_barrier_wait(&barrier);
+
 	return 0;
 }
 
+/*
+ * General initialization for runtime <-> iokernel communication. Must be
+ * called before per-thread ioqueues initialization.
+ */
 int ioqueues_init(unsigned int threads)
 {
 	int ret;
 
 	spin_lock_init(&qlock);
+	pthread_barrier_init(&barrier, NULL, maxks);
 
-	ret = control_setup(threads);
+	ret = ioqueues_shm_setup(threads);
 	if (ret) {
-		log_err("ioqueues_init: control_setup() failed, ret = %d", ret);
-		return ret;
-	}
-
-	ret = register_iokernel();
-	if (ret) {
-		log_err("ioqueues_init: register_iokernel() failed, ret = %d", ret);
-		control_cleanup();
+		log_err("ioqueues_init: ioqueues_shm_setup() failed, ret = %d", ret);
 		return ret;
 	}
 

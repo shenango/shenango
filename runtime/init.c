@@ -129,16 +129,14 @@ int runtime_init(const char *cfgpath, thread_fn_t main_fn, void *arg)
 
 	ret = ioqueues_init(maxks);
 	if (ret) {
-		log_err("couldn't connect to iokernel, ret = %d", ret);
+		log_err("couldn't initialize ioqueues, ret = %d", ret);
 		return ret;
 	}
 
-        ret = run_init_handlers("global", global_init_handlers,
-                                ARRAY_SIZE(global_init_handlers));
+	ret = run_init_handlers("global", global_init_handlers,
+			ARRAY_SIZE(global_init_handlers));
 	if (ret)
 		return ret;
-
-	/* point of no return starts here */
 
 	log_info("spawning %d kthreads", maxks);
 	for (i = 1; i < maxks; i++) {
@@ -149,13 +147,21 @@ int runtime_init(const char *cfgpath, thread_fn_t main_fn, void *arg)
 	ret = runtime_init_thread();
 	BUG_ON(ret);
 
+	ret = ioqueues_register_iokernel();
+	if (ret) {
+		log_err("couldn't register with iokernel, ret = %d", ret);
+		return ret;
+	}
+
+	/* point of no return starts here */
+
 	ret = thread_spawn_main(main_fn, arg);
 	BUG_ON(ret);
 
 	kthread_attach();
 
-        ret = run_init_handlers("late", late_init_handlers,
-                                ARRAY_SIZE(late_init_handlers));
+	ret = run_init_handlers("late", late_init_handlers,
+			ARRAY_SIZE(late_init_handlers));
 	BUG_ON(ret);
 
 	sched_start();

@@ -370,6 +370,7 @@ extern int arp_init(void);
 extern int usocket_init(void);
 
 /* late initialization */
+extern int ioqueues_register_iokernel(void);
 extern int arp_init_late(void);
 
 /* configuration loading */
