@@ -65,9 +65,11 @@ enum {
 
 #define log_first_n(level, num, fmt, ...)		\
 ({							\
-	static int __n = (num);				\
-	if (__n--)					\
+	static int __n = (num);					\
+	if (__n > 0) {							\
+		__n--;								\
 		logk(level, fmt, ##__VA_ARGS__);	\
+	}										\
 })
 
 #define log_emerg_first_n(num, fmt, ...) \
