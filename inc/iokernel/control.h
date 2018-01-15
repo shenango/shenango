@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <sys/types.h>
+
 #include <base/limits.h>
 #include <iokernel/shm.h>
 #include <net/ethernet.h>
@@ -13,9 +15,11 @@
 
 /* describes a runtime kernel thread */
 struct thread_spec {
-	struct queue_spec 	rxq;
-	struct queue_spec 	txpktq;
-	struct queue_spec 	txcmdq;
+	struct queue_spec	rxq;
+	struct queue_spec	txpktq;
+	struct queue_spec	txcmdq;
+	pid_t				tid;
+	int32_t				park_efd;
 };
 
 enum {

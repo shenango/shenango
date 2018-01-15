@@ -254,6 +254,10 @@ struct kthread {
 	spinlock_t		timer_lock;
 	unsigned int		timern;
 	struct timer_idx	*timers;
+	unsigned long		pd3[6];
+
+	/* 9th cache-line */
+	int32_t			park_efd;
 };
 
 /* compile-time verification of cache-line alignment */
@@ -261,7 +265,8 @@ BUILD_ASSERT(offsetof(struct kthread, lock) % CACHE_LINE_SIZE == 0 &&
 	     offsetof(struct kthread, rq) % CACHE_LINE_SIZE == 0 &&
 	     offsetof(struct kthread, txpktq) % CACHE_LINE_SIZE == 0 &&
 	     offsetof(struct kthread, txpktq_overflow) % CACHE_LINE_SIZE == 0 &&
-	     offsetof(struct kthread, timer_lock) % CACHE_LINE_SIZE == 0);
+	     offsetof(struct kthread, timer_lock) % CACHE_LINE_SIZE == 0 &&
+	     offsetof(struct kthread, park_efd) % CACHE_LINE_SIZE == 0);
 
 extern __thread struct kthread *mykthread;
 

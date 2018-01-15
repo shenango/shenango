@@ -23,8 +23,10 @@
 
 struct thread {
 	struct lrpc_chan_out	rxq;
-	struct lrpc_chan_in	txpktq;
-	struct lrpc_chan_in	txcmdq;
+	struct lrpc_chan_in		txpktq;
+	struct lrpc_chan_in		txcmdq;
+	pid_t					tid;
+	int32_t					park_efd;
 };
 
 struct proc {

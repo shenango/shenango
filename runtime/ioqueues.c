@@ -7,6 +7,7 @@
 #include <string.h>
 #include <sys/ipc.h>
 #include <sys/socket.h>
+#include <sys/syscall.h>
 #include <sys/types.h>
 #include <sys/un.h>
 #include <unistd.h>
@@ -161,6 +162,38 @@ static void ioqueues_shm_cleanup(void)
 }
 
 /*
+ * Send an array of n file descriptors fds on the unix control socket fd.
+ * Returns the number of bytes sent on success or -1 on error.
+ */
+static ssize_t send_fds(int fd, int *fds, int n)
+{
+	struct msghdr msg;
+	char buf[CMSG_SPACE(sizeof(int) * n)];
+	struct iovec iov[1];
+	char iobuf[1];
+	struct cmsghdr *cmptr;
+
+	/* init message header, iovec is necessary even though it's unused */
+	msg.msg_name = NULL;
+	msg.msg_namelen = 0;
+	msg.msg_control = buf;
+	msg.msg_controllen = sizeof(buf);
+	iov[0].iov_base = iobuf;
+	iov[0].iov_len = sizeof(iobuf);
+	msg.msg_iov = iov;
+	msg.msg_iovlen = 1;
+
+	/* init control message */
+	cmptr = CMSG_FIRSTHDR(&msg);
+	cmptr->cmsg_len = CMSG_LEN(sizeof(int) * n);
+	cmptr->cmsg_level = SOL_SOCKET;
+	cmptr->cmsg_type = SCM_RIGHTS;
+	memcpy((int *) CMSG_DATA(cmptr), fds, n * sizeof(int));
+
+	return sendmsg(fd, &msg, 0);
+}
+
+/*
  * Register this runtime with the IOKernel. All threads must complete their
  * per-thread ioqueues initialization before this function is called.
  */
@@ -169,7 +202,8 @@ int ioqueues_register_iokernel(void)
 	struct control_hdr *hdr;
 	struct shm_region *r = &netcfg.tx_region;
 	struct sockaddr_un addr;
-	int ret;
+	int ret, i;
+	int kthread_fds[NCPU];
 
 	/* initialize control header */
 	hdr = r->base;
@@ -215,6 +249,15 @@ int ioqueues_register_iokernel(void)
 		goto fail_close_fd;
 	}
 
+	/* send efds to iokernel */
+	for (i = 0; i < iok.thread_count; i++)
+		kthread_fds[i] = iok.threads[i].park_efd;
+	ret = send_fds(iok.fd, &kthread_fds[0], iok.thread_count);
+	if (ret < 0) {
+		log_err("register_iokernel: send_fds() failed with ret %d", ret);
+		goto fail_close_fd;
+	}
+
 	return 0;
 
 fail_close_fd:
@@ -222,17 +265,32 @@ fail_close_fd:
 fail:
 	ioqueues_shm_cleanup();
 	return -errno;
+}
 
+static inline pid_t gettid(void)
+{
+	pid_t tid;
+
+	#ifdef SYS_gettid
+	tid = syscall(SYS_gettid);
+	#else
+	#error "SYS_gettid unavailable on this system"
+	#endif
+
+	return tid;
 }
 
 int ioqueues_init_thread(void)
 {
 	int ret;
+	pid_t tid = gettid();
 	struct shm_region *r = &netcfg.tx_region;
 
 	spin_lock(&qlock);
 	assert(nrqs < iok.thread_count);
 	struct thread_spec *ts = &iok.threads[nrqs++];
+	ts->tid = tid;
+	ts->park_efd = myk()->park_efd;
 	spin_unlock(&qlock);
 
 	ret = shm_init_lrpc_in(r, &ts->rxq, &myk()->rxq);

@@ -2,15 +2,17 @@
  * control.c - the control-plane for the I/O kernel
  */
 
-#include <sys/socket.h>
-#include <sys/un.h>
-#include <sys/types.h>
-#include <sys/select.h>
+#include <fcntl.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <unistd.h>
 #include <string.h>
-#include <pthread.h>
+#include <sys/select.h>
+#include <sys/socket.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <sys/un.h>
+#include <unistd.h>
 
 #include <base/stddef.h>
 #include <base/mem.h>
@@ -28,7 +30,8 @@ struct lrpc_params lrpc_data_to_control_params;
 static struct lrpc_chan_out lrpc_control_to_data;
 static struct lrpc_chan_in lrpc_data_to_control;
 
-static struct proc *control_create_proc(mem_key_t key, size_t len, pid_t pid)
+static struct proc *control_create_proc(mem_key_t key, size_t len, pid_t pid,
+		int *fds, int n_fds)
 {
 	struct control_hdr hdr;
 	struct shm_region reg;
@@ -49,7 +52,8 @@ static struct proc *control_create_proc(mem_key_t key, size_t len, pid_t pid)
 	memcpy(&hdr, (struct control_hdr *)shbuf, sizeof(hdr)); /* TOCTOU */
 	if (hdr.magic != CONTROL_HDR_MAGIC)
 		goto fail_unmap;
-	if (hdr.thread_count > NCPU || hdr.thread_count == 0)
+	if (hdr.thread_count > NCPU || hdr.thread_count == 0 ||
+			hdr.thread_count != n_fds)
 		goto fail_unmap;
 
 	/* create the process */
@@ -94,6 +98,9 @@ static struct proc *control_create_proc(mem_key_t key, size_t len, pid_t pid)
 		ret = shm_init_lrpc_in(&reg, &s->txcmdq, &th->txcmdq);
 		if (ret)
 			goto fail_free_proc;
+
+		th->tid = s->tid;
+		th->park_efd = fds[i];
 	}
 
 	free(threads);
@@ -119,8 +126,70 @@ fail:
 
 static void control_destroy_proc(struct proc *p)
 {
+	int i;
+
+	/* close eventfds */
+	for (i = 0; i < p->thread_count; i++)
+		close(p->threads[i].park_efd);
+
 	mem_unmap_shm(p->region.base);
 	free(p);
+}
+
+/*
+ * Receive up to n file descriptors on the unix control socket fd, write them
+ * to the array fds. Returns the number of fds on success, < 0 on error.
+ */
+static int recv_fds(int fd, int *fds, int n)
+{
+	struct msghdr msg;
+	char buf[CMSG_SPACE(sizeof(int) * n)];
+	struct iovec iov[1];
+	char iobuf[1];
+	ssize_t ret;
+	struct cmsghdr *cmptr;
+	int n_fds;
+
+	/* init message header and buffs for control message and iovec */
+	msg.msg_control = buf;
+	msg.msg_controllen = sizeof(buf);
+	msg.msg_name = NULL;
+	msg.msg_namelen = 0;
+
+	iov[0].iov_base = iobuf;
+	iov[0].iov_len = sizeof(iobuf);
+	msg.msg_iov = iov;
+	msg.msg_iovlen = 1;
+
+	ret = recvmsg(fd, &msg, 0);
+	if (ret < 0) {
+		log_debug("control.c: error with recvmsg %ld", ret);
+		return ret;
+	}
+
+	/* check validity of control message */
+	cmptr = CMSG_FIRSTHDR(&msg);
+	if (cmptr == NULL) {
+		log_debug("control.c: no cmsg %p", cmptr);
+		return -1;
+	} else if (cmptr->cmsg_len > CMSG_LEN(sizeof(int) * n)) {
+		log_debug("control.c: cmsg is too long %ld", cmptr->cmsg_len);
+		return -1;
+	} else if (cmptr->cmsg_level != SOL_SOCKET) {
+		log_debug("control.c: unrecognized cmsg level %d", cmptr->cmsg_level);
+		return -1;
+	} else if (cmptr->cmsg_type != SCM_RIGHTS) {
+		log_debug("control.c: unrecognized cmsg type %d", cmptr->cmsg_type);
+		return -1;
+	}
+
+	/* determine how many descriptors we received, copy to fds */
+	n_fds = 0;
+	while (CMSG_LEN(sizeof(int) * n_fds) < cmptr->cmsg_len)
+		n_fds++;
+	memcpy(fds, (int *) CMSG_DATA(cmptr), n_fds * sizeof(int));
+
+	return n_fds;
 }
 
 static void control_add_client(void)
@@ -131,7 +200,8 @@ static void control_add_client(void)
 	mem_key_t shm_key;
 	size_t shm_len;
 	ssize_t ret;
-	int fd;
+	int fd, n_fds, i;
+	int fds[NCPU];
 
 	fd = accept(controlfd, NULL, NULL);
 	if (fd == -1) {
@@ -164,10 +234,16 @@ static void control_add_client(void)
 		goto fail;
 	}
 
-	p = control_create_proc(shm_key, shm_len, ucred.pid);
+	n_fds = recv_fds(fd, &fds[0], NCPU);
+	if (n_fds <= 0) {
+		log_err("control: recv_fds() failed with ret %ld", n_fds);
+		goto fail;
+	}
+
+	p = control_create_proc(shm_key, shm_len, ucred.pid, &fds[0], n_fds);
 	if (!p) {
 		log_err("control: failed to create process '%d'", ucred.pid);
-		goto fail;
+		goto fail_close_fds;
 	}
 
 	if (!lrpc_send(&lrpc_control_to_data, DATAPLANE_ADD_CLIENT,
@@ -183,6 +259,9 @@ static void control_add_client(void)
 
 fail_destroy_proc:
 	control_destroy_proc(p);
+fail_close_fds:
+	for (i = 0; i < n_fds; i++)
+		close(fds[i]);
 fail:
 	close(fd);
 }
