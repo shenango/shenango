@@ -142,6 +142,7 @@ static void net_rx_one(struct rx_net_hdr *hdr)
 	 * Network Layer Processing (OSI L3)
 	 */
 
+	mbuf_mark_network_offset(m);
 	iphdr = mbuf_pull_hdr_or_null(m, *iphdr);
 	if (unlikely(!iphdr))
 		goto drop;
@@ -164,7 +165,7 @@ static void net_rx_one(struct rx_net_hdr *hdr)
 		return;
 
 	case IPPROTO_UDP:
-		net_rx_udp_usocket(m, iphdr, len);
+		net_rx_udp(m, iphdr, len);
 		return;
 
 	default:

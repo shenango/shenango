@@ -142,19 +142,18 @@ static void arp_age_entry(uint64_t now_us, struct arp_entry *e)
 			return;
 		}
 		e->tries_left--;
-		arp_send(ARP_OP_REQUEST, eth_addr_broadcast, e->ip);
 		break;
 
 	case ARP_STATE_VALID:
 		e->state = ARP_STATE_VALID_BUT_REPROBING;
 		e->tries_left = ARP_RETRIES;
-		arp_send(ARP_OP_REQUEST, eth_addr_broadcast, e->ip);
 		break;
 
 	default:
 		panic("arp: invalid entry state %d", e->state);
 	}
 
+	arp_send(ARP_OP_REQUEST, eth_addr_broadcast, e->ip);
 	e->ts = microtime();
 }
 

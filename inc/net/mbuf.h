@@ -7,6 +7,8 @@
 
 #pragma once
 
+#include <limits.h>
+
 #include <base/stddef.h>
 #include <base/assert.h>
 #include <iokernel/queue.h>
@@ -28,9 +30,11 @@ struct mbuf {
 		unsigned int	txflags;  /* TX offload flags */
 		unsigned int	rss_hash; /* RSS 5-tuple hash from HW */
 	};
-	unsigned int	pad;
 
-	unsigned long	release_data; /* private data for the release method */
+	unsigned short	network_off;	/* the offset of the network header */
+	unsigned short	transport_off;	/* the offset of the transport header */
+
+	unsigned long	release_data;	/* data for the release method */
 	void		(*release)(struct mbuf *m); /* frees the mbuf */
 };
 
@@ -166,6 +170,52 @@ static inline unsigned int mbuf_length(struct mbuf *m)
 
 #define mbuf_trim_hdr(mbuf, hdr) \
 	(typeof(hdr) *)mbuf_trim(mbuf, sizeof(hdr))
+
+/**
+ * mbuf_mark_network_offset - sets the network offset to the data pointer
+ * @m: the mbuf in which to set the network offset
+ */
+static inline void mbuf_mark_network_offset(struct mbuf *m)
+{
+	ptrdiff_t off = m->data - m->head;
+	assert(off <= USHRT_MAX);
+	m->network_off = off;
+}
+
+/**
+ * mbuf_mark_transport_offset - sets the transport offset to the data pointer
+ * @m: the mbuf in which to set the transport offset
+ */
+static inline void mbuf_mark_transport_offset(struct mbuf *m)
+{
+	ptrdiff_t off = m->data - m->head;
+	assert(off <= USHRT_MAX);
+	m->transport_off = off;
+}
+
+/**
+ * mbuf_network_offset - returns a pointer to the network header
+ * @m: the mbuf containing the network offset
+ */
+static inline unsigned char *mbuf_network_offset(struct mbuf *m)
+{
+	return m->head + m->network_off;
+}
+
+/**
+ * mbuf_network_offset - returns a pointer to the transport header
+ * @m: the mbuf containing the transport offset
+ */
+static inline unsigned char *mbuf_transport_offset(struct mbuf *m)
+{
+	return m->head + m->transport_off;
+}
+
+#define mbuf_network_hdr(mbuf, hdr) \
+	(typeof(hdr) *)mbuf_network_offset(mbuf)
+
+#define mbuf_transport_hdr(mbuf, hdr) \
+	(typeof(hdr) *)mbuf_transport_offset(mbuf)
 
 /**
  * mbuf_init - initializes an mbuf

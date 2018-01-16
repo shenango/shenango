@@ -1,0 +1,79 @@
+/*
+ * usocket.h - UDP socket objects
+ */
+
+#pragma once
+
+#include <base/types.h>
+#include <net/ethernet.h>
+#include <net/ip.h>
+#include <net/udp.h>
+
+/* the maximum size of a UDP payload */
+#define UDP_MAX_PAYLOAD \
+	(ETH_MTU - sizeof(struct ip_hdr) - sizeof(struct udp_hdr))
+
+struct udpaddr {
+	uint32_t ip;
+	uint16_t port;
+};
+
+
+/*
+ * UDP Socket API
+ */
+
+struct udpconn;
+typedef struct udpconn udpconn_t;
+
+extern int udp_dial(struct udpaddr laddr, struct udpaddr raddr,
+		    udpconn_t **c_out);
+extern int udp_listen(struct udpaddr laddr, udpconn_t **c_out);
+extern int udp_set_buffers(udpconn_t *c, int read_mbufs, int write_mbufs);
+extern ssize_t udp_read_from(udpconn_t *c, void *buf, size_t len,
+			     struct udpaddr *raddr);
+extern ssize_t udp_write_to(udpconn_t *c, const void *buf, size_t len,
+			    const struct udpaddr *raddr);
+extern ssize_t udp_read(udpconn_t *c, void *buf, size_t len);
+extern ssize_t udp_write(udpconn_t *c, const void *buf, size_t len);
+extern void udp_shutdown(udpconn_t *c);
+extern void udp_close(udpconn_t *c);
+
+
+/*
+ * UDP Parallel API
+ */
+
+struct udpspawner;
+typedef struct udpspawner udpspawner_t;
+
+struct udp_spawn_data {
+	const void	*buf;
+	size_t		len;
+	struct udpaddr	laddr;
+	struct udpaddr	raddr;
+	void		*release_data;
+};
+
+typedef void (*udpspawn_fn_t)(struct udp_spawn_data *d);
+
+extern int udp_create_spawner(struct udpaddr laddr, udpspawn_fn_t fn,
+			      udpspawner_t **s_out);
+extern void udp_destroy_spawner(udpspawner_t *s);
+extern ssize_t udp_send(const void *buf, size_t len,
+			struct udpaddr laddr, struct udpaddr raddr);
+extern void udp_spawn_data_release(void *release_data);
+
+/**
+ * udp_respond - sends a response datagram to a spawner datagram
+ * @buf: a buffer containing the datagram
+ * @len: the length of the datagram
+ * @d: the UDP spawner data
+ *
+ * Returns @len if successful, otherwise fail.
+ */
+static inline ssize_t udp_respond(const void *buf, size_t len,
+				  struct udp_spawn_data *d)
+{
+	return udp_send(buf, len, d->laddr, d->raddr);
+}

@@ -8,7 +8,7 @@ void ThreadTrampoline(void *arg) {
   (*static_cast<std::function<void()>*>(arg))();
 }
 
-// A helpter to jump from a C function to a C++ std::function. This variant
+// A helper to jump from a C function to a C++ std::function. This variant
 // can wait for the thread to be joined.
 void ThreadTrampolineWithJoin(void *arg) {
   thread_internal::join_data *d = static_cast<thread_internal::join_data*>(arg);

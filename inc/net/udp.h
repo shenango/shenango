@@ -1,5 +1,5 @@
 /*
- * udp.h - Unreliable Datagram Protocol
+ * udp.h - User Datagram Protocol
  */
 
 #pragma once
@@ -12,4 +12,3 @@ struct udp_hdr {
 	uint16_t len;
 	uint16_t chksum;
 };
-

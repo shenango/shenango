@@ -236,7 +236,7 @@ static void control_add_client(void)
 
 	n_fds = recv_fds(fd, &fds[0], NCPU);
 	if (n_fds <= 0) {
-		log_err("control: recv_fds() failed with ret %ld", n_fds);
+		log_err("control: recv_fds() failed with ret %d", n_fds);
 		goto fail;
 	}
 

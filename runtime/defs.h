@@ -103,10 +103,6 @@ extern void __pop_tf(struct thread_tf *tf) __noreturn;
 extern void __call_runtime(struct thread_tf *tf, runtime_fn_t fn,
 			   void *stack, unsigned long arg);
 
-extern void thread_ready_lock_held(thread_t *th);
-extern int thread_spawn_lock_held(thread_fn_t fn, void *arg);
-
-
 
 /*
  * Stack support
@@ -364,7 +360,6 @@ extern int stack_init_thread(void);
 extern int timer_init_thread(void);
 extern int sched_init_thread(void);
 extern int net_init_thread(void);
-extern int usocket_init_thread(void);
 
 /* global initialization */
 extern int ioqueues_init(unsigned int threads);
@@ -372,7 +367,7 @@ extern int stack_init(void);
 extern int sched_init(void);
 extern int net_init(void);
 extern int arp_init(void);
-extern int usocket_init(void);
+extern int udp_init(void);
 
 /* late initialization */
 extern int ioqueues_register_iokernel(void);

@@ -179,7 +179,7 @@ again:
 
 	/* then attempt to steal tasks or packets from a random kthread */
 	r = ks[rand_crc32c((uintptr_t)l) % nrks];
-	if (steal_work(l, r))
+	if (r != l && steal_work(l, r))
 		goto done;
 
 	/* finally try to steal from every kthread */
@@ -223,33 +223,6 @@ void thread_park_and_unlock(spinlock_t *lock)
 {
 	/* this will switch from the thread stack to the runtime stack */
 	call_runtime(thread_finish_park_and_unlock, (unsigned long)lock);
-}
-
-/**
- * thread_ready_lock_held - marks a thread as a runnable
- * expects lock for myk() to be held already
- * @th: the thread to mark runnable
- *
- * This function can only be called when @th is sleeping.
- */
-void thread_ready_lock_held(thread_t *th)
-{
-	struct kthread *k = myk();
-	uint32_t rq_tail;
-
-	assert(th->state == THREAD_STATE_SLEEPING);
-	th->state = THREAD_STATE_RUNNABLE;
-
-	rq_tail = load_acquire(&k->rq_tail);
-	if (unlikely(k->rq_head - rq_tail >= RUNTIME_RQ_SIZE)) {
-		assert(k->rq_head - rq_tail == RUNTIME_RQ_SIZE);
-		assert_spin_lock_held(&k->lock);
-		list_add_tail(&k->rq_overflow, &th->link);
-		return;
-	}
-
-	k->rq[k->rq_head % RUNTIME_RQ_SIZE] = th;
-	store_release(&k->rq_head, k->rq_head + 1);
 }
 
 /**
@@ -365,23 +338,6 @@ thread_t *thread_create_with_buf(thread_fn_t fn, void **buf, size_t buf_len)
 	th->tf.rip = (uint64_t)fn;
 	*buf = ptr;
 	return th;
-}
-
-/**
- * thread_spawn_lock_held - creates and launches a new thread
- * @fn: a function pointer to the starting method of the thread
- * @arg: an argument passed to @fn
- * myk()->lock must be held!
- *
- * Returns 0 if successful, otherwise -ENOMEM if out of memory.
- */
-int thread_spawn_lock_held(thread_fn_t fn, void *arg)
-{
-	thread_t *th = thread_create(fn, arg);
-	if (unlikely(!th))
-		return -ENOMEM;
-	thread_ready_lock_held(th);
-	return 0;
 }
 
 /**

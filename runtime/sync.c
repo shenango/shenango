@@ -43,8 +43,8 @@ void __mutex_unlock(mutex_t *m)
 		spin_unlock(&m->waiter_lock);
 		return;
 	}
-	thread_ready(waketh);
 	spin_unlock(&m->waiter_lock);
+	thread_ready(waketh);
 }
 
 /**
@@ -91,9 +91,9 @@ void condvar_signal(condvar_t *cv)
 
 	spin_lock(&cv->waiter_lock);
 	waketh = list_pop(&cv->waiters, thread_t, link);
+	spin_unlock(&cv->waiter_lock);
 	if (waketh)
 		thread_ready(waketh);
-	spin_unlock(&cv->waiter_lock);
 }
 
 /**
