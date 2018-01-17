@@ -32,7 +32,7 @@ enum {
 static inline uint32_t udp_hash_2tuple(struct udpaddr laddr)
 {
 	return hash_crc32c_one(UDP_SEED,
-		(uint64_t)laddr.ip | ((uint64_t)laddr.port << 32));
+		(uint64_t)laddr.ip | ((uint64_t)laddr.port << 32)) % UDP_TABLE_SIZE;
 }
 
 static inline uint32_t udp_hash_4tuple(struct udpaddr laddr,
@@ -40,7 +40,7 @@ static inline uint32_t udp_hash_4tuple(struct udpaddr laddr,
 {
 	return hash_crc32c_two(UDP_SEED,
 		(uint64_t)laddr.ip | ((uint64_t)laddr.port << 32),
-		(uint64_t)raddr.ip | ((uint64_t)raddr.port << 32));
+		(uint64_t)raddr.ip | ((uint64_t)raddr.port << 32)) % UDP_TABLE_SIZE;
 }
 
 struct udp_entry {
@@ -215,7 +215,7 @@ void net_rx_udp(struct mbuf *m, const struct ip_hdr *iphdr, uint16_t len)
 	saddr.ip = ntoh32(iphdr->saddr);
 
 	rcu_read_lock();
-	e = udp_table_lookup(saddr, daddr);
+	e = udp_table_lookup(daddr, saddr);
 	if (!e) {
 		rcu_read_unlock();
 		goto drop;
@@ -781,6 +781,51 @@ ssize_t udp_send(const void *buf, size_t len,
 	/* write datagram payload */
 	payload = mbuf_put(m, len);
 	memcpy(payload, buf, len);
+
+	/* write UDP header */
+	udphdr = mbuf_push_hdr(m, *udphdr);
+	udphdr->src_port = hton16(laddr.port);
+	udphdr->dst_port = hton16(raddr.port);
+	udphdr->len = hton16(len + sizeof(*udphdr));
+	udphdr->chksum = 0;
+
+	ret = net_tx_ip(m, IPPROTO_UDP, raddr.ip);
+	if (unlikely(ret)) {
+		mbuf_free(m);
+		return ret;
+	}
+
+	return len;
+}
+
+ssize_t udp_sendv(const struct iovec *iov, int iovcnt, struct udpaddr laddr,
+	       struct udpaddr raddr)
+{
+	struct udp_hdr *udphdr;
+	struct mbuf *m;
+	int i, ret;
+	ssize_t len = 0;
+
+	if (laddr.ip == 0)
+		laddr.ip = netcfg.addr;
+	else if (laddr.ip != netcfg.addr)
+		return -EINVAL;
+	if (laddr.port == 0)
+		return -EINVAL;
+
+	m = net_tx_alloc_mbuf();
+	if (unlikely(!m))
+		return -ENOBUFS;
+
+	/* write datagram payload */
+	for (i = 0; i < iovcnt; i++) {
+		len += iov[i].iov_len;
+		if (unlikely(len > UDP_MAX_PAYLOAD)) {
+			mbuf_free(m);
+			return -EMSGSIZE;
+		}
+		memcpy(mbuf_put(m, iov[i].iov_len), iov[i].iov_base, iov[i].iov_len);
+	}
 
 	/* write UDP header */
 	udphdr = mbuf_push_hdr(m, *udphdr);

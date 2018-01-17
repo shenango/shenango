@@ -8,6 +8,7 @@
 #include <net/ethernet.h>
 #include <net/ip.h>
 #include <net/udp.h>
+#include <sys/uio.h>
 
 /* the maximum size of a UDP payload */
 #define UDP_MAX_PAYLOAD \
@@ -62,6 +63,8 @@ extern int udp_create_spawner(struct udpaddr laddr, udpspawn_fn_t fn,
 extern void udp_destroy_spawner(udpspawner_t *s);
 extern ssize_t udp_send(const void *buf, size_t len,
 			struct udpaddr laddr, struct udpaddr raddr);
+extern ssize_t udp_sendv(const struct iovec *iov, int iovcnt, struct udpaddr laddr,
+		      struct udpaddr raddr);
 extern void udp_spawn_data_release(void *release_data);
 
 /**
@@ -76,4 +79,10 @@ static inline ssize_t udp_respond(const void *buf, size_t len,
 				  struct udp_spawn_data *d)
 {
 	return udp_send(buf, len, d->laddr, d->raddr);
+}
+
+static inline ssize_t udp_respondv(const struct iovec *iov, int iovcnt,
+				   struct udp_spawn_data *d)
+{
+	return udp_sendv(iov, iovcnt, d->laddr, d->raddr);
 }
