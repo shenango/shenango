@@ -140,7 +140,7 @@ static void control_destroy_proc(struct proc *p)
  * Receive up to n file descriptors on the unix control socket fd, write them
  * to the array fds. Returns the number of fds on success, < 0 on error.
  */
-static int recv_fds(int fd, int *fds, int n)
+static int control_recv_fds(int fd, int *fds, int n)
 {
 	struct msghdr msg;
 	char buf[CMSG_SPACE(sizeof(int) * n)];
@@ -163,23 +163,23 @@ static int recv_fds(int fd, int *fds, int n)
 
 	ret = recvmsg(fd, &msg, 0);
 	if (ret < 0) {
-		log_debug("control.c: error with recvmsg %ld", ret);
+		log_debug("control: error with recvmsg %ld", ret);
 		return ret;
 	}
 
 	/* check validity of control message */
 	cmptr = CMSG_FIRSTHDR(&msg);
 	if (cmptr == NULL) {
-		log_debug("control.c: no cmsg %p", cmptr);
+		log_debug("control: no cmsg %p", cmptr);
 		return -1;
 	} else if (cmptr->cmsg_len > CMSG_LEN(sizeof(int) * n)) {
-		log_debug("control.c: cmsg is too long %ld", cmptr->cmsg_len);
+		log_debug("control: cmsg is too long %ld", cmptr->cmsg_len);
 		return -1;
 	} else if (cmptr->cmsg_level != SOL_SOCKET) {
-		log_debug("control.c: unrecognized cmsg level %d", cmptr->cmsg_level);
+		log_debug("control: unrecognized cmsg level %d", cmptr->cmsg_level);
 		return -1;
 	} else if (cmptr->cmsg_type != SCM_RIGHTS) {
-		log_debug("control.c: unrecognized cmsg type %d", cmptr->cmsg_type);
+		log_debug("control: unrecognized cmsg type %d", cmptr->cmsg_type);
 		return -1;
 	}
 
@@ -234,9 +234,9 @@ static void control_add_client(void)
 		goto fail;
 	}
 
-	n_fds = recv_fds(fd, &fds[0], NCPU);
+	n_fds = control_recv_fds(fd, &fds[0], NCPU);
 	if (n_fds <= 0) {
-		log_err("control: recv_fds() failed with ret %d", n_fds);
+		log_err("control: control_recv_fds() failed with ret %d", n_fds);
 		goto fail;
 	}
 

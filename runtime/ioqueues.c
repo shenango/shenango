@@ -7,7 +7,6 @@
 #include <string.h>
 #include <sys/ipc.h>
 #include <sys/socket.h>
-#include <sys/syscall.h>
 #include <sys/types.h>
 #include <sys/un.h>
 #include <unistd.h>
@@ -15,6 +14,7 @@
 #include <base/log.h>
 #include <base/lrpc.h>
 #include <base/mem.h>
+#include <base/thread.h>
 
 #include <iokernel/shm.h>
 
@@ -165,7 +165,7 @@ static void ioqueues_shm_cleanup(void)
  * Send an array of n file descriptors fds on the unix control socket fd.
  * Returns the number of bytes sent on success or -1 on error.
  */
-static ssize_t send_fds(int fd, int *fds, int n)
+static ssize_t ioqueues_send_fds(int fd, int *fds, int n)
 {
 	struct msghdr msg;
 	char buf[CMSG_SPACE(sizeof(int) * n)];
@@ -252,9 +252,10 @@ int ioqueues_register_iokernel(void)
 	/* send efds to iokernel */
 	for (i = 0; i < iok.thread_count; i++)
 		kthread_fds[i] = iok.threads[i].park_efd;
-	ret = send_fds(iok.fd, &kthread_fds[0], iok.thread_count);
+	ret = ioqueues_send_fds(iok.fd, &kthread_fds[0], iok.thread_count);
 	if (ret < 0) {
-		log_err("register_iokernel: send_fds() failed with ret %d", ret);
+		log_err("register_iokernel: ioqueues_send_fds() failed with ret %d",
+				ret);
 		goto fail_close_fd;
 	}
 
@@ -265,19 +266,6 @@ fail_close_fd:
 fail:
 	ioqueues_shm_cleanup();
 	return -errno;
-}
-
-static inline pid_t gettid(void)
-{
-	pid_t tid;
-
-	#ifdef SYS_gettid
-	tid = syscall(SYS_gettid);
-	#else
-	#error "SYS_gettid unavailable on this system"
-	#endif
-
-	return tid;
 }
 
 int ioqueues_init_thread(void)

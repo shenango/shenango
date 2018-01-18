@@ -4,6 +4,9 @@
 
 #pragma once
 
+#include <sys/syscall.h>
+#include <unistd.h>
+
 #include <base/stddef.h>
 #include <base/limits.h>
 #include <base/cpu.h>
@@ -75,3 +78,19 @@ static inline int __thread_next_active(int thread)
 
 extern __thread unsigned int thread_id;
 extern __thread unsigned int thread_numa_node;
+
+/**
+ * returns the tid
+ */
+static inline pid_t gettid(void)
+{
+	pid_t tid;
+
+	#ifdef SYS_gettid
+	tid = syscall(SYS_gettid);
+	#else
+	#error "SYS_gettid unavailable on this system"
+	#endif
+
+	return tid;
+}
