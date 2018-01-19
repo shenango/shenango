@@ -136,6 +136,38 @@ static bool steal_work(struct kthread *l, struct kthread *r)
 	return true;
 }
 
+/*
+ * Block the calling kthread until woken up by iokernel.
+ */
+static inline void block_kthread()
+{
+	struct kthread *l = myk();
+	ssize_t s;
+	uint64_t val;
+
+	/* block until iokernel unparks us */
+	s = read(l->park_efd, &val, sizeof(val));
+	BUG_ON(s != sizeof(uint64_t));
+	BUG_ON(val != 1);
+
+	/* iokernel has unparked us */
+}
+
+/*
+ * Park a kthread. The iokernel will deallocate this kthread's core and the
+ * kthread will block on its eventfd until the iokernel wakes it up.
+ */
+static void park_kthread()
+{
+	struct kthread *l = myk();
+
+	/* signal to iokernel that we're about to park */
+	while (!lrpc_send(&l->txcmdq, TXCMD_NET_PARKING, 0))
+		cpu_relax();
+
+	block_kthread();
+}
+
 /* the main scheduler routine, decides what to run next */
 static __noreturn void schedule(void)
 {
@@ -190,9 +222,14 @@ again:
 			goto done;
 	}
 
-	/* did not find anything to run */
-	cpu_relax();
-	/* TODO: park the kthread here instead of trying again */
+	if (l->timern == 0) {
+		/* did not find anything to run, park this kthread */
+		park_kthread();
+	} else {
+		/* TODO: support parking of kthreads with active timers */
+		cpu_relax();
+	}
+
 	goto again;
 
 done:
@@ -201,6 +238,16 @@ done:
 	th = l->rq[l->rq_tail++ % RUNTIME_RQ_SIZE];
 	spin_unlock(&l->lock);
 	call_thread(th);
+}
+
+/**
+ * immediately park each kthread when it first starts up, only schedule it once
+ * the iokernel has granted it a core
+ */
+static __noreturn void schedule_start(void)
+{
+	block_kthread();
+	schedule();
 }
 
 static void thread_finish_park_and_unlock(unsigned long data)
@@ -408,7 +455,7 @@ void thread_exit(void)
  */
 void sched_start(void)
 {
-	call_runtime_nosave((runtime_fn_t)schedule, 0);
+	call_runtime_nosave((runtime_fn_t)schedule_start, 0);
 }
 
 static void runtime_top_of_stack(void)

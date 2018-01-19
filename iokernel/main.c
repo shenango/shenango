@@ -26,6 +26,9 @@ static const struct init_entry iok_init_handlers[] = {
 	/* base */
 	IOK_INITIALIZER(base),
 
+	/* general iokernel */
+	IOK_INITIALIZER(cores),
+
 	/* control plane */
 	IOK_INITIALIZER(control),
 

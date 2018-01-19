@@ -31,12 +31,20 @@ void commands_rx()
 		for (j = 0; j < p->thread_count; j++) {
 			t = &p->threads[j];
 			if (lrpc_recv(&t->txcmdq, &cmd, &payload)) {
-				if (cmd == TXCMD_NET_COMPLETE) {
+				switch (cmd) {
+				case TXCMD_NET_COMPLETE:
 					/* get pointer to struct rte_mbuf, return to mempool */
 					buf = (struct rte_mbuf *)payload;
 					rte_pktmbuf_free(buf);
-				} else
+					break;
+
+				case TXCMD_NET_PARKING:
+					cores_park_kthread(p, j);
+					break;
+
+				default:
 					log_err("commands: TXCMD %lu not handled", cmd);
+				}
 
 				n_cmds++;
 				if (n_cmds >= IOKERNEL_CMD_BURST_SIZE)

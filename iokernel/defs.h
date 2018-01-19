@@ -2,9 +2,10 @@
  * defs.h - shared definitions local to the iokernel
  */
 
-#include <base/stddef.h>
+#include <base/bitmap.h>
 #include <base/lrpc.h>
 #include <base/mem.h>
+#include <base/stddef.h>
 #include <iokernel/control.h>
 #include <net/ethernet.h>
 
@@ -27,6 +28,8 @@ struct thread {
 	struct lrpc_chan_in		txcmdq;
 	pid_t					tid;
 	int32_t					park_efd;
+	/* only valid if this thread's bit in available_threads is not set */
+	unsigned int			core;
 };
 
 struct proc {
@@ -40,6 +43,8 @@ struct proc {
 	/* runtime threads */
 	unsigned int		thread_count;
 	struct thread		threads[NCPU];
+	unsigned int		active_thread_count;
+	DEFINE_BITMAP(available_threads, NCPU);
 
 	/* network data */
 	struct eth_addr		mac;
@@ -92,9 +97,21 @@ struct dataplane {
 extern struct dataplane dp;
 
 /*
+ * Logical cores assigned to linux and the control and dataplane threads
+ */
+struct core_assignments {
+	uint8_t linux_core;
+	uint8_t ctrl_core;
+	uint8_t dp_core;
+};
+
+extern struct core_assignments core_assign;
+
+/*
  * Initialization
  */
 
+extern int cores_init(void);
 extern int control_init(void);
 extern int dpdk_init();
 extern int rx_init();
@@ -114,3 +131,13 @@ extern bool tx_send_completion(void *obj);
  */
 extern void dp_clients_rx_control_lrpcs();
 extern void commands_rx();
+
+/*
+ * functions for manipulating core assignments
+ */
+extern void cores_init_proc(struct proc *p);
+extern void cores_free_proc(struct proc *p);
+extern int cores_pin_thread(pid_t tid, int core);
+extern void cores_park_kthread(struct proc *p, int kthread);
+extern int cores_reserve_core(struct proc *p);
+extern void cores_wake_kthread(struct proc *p, int kthread);

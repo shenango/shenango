@@ -80,5 +80,6 @@ enum {
  */
 enum {
 	TXCMD_NET_COMPLETE = 0,	/* contains rx_net_hdr.completion_data */
+	TXCMD_NET_PARKING, /* payload is unused */
 	TXCMD_NR,		/* number of commands */
 };

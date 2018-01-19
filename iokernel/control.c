@@ -17,6 +17,7 @@
 #include <base/stddef.h>
 #include <base/mem.h>
 #include <base/log.h>
+#include <base/thread.h>
 #include <iokernel/control.h>
 
 #include "defs.h"
@@ -102,6 +103,7 @@ static struct proc *control_create_proc(mem_key_t key, size_t len, pid_t pid,
 		th->tid = s->tid;
 		th->park_efd = fds[i];
 	}
+	cores_init_proc(p);
 
 	free(threads);
 
@@ -364,6 +366,16 @@ static void control_loop(void)
 
 static void *control_thread(void *data)
 {
+	int ret;
+
+	/* pin to our assigned core */
+	ret = cores_pin_thread(gettid(), core_assign.ctrl_core);
+	if (ret < 0) {
+		log_err("control: failed to pin control thread to core %d",
+				core_assign.ctrl_core);
+		/* continue running but performance is unpredictable */
+	}
+
 	control_loop();
 	return NULL;
 }

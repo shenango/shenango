@@ -130,7 +130,16 @@ static inline int dpdk_port_init(uint8_t port, struct rte_mempool *mbuf_pool)
 int dpdk_init()
 {
 	unsigned nb_ports;
-	char *argv[] = { "./iokerneld", "-l", "2", "--socket-mem=128" };
+	char *argv[4];
+	char buf[10];
+
+	/* init args */
+	argv[0] = "./iokerneld";
+	argv[1] = "-l";
+	/* use our assigned core */
+	sprintf(buf, "%d", core_assign.dp_core);
+	argv[2] = buf;
+	argv[3] = "--socket-mem=128";
 
 	/* initialize the Environment Abstraction Layer (EAL) */
 	int ret = rte_eal_init(sizeof(argv) / sizeof(argv[0]), argv);
