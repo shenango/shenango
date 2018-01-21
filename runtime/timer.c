@@ -79,7 +79,6 @@ static void timer_start_locked(struct timer_entry *e, uint64_t deadline_us)
 	i = k->timern++;
 	if (k->timern >= RUNTIME_MAX_TIMERS) {
 		/* TODO: support unlimited timers */
-		spin_unlock(&k->timer_lock);
 		BUG();
 	}
 

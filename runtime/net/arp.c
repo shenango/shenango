@@ -81,6 +81,7 @@ static void delete_entry(struct arp_entry *e)
 	/* free any mbufs waiting for an ARP response */
 	while (!mbufq_empty(&e->q)) {
 		struct mbuf *m = mbufq_pop_head(&e->q);
+		net_error(m, EHOSTUNREACH);
 		mbuf_free(m);
 	}
 

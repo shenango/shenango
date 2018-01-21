@@ -30,6 +30,8 @@ typedef struct udpconn udpconn_t;
 extern int udp_dial(struct udpaddr laddr, struct udpaddr raddr,
 		    udpconn_t **c_out);
 extern int udp_listen(struct udpaddr laddr, udpconn_t **c_out);
+extern struct udpaddr udp_local_addr(udpconn_t *c);
+extern struct udpaddr udp_remote_addr(udpconn_t *c);
 extern int udp_set_buffers(udpconn_t *c, int read_mbufs, int write_mbufs);
 extern ssize_t udp_read_from(udpconn_t *c, void *buf, size_t len,
 			     struct udpaddr *raddr);

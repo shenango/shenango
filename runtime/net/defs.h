@@ -10,6 +10,13 @@
 
 #include "../defs.h"
 
+/*
+ * Network Error Reporting Functions
+ */
+
+extern void udp_error(struct mbuf *m, const struct ip_hdr *iphdr, int err);
+extern void net_error(struct mbuf *m, int err);
+
 
 /*
  * RX Networking Functions
@@ -71,4 +78,14 @@ static inline void net_tx_ip_or_free(struct mbuf *m, uint8_t proto,
 {
 	if (unlikely(net_tx_ip(m, proto, daddr) != 0))
 		mbuf_free(m);
+}
+
+/**
+ * mbuf_drop - frees an mbuf, counting it as a drop
+ * @m: the mbuf to free
+ */
+static inline void mbuf_drop(struct mbuf *m)
+{
+	mbuf_free(m);
+	STAT(DROPS)++;
 }

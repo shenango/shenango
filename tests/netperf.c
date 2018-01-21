@@ -4,6 +4,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <limits.h>
 
 #include <base/stddef.h>
 #include <base/log.h>
@@ -48,13 +49,13 @@ static void client_rr_worker(void *arg)
 
 	while (microtime() < stop_us) {
 		ret = udp_write(c, buf, payload_len);
-		if (ret) {
+		if (ret != payload_len) {
 			log_err("udp_write() failed, ret = %ld", ret);
 			break;
 		}
 
-		ret = udp_read(c, buf, payload_len);
-		if (ret) {
+		ret = udp_read(c, buf, UDP_MAX_PAYLOAD);
+		if (ret != payload_len) {
 			log_err("udp_read() failed, ret = %ld", ret);
 			break;
 		}
@@ -98,22 +99,106 @@ static void do_client_rr(void *arg)
 	log_info("measured %f reqs/s", (double)reqs / seconds);
 }
 
+static void server_rr_recv_one(struct udp_spawn_data *d)
+{
+	/* try to echo the packet back */
+	udp_send(d->buf, d->len, d->laddr, d->raddr);
+	udp_spawn_data_release(d->release_data);
+}
+
 static void do_server_rr(void *arg)
 {
+	waitgroup_t wg;
+	struct udpaddr laddr;
+	udpspawner_t *s;
+	int ret;
 
+	laddr.ip = 0;
+	laddr.port = NETPERF_PORT;
+
+	ret = udp_create_spawner(laddr, server_rr_recv_one, &s);
+	BUG_ON(ret);
+
+	/* wait forever */
+	waitgroup_init(&wg);
+	waitgroup_add(&wg, 1);
+	waitgroup_wait(&wg);
+}
+
+static int str_to_ip(const char *str, uint32_t *addr)
+{
+	uint8_t a, b, c, d;
+	if(sscanf(str, "%hhu.%hhu.%hhu.%hhu", &a, &b, &c, &d) != 4) {
+		return -EINVAL;
+	}
+
+	*addr = MAKE_IP_ADDR(a, b, c, d);
+	return 0;
+}
+
+static int str_to_long(const char *str, long *val)
+{
+	char *endptr;
+
+	*val = strtol(str, &endptr, 10);
+	if (endptr == str || (*endptr != '\0' && *endptr != '\n') ||
+	    ((*val == LONG_MIN || *val == LONG_MAX) && errno == ERANGE))
+		return -EINVAL;
+	return 0;
 }
 
 int main(int argc, char *argv[])
 {
 	int ret;
+	long tmp;
+	uint32_t addr;
+	thread_fn_t fn;
 
-	if (argc < 5) {
+	if (argc < 7) {
 		printf("%s: [config_file_path] [mode] [nworkers] [ip] [time] "
 		       "[payload_len]\n", argv[0]);
 		return -EINVAL;
 	}
 
-	ret = runtime_init(argv[1], do_client_rr, NULL);
+	if (!strcmp(argv[2], "UDP_RR_CLIENT")) {
+		fn = do_client_rr;
+	} else if (!strcmp(argv[2], "UDP_RR_SERVER")) {
+		fn = do_server_rr;
+	} else {
+		printf("invalid mode '%s'\n", argv[2]);
+		return -EINVAL;
+	}
+
+	ret = str_to_long(argv[3], &tmp);
+	if (ret) {
+		printf("couldn't parse [nworkers] '%s'\n", argv[3]);
+		return -EINVAL;
+	}
+	nworkers = tmp;
+
+	ret = str_to_ip(argv[4], &addr);
+	if (ret) {
+		printf("couldn't parse [ip] '%s'\n", argv[4]);
+		return -EINVAL;
+	}
+	raddr.ip = addr;
+	raddr.port = NETPERF_PORT;
+
+	ret = str_to_long(argv[5], &tmp);
+	if (ret) {
+		printf("couldn't parse [time] '%s'\n", argv[5]);
+		return -EINVAL;
+	}
+	seconds = tmp;
+
+	ret = str_to_long(argv[6], &tmp);
+	if (ret) {
+		printf("couldn't parse [payload_len] '%s'\n", argv[6]);
+		return -EINVAL;
+	}
+	payload_len = tmp;
+
+	ret = runtime_init(argv[1], fn, NULL);
 	if (ret) {
 		printf("failed to start runtime\n");
 		return ret;

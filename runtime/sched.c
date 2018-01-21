@@ -26,6 +26,9 @@ static struct slab thread_slab;
 static struct tcache *thread_tcache;
 static __thread struct tcache_perthread thread_pt;
 
+/* used to track cycle usage in scheduler */
+static __thread uint64_t last_tsc;
+
 /**
  * In inc/runtime/thread.h, this function is declared inline (rather than static
  * inline) so that it is accessible to the Rust bindings. As a result, it must
@@ -110,16 +113,23 @@ static bool steal_work(struct kthread *l, struct kthread *r)
 		th = list_pop(&r->rq_overflow, thread_t, link);
 
 		/* check for timeouts */
-		if (!th)
+		if (!th) {
 			th = timer_run(r);
+			if (th)
+				STAT(TIMERS_STOLEN)++;
+		}
 
 		/* check the network queues */
-		if (!th)
+		if (!th) {
 			th = net_run(r, RUNTIME_NET_BUDGET);
+			if (th)
+				STAT(NETS_STOLEN)++;
+		}
 
 		if (th)
 			l->rq[l->rq_head++] = th;
 		spin_unlock(&r->lock);
+		STAT(THREADS_STOLEN) += th != NULL ? 1 : 0;
 		return th != NULL;
 	}
 
@@ -133,6 +143,7 @@ static bool steal_work(struct kthread *l, struct kthread *r)
 	store_release(&r->rq_tail, rq_tail);
 	spin_unlock(&r->lock);
 
+	STAT(THREADS_STOLEN)++;
 	return true;
 }
 
@@ -171,9 +182,15 @@ static void park_kthread()
 /* the main scheduler routine, decides what to run next */
 static __noreturn void schedule(void)
 {
+	uint64_t start_tsc, end_tsc;
 	thread_t *th;
 	struct kthread *r, *l = myk();
 	int i;
+
+	/* update entry stat counters */
+	STAT(RESCHEDULES)++;
+	start_tsc = rdtsc();
+	STAT(PROGRAM_CYCLES) += start_tsc - last_tsc;
 
 	/* mark the end of the RCU quiescent period */
 	rcu_recurrent();
@@ -198,6 +215,7 @@ again:
 	/* then check for local timeouts */
 	th = timer_run(l);
 	if (th) {
+		STAT(TIMERS_LOCAL)++;
 		l->rq[l->rq_head++] = th;
 		goto done;
 	}
@@ -205,6 +223,7 @@ again:
 	/* then try the local network queues */
 	th = net_run(l, RUNTIME_NET_BUDGET);
 	if (th) {
+		STAT(NETS_LOCAL)++;
 		l->rq[l->rq_head++] = th;
 		goto done;
 	}
@@ -237,6 +256,12 @@ done:
 	assert(l->rq_head != l->rq_tail);
 	th = l->rq[l->rq_tail++ % RUNTIME_RQ_SIZE];
 	spin_unlock(&l->lock);
+
+	/* update exit stat counters */
+	end_tsc = rdtsc();
+	STAT(SCHED_CYCLES) += end_tsc - start_tsc;
+	last_tsc = end_tsc;
+
 	call_thread(th);
 }
 
@@ -455,6 +480,7 @@ void thread_exit(void)
  */
 void sched_start(void)
 {
+	last_tsc = rdtsc();
 	call_runtime_nosave((runtime_fn_t)schedule_start, 0);
 }
 

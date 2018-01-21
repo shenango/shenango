@@ -103,13 +103,20 @@ void condvar_signal(condvar_t *cv)
 void condvar_broadcast(condvar_t *cv)
 {
 	thread_t *waketh;
+	struct list_head tmp;
+
+	list_head_init(&tmp);
 
 	spin_lock(&cv->waiter_lock);
-	while (!list_empty(&cv->waiters)) {
-		waketh = list_pop(&cv->waiters, thread_t, link);
+	list_append_list(&tmp, &cv->waiters);
+	spin_unlock(&cv->waiter_lock);
+
+	while (true) {
+		waketh = list_pop(&tmp, thread_t, link);
+		if (!waketh)
+			break;
 		thread_ready(waketh);
 	}
-	spin_unlock(&cv->waiter_lock);
 }
 
 /**

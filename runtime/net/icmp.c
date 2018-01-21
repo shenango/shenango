@@ -36,7 +36,7 @@ static void net_rx_icmp_echo(struct mbuf *m_in,
 	net_tx_ip_or_free(m, IPPROTO_ICMP, ntoh32(in_iphdr->saddr));
 
 drop:
-	mbuf_free(m_in);
+	mbuf_drop(m_in);
 }
 
 static void net_rx_icmp_echo_reply(struct mbuf *m,
@@ -79,7 +79,7 @@ void net_rx_icmp(struct mbuf *m, const struct ip_hdr *iphdr, uint16_t len)
 	return;
 
 drop:
-	mbuf_free(m);
+	mbuf_drop(m);
 }
 
 int net_tx_icmp(struct mbuf *m, uint8_t type, uint8_t code, uint32_t daddr,

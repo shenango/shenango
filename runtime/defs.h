@@ -222,6 +222,36 @@ extern struct iokernel_control iok;
  * Per-kernel-thread State
  */
 
+/*
+ * These are per-kthread stat counters. It's recommended that most counters be
+ * monotonically increasing, as that decouples the counters from any particular
+ * collection time period. However, it may not be possible to represent all
+ * counters this way.
+ *
+ * Don't use these enums directly. Instead, use the STAT() macro.
+ */
+enum {
+	/* scheduler counters */
+	STAT_RESCHEDULES = 0,
+	STAT_SCHED_CYCLES,
+	STAT_PROGRAM_CYCLES,
+	STAT_THREADS_STOLEN,
+	STAT_NETS_STOLEN,
+	STAT_TIMERS_STOLEN,
+	STAT_NETS_LOCAL,
+	STAT_TIMERS_LOCAL,
+
+	/* network stack counters */
+	STAT_RX_BYTES,
+	STAT_RX_PACKETS,
+	STAT_TX_BYTES,
+	STAT_TX_PACKETS,
+	STAT_DROPS,
+
+	/* total number of counters */
+	STAT_NR,
+};
+
 struct timer_idx;
 
 struct kthread {
@@ -232,7 +262,8 @@ struct kthread {
 	uint32_t		rq_tail;
 	struct list_head	rq_overflow;
 	struct lrpc_chan_in	rxq;
-	unsigned long		pad;
+	int			park_efd;
+	int			pad;
 
 	/* 2nd-5th cache-line */
 	thread_t		*rq[RUNTIME_RQ_SIZE];
@@ -252,17 +283,17 @@ struct kthread {
 	struct timer_idx	*timers;
 	unsigned long		pd3[6];
 
-	/* 9th cache-line */
-	int32_t			park_efd;
+	/* 9th cache-line, statistics counters this point onward */
+	uint64_t		stats[STAT_NR];
 };
 
 /* compile-time verification of cache-line alignment */
-BUILD_ASSERT(offsetof(struct kthread, lock) % CACHE_LINE_SIZE == 0 &&
-	     offsetof(struct kthread, rq) % CACHE_LINE_SIZE == 0 &&
-	     offsetof(struct kthread, txpktq) % CACHE_LINE_SIZE == 0 &&
-	     offsetof(struct kthread, txpktq_overflow) % CACHE_LINE_SIZE == 0 &&
-	     offsetof(struct kthread, timer_lock) % CACHE_LINE_SIZE == 0 &&
-	     offsetof(struct kthread, park_efd) % CACHE_LINE_SIZE == 0);
+BUILD_ASSERT(offsetof(struct kthread, lock) % CACHE_LINE_SIZE == 0);
+BUILD_ASSERT(offsetof(struct kthread, rq) % CACHE_LINE_SIZE == 0);
+BUILD_ASSERT(offsetof(struct kthread, txpktq) % CACHE_LINE_SIZE == 0);
+BUILD_ASSERT(offsetof(struct kthread, txpktq_overflow) % CACHE_LINE_SIZE == 0);
+BUILD_ASSERT(offsetof(struct kthread, timer_lock) % CACHE_LINE_SIZE == 0);
+BUILD_ASSERT(offsetof(struct kthread, stats) % CACHE_LINE_SIZE == 0);
 
 extern __thread struct kthread *mykthread;
 
@@ -281,6 +312,13 @@ extern struct kthread *ks[NCPU];
 
 extern void kthread_attach(void);
 extern void kthread_detach(void);
+
+/**
+ * STAT - gets a stat counter
+ *
+ * e.g. STAT(DROPS)++;
+ */
+#define STAT(counter) (myk()->stats[STAT_ ## counter])
 
 
 /*
@@ -372,6 +410,7 @@ extern int udp_init(void);
 /* late initialization */
 extern int ioqueues_register_iokernel(void);
 extern int arp_init_late(void);
+extern int stat_init_late(void);
 
 /* configuration loading */
 extern int cfg_load(const char *path);

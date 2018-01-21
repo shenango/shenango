@@ -32,7 +32,7 @@ enum {
 static inline uint32_t udp_hash_2tuple(struct udpaddr laddr)
 {
 	return hash_crc32c_one(UDP_SEED,
-		(uint64_t)laddr.ip | ((uint64_t)laddr.port << 32)) % UDP_TABLE_SIZE;
+		(uint64_t)laddr.ip | ((uint64_t)laddr.port << 32));
 }
 
 static inline uint32_t udp_hash_4tuple(struct udpaddr laddr,
@@ -40,8 +40,17 @@ static inline uint32_t udp_hash_4tuple(struct udpaddr laddr,
 {
 	return hash_crc32c_two(UDP_SEED,
 		(uint64_t)laddr.ip | ((uint64_t)laddr.port << 32),
-		(uint64_t)raddr.ip | ((uint64_t)raddr.port << 32)) % UDP_TABLE_SIZE;
+		(uint64_t)raddr.ip | ((uint64_t)raddr.port << 32));
 }
+
+struct udp_entry;
+
+struct udp_ops {
+	/* receive an ingress UDP packet */
+	void (*recv) (struct udp_entry *e, struct mbuf *m);
+	/* propagate a network error */
+	void (*err) (struct udp_entry *e, int err);
+};
 
 struct udp_entry {
 	int			match;
@@ -49,7 +58,7 @@ struct udp_entry {
 	struct udpaddr		raddr;
 	struct rcu_hlist_node	link;
 	struct rcu_head		rcu;
-	void (*rx_pkt) (struct udp_entry *e, struct mbuf *m);
+	const struct udp_ops	*ops;
 };
 
 static DEFINE_SPINLOCK(udp_lock);
@@ -66,7 +75,7 @@ static int udp_table_add(struct udp_entry *e)
 {
 	struct udp_entry *pos;
 	struct rcu_hlist_node *node;
-	int idx;
+	uint32_t idx;
 
 	/* port zero is reserved for ephemeral port auto-assign */
 	if (e->laddr.port == 0)
@@ -77,6 +86,7 @@ static int udp_table_add(struct udp_entry *e)
 		idx = udp_hash_2tuple(e->laddr);
 	else
 		idx = udp_hash_4tuple(e->laddr, e->raddr);
+	idx %= UDP_TABLE_SIZE;
 
 	spin_lock(&udp_lock);
 	rcu_hlist_for_each(&udp_table[idx], node, true) {
@@ -149,38 +159,52 @@ static void udp_table_remove(struct udp_entry *e)
 
 /**
  * udp_table_lookup - retrieves a matching UDP entry
- * @laddr: the local address
- * @raddr: the remote address
+ * @lip: the local IP address
+ * @rip: the remote IP address
+ * @lport: the local port
+ * @rport: the remote port
+ * @full: if true, the full 4-tuple must match
  *
  * Must be called from inside an RCU critical section.
  *
  * Returns a UDP entry or NULL if no matches were found.
  */
 static struct udp_entry *
-udp_table_lookup(struct udpaddr laddr, struct udpaddr raddr)
+udp_table_lookup(uint32_t lip, uint32_t rip,
+		 uint16_t lport, uint16_t rport, bool full)
 {
+	struct udpaddr laddr, raddr;
 	struct udp_entry *e;
 	struct rcu_hlist_node *node;
-	int idx;
+	uint32_t idx;
+
+	/* for input to hash functions */
+	laddr.ip = lip;
+	laddr.port = lport;
+	raddr.ip = rip;
+	raddr.port = rport;
 
 	/* first try a 4-tuple match */
-	idx = udp_hash_4tuple(laddr, raddr);
+	idx = udp_hash_4tuple(laddr, raddr) % UDP_TABLE_SIZE;
 	rcu_hlist_for_each(&udp_table[idx], node, false) {
 		e = rcu_hlist_entry(node, struct udp_entry, link);
 		if (e->match != UDP_MATCH_4TUPLE)
 			continue;
-		if (e->laddr.ip == laddr.ip && e->laddr.port == laddr.port &&
-		    e->raddr.ip == raddr.ip && e->raddr.port == raddr.port)
+		if (e->laddr.ip == lip && e->laddr.port == lport &&
+		    e->raddr.ip == rip && e->raddr.port == rport)
 			return e;
 	}
 
+	if (full)
+		return NULL;
+
 	/* then fallback to a 2-tuple match */
-	idx = udp_hash_2tuple(laddr);
+	idx = udp_hash_2tuple(laddr) % UDP_TABLE_SIZE;
 	rcu_hlist_for_each(&udp_table[idx], node, false) {
 		e = rcu_hlist_entry(node, struct udp_entry, link);
 		if (e->match != UDP_MATCH_2TUPLE)
 			continue;
-		if (e->laddr.ip == laddr.ip && e->laddr.port == laddr.port)
+		if (e->laddr.ip == lip && e->laddr.port == lport)
 			return e;
 	}
 
@@ -197,36 +221,71 @@ udp_table_lookup(struct udpaddr laddr, struct udpaddr raddr)
  */
 void net_rx_udp(struct mbuf *m, const struct ip_hdr *iphdr, uint16_t len)
 {
-	struct udp_hdr *hdr;
+	const struct udp_hdr *udphdr;
 	struct udp_entry *e;
-	struct udpaddr saddr;
-	struct udpaddr daddr;
 
 	mbuf_mark_transport_offset(m);
-	hdr = mbuf_pull_hdr_or_null(m, *hdr);
-	if (unlikely(!hdr))
+	udphdr = mbuf_pull_hdr_or_null(m, *udphdr);
+	if (unlikely(!udphdr))
 		goto drop;
-	if (unlikely(ntoh16(hdr->len) != len))
+	if (unlikely(ntoh16(udphdr->len) != len))
 		goto drop;
-
-	daddr.port = ntoh16(hdr->dst_port);
-	saddr.port = ntoh16(hdr->src_port);
-	daddr.ip = ntoh32(iphdr->daddr);
-	saddr.ip = ntoh32(iphdr->saddr);
 
 	rcu_read_lock();
-	e = udp_table_lookup(daddr, saddr);
+	e = udp_table_lookup(ntoh32(iphdr->daddr), ntoh32(iphdr->saddr),
+			     ntoh16(udphdr->dst_port), ntoh16(udphdr->src_port),
+			     false);
 	if (!e) {
 		rcu_read_unlock();
 		goto drop;
 	}
-	e->rx_pkt(e, m);
+	assert(e->ops->recv != NULL);
+	e->ops->recv(e, m);
 	rcu_read_unlock();
 
 	return;
 
 drop:
-	mbuf_free(m);
+	mbuf_drop(m);
+}
+
+/**
+ * udp_error - reports a network error
+ * @m: the mbuf that triggered the error
+ * @iphdr: the IP header in the mbuf that triggered the error
+ * @err: the suggested ernno to report
+ */
+void udp_error(struct mbuf *m, const struct ip_hdr *iphdr, int err)
+{
+	const struct udp_hdr *udphdr;
+	struct udp_entry *e;
+
+	/* WARNING: can't pull, full header may not be available (e.g. ICMP) */
+	udphdr = (struct udp_hdr *)mbuf_data(m);
+
+	rcu_read_lock();
+	e = udp_table_lookup(ntoh32(iphdr->saddr), ntoh32(iphdr->daddr),
+			     ntoh16(udphdr->src_port), ntoh16(udphdr->dst_port),
+			     true);
+	if (e && e->ops->err)
+		e->ops->err(e, err);
+	rcu_read_unlock();
+}
+
+static int udp_send_raw(struct mbuf *m, size_t len,
+			struct udpaddr laddr, struct udpaddr raddr)
+{
+	struct udp_hdr *udphdr;
+
+	/* write UDP header */
+	udphdr = mbuf_push_hdr(m, *udphdr);
+	udphdr->src_port = hton16(laddr.port);
+	udphdr->dst_port = hton16(raddr.port);
+	udphdr->len = hton16(len + sizeof(*udphdr));
+	udphdr->chksum = 0;
+
+	/* send the IP packet */
+	return net_tx_ip(m, IPPROTO_UDP, raddr.ip);
 }
 
 
@@ -243,7 +302,7 @@ struct udpconn {
 	spinlock_t		inq_lock;
 	int			inq_cap;
 	int			inq_len;
-	int			inq_ret;
+	int			inq_err;
 	struct list_head	inq_waiters;
 	struct mbufq		inq;
 
@@ -254,17 +313,17 @@ struct udpconn {
 	struct list_head	outq_waiters;
 };
 
-/* handles ingress packets for UDP connections */
-static void udp_conn_rx_pkt(struct udp_entry *e, struct mbuf *m)
+/* handles ingress packets for UDP sockets */
+static void udp_conn_recv(struct udp_entry *e, struct mbuf *m)
 {
-	thread_t *th = NULL;
 	udpconn_t *c = container_of(e, udpconn_t, e);
+	thread_t *th;
 
 	spin_lock(&c->inq_lock);
 	/* drop packet if the ingress queue is full */
 	if (c->inq_len >= c->inq_cap || c->shutdown) {
 		spin_unlock(&c->inq_lock);
-		mbuf_free(m);
+		mbuf_drop(m);
 		return;
 	}
 
@@ -273,24 +332,52 @@ static void udp_conn_rx_pkt(struct udp_entry *e, struct mbuf *m)
 	c->inq_len++;
 
 	/* wake up a waiter */
-	if (!list_empty(&c->inq_waiters))
-		th = list_pop(&c->inq_waiters, thread_t, link);
+	th = list_pop(&c->inq_waiters, thread_t, link);
 	spin_unlock(&c->inq_lock);
 
 	if (th)
 		thread_ready(th);
 }
 
+/* handles network errors for UDP sockets */
+static void udp_conn_err(struct udp_entry *e, int err)
+{
+	udpconn_t *c = container_of(e, udpconn_t, e);
+	thread_t *th;
+	struct list_head tmp;
+
+	list_head_init(&tmp);
+
+	spin_lock(&c->inq_lock);
+	c->inq_err = err;
+	list_append_list(&tmp, &c->inq_waiters);
+	spin_unlock(&c->inq_lock);
+
+	while (true) {
+		th = list_pop(&tmp, thread_t, link);
+		if (!th)
+			break;
+		thread_ready(th);
+	}
+}
+
+/* operations for UDP sockets */
+const struct udp_ops udp_conn_ops = {
+	.recv = udp_conn_recv,
+	.err = udp_conn_err,
+};
+
 static void udp_init_conn(udpconn_t *c)
 {
 	c->shutdown = false;
 	kref_init(&c->ref);
+	c->e.ops = &udp_conn_ops;
 
 	/* initialize ingress fields */
 	spin_lock_init(&c->inq_lock);
 	c->inq_cap = UDP_IN_DEFAULT_CAP;
 	c->inq_len = 0;
-	c->inq_ret = 0;
+	c->inq_err = 0;
 	list_head_init(&c->inq_waiters);
 	mbufq_init(&c->inq);
 
@@ -299,9 +386,6 @@ static void udp_init_conn(udpconn_t *c)
 	c->outq_cap = UDP_OUT_DEFAULT_CAP;
 	c->outq_len = 0;
 	list_head_init(&c->outq_waiters);
-
-	/* register RX handler */
-	c->e.rx_pkt = udp_conn_rx_pkt;
 }
 
 static void udp_finish_release_conn(struct rcu_head *h)
@@ -384,6 +468,8 @@ int udp_listen(struct udpaddr laddr, udpconn_t **c_out)
 	udp_init_conn(c);
 	c->e.match = UDP_MATCH_2TUPLE;
 	c->e.laddr = laddr;
+	c->e.raddr.ip = 0;
+	c->e.raddr.port = 0;
 
 	ret = udp_table_add(&c->e);
 	if (ret) {
@@ -393,6 +479,27 @@ int udp_listen(struct udpaddr laddr, udpconn_t **c_out)
 
 	*c_out = c;
 	return 0;
+}
+
+/**
+ * udp_local_addr - gets the local address of the socket
+ * @c: the UDP socket
+ */
+struct udpaddr udp_local_addr(udpconn_t *c)
+{
+	return c->e.laddr;
+}
+
+/**
+ * udp_remote_addr - gets the remote address of the socket
+ * @c: the UDP socket
+ *
+ * A UDP socket may not have a remote address attached. If so, the IP and
+ * port will be set to zero.
+ */
+struct udpaddr udp_remote_addr(udpconn_t *c)
+{
+	return c->e.raddr;
 }
 
 /**
@@ -434,7 +541,7 @@ ssize_t udp_read_from(udpconn_t *c, void *buf, size_t len,
 	spin_lock(&c->inq_lock);
 
 	/* block until there is an actionable event */
-	while (mbufq_empty(&c->inq) && !c->inq_ret && !c->shutdown) {
+	while (mbufq_empty(&c->inq) && !c->inq_err && !c->shutdown) {
 		list_add_tail(&c->inq_waiters, &thread_self()->link);
 		thread_park_and_unlock(&c->inq_lock);
 		spin_lock(&c->inq_lock);
@@ -447,9 +554,9 @@ ssize_t udp_read_from(udpconn_t *c, void *buf, size_t len,
 	}
 
 	/* propagate error status code if an error was detected */
-	if (c->inq_ret) {
+	if (c->inq_err) {
 		spin_unlock(&c->inq_lock);
-		return c->inq_ret;
+		return -c->inq_err;
 	}
 
 	/* pop an mbuf and deliver the payload */
@@ -476,15 +583,15 @@ ssize_t udp_read_from(udpconn_t *c, void *buf, size_t len,
 static void udp_tx_release_mbuf(struct mbuf *m)
 {
 	udpconn_t *c = (udpconn_t *)m->release_data;
-	thread_t *th = NULL;
+	thread_t *th;
 
 	spin_lock(&c->outq_lock);
 	c->outq_len--;
-	if (!list_empty(&c->inq_waiters))
-		th = list_pop(&c->inq_waiters, thread_t, link);
+	th = list_pop(&c->outq_waiters, thread_t, link);
 	spin_unlock(&c->outq_lock);
 	if (th)
 		thread_ready(th);
+
 	kref_put(&c->ref, udp_release_conn);
 	net_tx_release_mbuf(m);
 }
@@ -507,7 +614,6 @@ ssize_t udp_write_to(udpconn_t *c, const void *buf, size_t len,
 {
 	struct udpaddr addr;
 	ssize_t ret;
-	struct udp_hdr *udphdr;
 	struct mbuf *m;
 	void *payload;
 
@@ -547,19 +653,12 @@ ssize_t udp_write_to(udpconn_t *c, const void *buf, size_t len,
 	payload = mbuf_put(m, len);
 	memcpy(payload, buf, len);
 
-	/* write UDP header */
-	udphdr = mbuf_push_hdr(m, *udphdr);
-	udphdr->src_port = hton16(c->e.laddr.port);
-	udphdr->dst_port = hton16(addr.port);
-	udphdr->len = hton16(len + sizeof(*udphdr));
-	udphdr->chksum = 0;
-
-	/* setup mbuf release method */
+	/* override mbuf release method */
 	m->release = udp_tx_release_mbuf;
 	m->release_data = (unsigned long)c;
 
 	kref_get(&c->ref);
-	ret = net_tx_ip(m, IPPROTO_UDP, addr.ip);
+	ret = udp_send_raw(m, len, c->e.laddr, addr);
 	if (unlikely(ret)) {
 		net_tx_release_mbuf(m);
 		kref_put(&c->ref, udp_release_conn);
@@ -612,34 +711,45 @@ ssize_t udp_write(udpconn_t *c, const void *buf, size_t len)
  */
 void udp_shutdown(udpconn_t *c)
 {
+	struct list_head tmp;
 	struct mbufq q;
 	thread_t *th;
+
+	list_head_init(&tmp);
+	mbufq_init(&q);
 
 	BUG_ON(c->shutdown);
 	c->shutdown = true;
 
-	mbufq_init(&q);
+	/* prevent ingress receive and error dispatch (after RCU period) */
 	udp_table_remove(&c->e);
 
+	/* drain ingress */
 	spin_lock(&c->inq_lock);
-	while (!list_empty(&c->inq_waiters)) {
-		th = list_pop(&c->inq_waiters, thread_t, link);
-		thread_ready(th);
-	}
+	list_append_list(&tmp, &c->inq_waiters);
 	mbufq_merge_to_tail(&q, &c->inq);
 	spin_unlock(&c->inq_lock);
 
-	while (!mbufq_empty(&q)) {
-		struct mbuf *m = mbufq_pop_head(&q);
-		mbuf_free(m);
-	}
-
+	/* drain egress */
 	spin_lock(&c->outq_lock);
-	while (!list_empty(&c->outq_waiters)) {
-		th = list_pop(&c->outq_waiters, thread_t, link);
+	list_append_list(&tmp, &c->outq_waiters);
+	spin_unlock(&c->outq_lock);
+
+	/* wake all blocked threads */
+	while (true) {
+		th = list_pop(&tmp, thread_t, link);
+		if (!th)
+			break;
 		thread_ready(th);
 	}
-	spin_unlock(&c->outq_lock);
+
+	/* free all in-flight mbufs */
+	while (true) {
+		struct mbuf *m = mbufq_pop_head(&q);
+		if (!m)
+			break;
+		mbuf_free(m);
+	}
 }
 
 /**
@@ -668,7 +778,7 @@ struct udpspawner {
 };
 
 /* handles ingress packets with parallel threads */
-static void udp_par_rx_pkt(struct udp_entry *e, struct mbuf *m)
+static void udp_par_recv(struct udp_entry *e, struct mbuf *m)
 {
 	udpspawner_t *s = container_of(e, udpspawner_t, e);
 	struct ip_hdr *iphdr = mbuf_network_hdr(m, *iphdr);
@@ -679,7 +789,7 @@ static void udp_par_rx_pkt(struct udp_entry *e, struct mbuf *m)
 	th = thread_create_with_buf((thread_fn_t)s->fn,
 				    (void **)&d, sizeof(*d));
 	if (unlikely(!th)) {
-		mbuf_free(m);
+		mbuf_drop(m);
 		return;
 	}
 
@@ -691,6 +801,11 @@ static void udp_par_rx_pkt(struct udp_entry *e, struct mbuf *m)
 	d->release_data = m;
 	thread_ready(th);
 }
+
+/* operations for UDP spawners */
+const struct udp_ops udp_par_ops = {
+	.recv = udp_par_recv,
+};
 
 /**
  * udp_create_spawner - creates a UDP spawner for ingress datagrams
@@ -718,7 +833,7 @@ int udp_create_spawner(struct udpaddr laddr, udpspawn_fn_t fn,
 
 	s->e.match = UDP_MATCH_2TUPLE;
 	s->e.laddr = laddr;
-	s->e.rx_pkt = udp_par_rx_pkt;
+	s->e.ops = &udp_par_ops;
 	s->fn = fn;
 
 	ret = udp_table_add(&s->e);
@@ -760,7 +875,6 @@ void udp_destroy_spawner(udpspawner_t *s)
 ssize_t udp_send(const void *buf, size_t len,
 		 struct udpaddr laddr, struct udpaddr raddr)
 {
-	struct udp_hdr *udphdr;
 	void *payload;
 	struct mbuf *m;
 	int ret;
@@ -782,14 +896,7 @@ ssize_t udp_send(const void *buf, size_t len,
 	payload = mbuf_put(m, len);
 	memcpy(payload, buf, len);
 
-	/* write UDP header */
-	udphdr = mbuf_push_hdr(m, *udphdr);
-	udphdr->src_port = hton16(laddr.port);
-	udphdr->dst_port = hton16(raddr.port);
-	udphdr->len = hton16(len + sizeof(*udphdr));
-	udphdr->chksum = 0;
-
-	ret = net_tx_ip(m, IPPROTO_UDP, raddr.ip);
+	ret = udp_send_raw(m, len, laddr, raddr);
 	if (unlikely(ret)) {
 		mbuf_free(m);
 		return ret;
@@ -801,7 +908,6 @@ ssize_t udp_send(const void *buf, size_t len,
 ssize_t udp_sendv(const struct iovec *iov, int iovcnt, struct udpaddr laddr,
 	       struct udpaddr raddr)
 {
-	struct udp_hdr *udphdr;
 	struct mbuf *m;
 	int i, ret;
 	ssize_t len = 0;
@@ -824,17 +930,11 @@ ssize_t udp_sendv(const struct iovec *iov, int iovcnt, struct udpaddr laddr,
 			mbuf_free(m);
 			return -EMSGSIZE;
 		}
-		memcpy(mbuf_put(m, iov[i].iov_len), iov[i].iov_base, iov[i].iov_len);
+		memcpy(mbuf_put(m, iov[i].iov_len),
+		       iov[i].iov_base, iov[i].iov_len);
 	}
 
-	/* write UDP header */
-	udphdr = mbuf_push_hdr(m, *udphdr);
-	udphdr->src_port = hton16(laddr.port);
-	udphdr->dst_port = hton16(raddr.port);
-	udphdr->len = hton16(len + sizeof(*udphdr));
-	udphdr->chksum = 0;
-
-	ret = net_tx_ip(m, IPPROTO_UDP, raddr.ip);
+	ret = udp_send_raw(m, len, laddr, raddr);
 	if (unlikely(ret)) {
 		mbuf_free(m);
 		return ret;

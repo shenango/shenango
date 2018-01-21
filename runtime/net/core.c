@@ -95,11 +95,43 @@ static struct mbuf *net_rx_alloc_mbuf(struct rx_net_hdr *hdr)
 	return m;
 }
 
+static inline bool ip_hdr_supported(const struct ip_hdr *iphdr)
+{
+	/* must be IPv4, no IP options, no IP fragments */
+	return (iphdr->version == IPVERSION &&
+		iphdr->header_len == sizeof(*iphdr) / sizeof(uint32_t) &&
+		(iphdr->off & IP_MF) == 0);
+}
+
+/**
+ * net_error - reports a network error so that it can be passed to higher layers
+ * @m: the egress mbuf that triggered the error
+ * @err: the suggested error code to report
+ *
+ * The mbuf data pointer must point to the network-layer (L3) hdr that failed.
+ */
+void net_error(struct mbuf *m, int err)
+{
+	const struct ip_hdr *iphdr;
+
+	iphdr = mbuf_pull_hdr_or_null(m, *iphdr);
+	if (unlikely(!iphdr))
+		return;
+	if (unlikely(!ip_hdr_supported(iphdr)))
+		return;
+
+	/* don't check length because ICMP may not provide the full payload */
+
+	/* so far we only support error handling in UDP */
+	if (iphdr->proto == IPPROTO_UDP)
+		udp_error(m, iphdr, err);
+}
+
 static void net_rx_one(struct rx_net_hdr *hdr)
 {
 	struct mbuf *m;
-	struct eth_hdr *llhdr;
-	struct ip_hdr *iphdr;
+	const struct eth_hdr *llhdr;
+	const struct ip_hdr *iphdr;
 	uint16_t len;
 
 	m = net_rx_alloc_mbuf(hdr);
@@ -110,6 +142,9 @@ static void net_rx_one(struct rx_net_hdr *hdr)
 		}
 		return;
 	}
+
+	STAT(RX_PACKETS)++;
+	STAT(RX_BYTES) += mbuf_length(m);
 
 	/* Did HW checksum verification pass? */
 	if (hdr->csum_type != CHECKSUM_TYPE_UNNECESSARY)
@@ -149,10 +184,7 @@ static void net_rx_one(struct rx_net_hdr *hdr)
 
 	/* The NIC has validated IP checksum for us. */
 
-	/* must be IPv4, no IP options, no IP fragments */
-	if (unlikely(iphdr->version != IPVERSION ||
-		     iphdr->header_len != sizeof(*iphdr) / sizeof(uint32_t) ||
-		     (iphdr->off & IP_MF) > 0))
+	if (unlikely(!ip_hdr_supported(iphdr)))
 		goto drop;
 
 	len = ntoh16(iphdr->len) - sizeof(*iphdr);
@@ -175,7 +207,7 @@ static void net_rx_one(struct rx_net_hdr *hdr)
 	return;
 
 drop:
-	mbuf_free(m);
+	mbuf_drop(m);
 }
 
 struct net_rx_closure {
@@ -307,6 +339,9 @@ static void net_tx_raw(struct mbuf *m)
 
 	/* drain pending overflow packets first */
 	net_recurrent();
+
+	STAT(TX_PACKETS)++;
+	STAT(TX_BYTES) += len;
 
 	hdr = mbuf_push_hdr(m, *hdr);
 	hdr->completion_data = (unsigned long)m;
