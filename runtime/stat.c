@@ -74,7 +74,7 @@ static void stat_worker(void *arg)
 	char buf[UDP_MAX_PAYLOAD];
 	struct udpaddr laddr, raddr;
 	udpconn_t *c;
-	ssize_t ret;
+	ssize_t ret, len;
 
 	laddr.ip = 0;
 	laddr.port = STAT_PORT;
@@ -92,14 +92,15 @@ static void stat_worker(void *arg)
 		if (strncmp(buf, "stat", cmd_len) != 0)
 			continue;
 
-		ret = stat_write_buf(buf, UDP_MAX_PAYLOAD);
-		if (ret < 0) {
+		len = stat_write_buf(buf, UDP_MAX_PAYLOAD);
+		if (len < 0) {
 			log_err("stat: couldn't generate stat buffer");
 			continue;
 		}
-		assert(ret <= UDP_MAX_PAYLOAD);
+		assert(len <= UDP_MAX_PAYLOAD);
 
-		udp_write_to(c, buf, ret, &raddr);
+		ret = udp_write_to(c, buf, len, &raddr);
+		WARN_ON(ret != len);
 	}
 }
 
