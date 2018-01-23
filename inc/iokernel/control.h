@@ -18,6 +18,8 @@ struct thread_spec {
 	struct queue_spec	rxq;
 	struct queue_spec	txpktq;
 	struct queue_spec	txcmdq;
+	shmptr_t			rq_gen;
+	shmptr_t			rxq_gen;
 	pid_t				tid;
 	int32_t				park_efd;
 };

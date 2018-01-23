@@ -72,6 +72,10 @@ static size_t calculate_shm_space(unsigned int thread_count)
 	q += align_up(sizeof(uint32_t), CACHE_LINE_SIZE);
 	ret += q * thread_count;
 
+	// Generation numbers for the runqueue and rxq for each thread
+	q = align_up(sizeof(uint32_t), CACHE_LINE_SIZE);
+	ret += 2 * q * thread_count;
+
 	ret = align_up(ret, PGSIZE_2MB);
 
 	// Egress buffers
@@ -94,6 +98,13 @@ static void ioqueue_alloc(struct shm_region *r, struct queue_spec *q,
 	*ptr += align_up(sizeof(uint32_t), CACHE_LINE_SIZE);
 
 	q->msg_count = msg_count;
+}
+
+static void gen_num_alloc(struct shm_region *r, shmptr_t *gen, char **ptr)
+{
+	*gen = ptr_to_shmptr(r, *ptr, sizeof(uint32_t));
+	*((uint32_t *) *ptr) = 0;
+	*ptr += align_up(sizeof(uint32_t), CACHE_LINE_SIZE);
 }
 
 static int ioqueues_shm_setup(unsigned int threads)
@@ -141,6 +152,9 @@ static int ioqueues_shm_setup(unsigned int threads)
 		ioqueue_alloc(r, &tspec->rxq, &ptr, PACKET_QUEUE_MCOUNT);
 		ioqueue_alloc(r, &tspec->txpktq, &ptr, PACKET_QUEUE_MCOUNT);
 		ioqueue_alloc(r, &tspec->txcmdq, &ptr, COMMAND_QUEUE_MCOUNT);
+
+		gen_num_alloc(r, &tspec->rq_gen, &ptr);
+		gen_num_alloc(r, &tspec->rxq_gen, &ptr);
 	}
 
 	ptr = (char *)align_up((uintptr_t)ptr, PGSIZE_2MB);
@@ -288,6 +302,12 @@ int ioqueues_init_thread(void)
 	BUG_ON(ret);
 
 	ret = shm_init_lrpc_out(r, &ts->txcmdq, &myk()->txcmdq);
+	BUG_ON(ret);
+
+	ret = shm_init_gen(r, ts->rq_gen, &myk()->rq_gen);
+	BUG_ON(ret);
+
+	ret = shm_init_gen(r, ts->rxq_gen, &myk()->rxq_gen);
 	BUG_ON(ret);
 
 	pthread_barrier_wait(&barrier);

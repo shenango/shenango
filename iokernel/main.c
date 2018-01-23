@@ -11,6 +11,7 @@
 
 #include "defs.h"
 
+#define CORES_ADJUST_INTERVAL_US	100
 struct dataplane dp;
 
 struct init_entry {
@@ -63,6 +64,7 @@ static int run_init_handlers(const char *phase, const struct init_entry *h,
  */
 void dataplane_loop()
 {
+	uint64_t next_adjust_time;
 	/*
 	 * Check that the port is on the same NUMA node as the polling thread
 	 * for best performance.
@@ -75,6 +77,7 @@ void dataplane_loop()
 	log_info("main: core %u running dataplane. [Ctrl+C to quit]",
 			rte_lcore_id());
 
+	next_adjust_time = microtime();
 	/* run until quit or killed */
 	for (;;) {
 		/* handle a burst of ingress packets */
@@ -88,6 +91,12 @@ void dataplane_loop()
 
 		/* handle control messages */
 		dp_clients_rx_control_lrpcs();
+
+		/* adjust core assignments */
+		if (microtime() > next_adjust_time) {
+			cores_adjust_assignments();
+			next_adjust_time += CORES_ADJUST_INTERVAL_US;
+		}
 	}
 }
 

@@ -8,6 +8,7 @@
 #include <base/list.h>
 #include <base/mem.h>
 #include <base/tcache.h>
+#include <base/gen.h>
 #include <base/lrpc.h>
 #include <net/ethernet.h>
 #include <net/ip.h>
@@ -265,30 +266,36 @@ struct kthread {
 	int			park_efd;
 	int			pad;
 
-	/* 2nd-5th cache-line */
+	/* 2nd cache-line */
+	struct gen_num	rq_gen;
+	struct gen_num	rxq_gen;
+	unsigned long	pad2[4];
+
+	/* 3rd-6th cache-line */
 	thread_t		*rq[RUNTIME_RQ_SIZE];
 
-	/* 6th cache-line */
+	/* 7th cache-line */
 	struct lrpc_chan_out	txpktq;
 	struct lrpc_chan_out	txcmdq;
 
-	/* 7th cache-line */
+	/* 8th cache-line */
 	struct mbufq		txpktq_overflow;
 	struct mbufq		txcmdq_overflow;
-	unsigned long		pad2[4];
+	unsigned long		pad3[4];
 
-	/* 8th cache-line */
+	/* 9th cache-line */
 	spinlock_t		timer_lock;
 	unsigned int		timern;
 	struct timer_idx	*timers;
-	unsigned long		pd3[6];
+	unsigned long		pad4[6];
 
-	/* 9th cache-line, statistics counters this point onward */
+	/* 10th cache-line, statistics counters this point onward */
 	uint64_t		stats[STAT_NR];
 };
 
 /* compile-time verification of cache-line alignment */
 BUILD_ASSERT(offsetof(struct kthread, lock) % CACHE_LINE_SIZE == 0);
+BUILD_ASSERT(offsetof(struct kthread, rq_gen) % CACHE_LINE_SIZE == 0);
 BUILD_ASSERT(offsetof(struct kthread, rq) % CACHE_LINE_SIZE == 0);
 BUILD_ASSERT(offsetof(struct kthread, txpktq) % CACHE_LINE_SIZE == 0);
 BUILD_ASSERT(offsetof(struct kthread, txpktq_overflow) % CACHE_LINE_SIZE == 0);

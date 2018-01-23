@@ -102,6 +102,15 @@ static struct proc *control_create_proc(mem_key_t key, size_t len, pid_t pid,
 
 		th->tid = s->tid;
 		th->park_efd = fds[i];
+
+		/* initialize runqueue and rxq generation numbers */
+		ret = shm_init_gen(&reg, s->rq_gen, &th->rq_gen);
+		if (ret)
+			goto fail_free_proc;
+
+		ret = shm_init_gen(&reg, s->rxq_gen, &th->rxq_gen);
+		if (ret)
+			goto fail_free_proc;
 	}
 	cores_init_proc(p);
 

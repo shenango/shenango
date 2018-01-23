@@ -15,6 +15,37 @@ DEFINE_BITMAP(avail_cores, NCPU);
 struct core_assignments core_assign;
 
 /*
+ * Debugging function that logs how each core is currently being used.
+ */
+static void cores_log_assignments()
+{
+	int i, j;
+	struct proc *p;
+	char buf[NCPU+1];
+
+	for (i = 0; i < dp.nr_clients; i++) {
+		p = dp.clients[i];
+
+		DEFINE_BITMAP(proc_cores, cpu_count);
+		bitmap_init(proc_cores, cpu_count, false);
+		bitmap_for_each_cleared(p->available_threads, p->thread_count, j) {
+			bitmap_set(proc_cores, p->threads[j].core);
+		}
+
+		for (j = 0; j < cpu_count; j++)
+			buf[j] = bitmap_test(proc_cores, j) ? '1' : '0';
+		buf[j] = '\0';
+
+		log_debug("cores: %s used by runtime pid %d", &buf[0], p->pid);
+	}
+
+	for (i = 0; i < cpu_count; i++)
+		buf[i] = bitmap_test(avail_cores, i) ? '1' : '0';
+	buf[i] = '\0';
+	log_debug("cores: %s idle", &buf[0]);
+}
+
+/*
  * Parks the given kthread (if it exists) and frees its core.
  */
 void cores_park_kthread(struct proc *p, int kthread)
@@ -151,6 +182,53 @@ void cores_free_proc(struct proc *p)
 
 	bitmap_for_each_cleared(p->available_threads, p->thread_count, i)
 		cores_park_kthread(p, i);
+}
+
+/*
+ * Rebalances the allocation of cores to runtimes. Grants more cores to
+ * runtimes that would benefit from them.
+ * TODO: if all cores are in use, revoke cores from runtimes that are of lower
+ * priority.
+ */
+void cores_adjust_assignments()
+{
+	int core, i, j, new_kthread;
+	struct proc *p;
+
+	/* check for available cores */
+	core = bitmap_find_next_set(avail_cores, cpu_count, 0);
+	if (core == cpu_count)
+		return; /* no cores available */
+
+	for (i = 0; i < dp.nr_clients; i++) {
+		p = dp.clients[i];
+
+		/* check if runtime is already using max kthreads */
+		if (p->active_thread_count == p->thread_count)
+			continue;
+
+		/* if any kthread has been busy over the last interval, wake
+		 * another kthread */
+		bitmap_for_each_cleared(p->available_threads, p->thread_count, j) {
+			/* check if runqueue remained non-empty */
+			if (gen_in_same_gen(&p->threads[j].rq_gen))
+				goto wake_kthread;
+
+			/* check if rx packet queue remained non-empty */
+			if (gen_in_same_gen(&p->threads[j].rxq_gen))
+				goto wake_kthread;
+
+			/* TODO: check on timers */
+		}
+
+		continue; /* no need to wake a kthread */
+
+	wake_kthread:
+		new_kthread = cores_reserve_core(p);
+		if (new_kthread < 0)
+			return; /* no cores available */
+		cores_wake_kthread(p, new_kthread);
+	}
 }
 
 /*

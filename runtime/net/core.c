@@ -243,6 +243,7 @@ thread_t *net_run(struct kthread *k, unsigned int budget)
 	thread_t *th;
 	struct net_rx_closure *c;
 	unsigned int recv_cnt = 0, compl_cnt = 0;
+	int budget_left;
 
 	assert_spin_lock_held(&k->lock);
 
@@ -253,8 +254,8 @@ thread_t *net_run(struct kthread *k, unsigned int budget)
 	if (unlikely(!th))
 		return NULL;
 
-	budget = min(budget, MAX_BUDGET);
-	while (budget--) {
+	budget_left = min(budget, MAX_BUDGET);
+	while (budget_left--) {
 		uint64_t cmd;
 		unsigned long payload;
 
@@ -277,6 +278,12 @@ thread_t *net_run(struct kthread *k, unsigned int budget)
 			log_err_ratelimited("net: invalid RXQ cmd '%ld'", cmd);
 		}
 	}
+
+	/* check if we still have queued packets */
+	if (budget_left < 0)
+		gen_active(&k->rxq_gen);
+	else
+		gen_inactive(&k->rxq_gen);
 
 	assert(recv_cnt + compl_cnt > 0);
 	c->recv_cnt = recv_cnt;

@@ -255,6 +255,13 @@ done:
 	/* pop off a thread and run it */
 	assert(l->rq_head != l->rq_tail);
 	th = l->rq[l->rq_tail++ % RUNTIME_RQ_SIZE];
+
+	/* check if we still have runnable threads */
+	if (l->rq_head != l->rq_tail)
+		gen_active(&l->rq_gen);
+	else
+		gen_inactive(&l->rq_gen);
+
 	spin_unlock(&l->lock);
 
 	/* update exit stat counters */

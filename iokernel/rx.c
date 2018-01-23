@@ -66,7 +66,7 @@ static bool rx_enqueue_to_runtime(struct rx_net_hdr *net_hdr, struct proc *p)
 		/* choose a random thread from the active threads */
 		r = rand() % p->active_thread_count;
 		index = -1;
-		bitmap_for_each_cleared(p->available_threads, p->active_thread_count,
+		bitmap_for_each_cleared(p->available_threads, p->thread_count,
 				kthread) {
 			if (++index == r)
 				break;

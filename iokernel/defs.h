@@ -3,6 +3,7 @@
  */
 
 #include <base/bitmap.h>
+#include <base/gen.h>
 #include <base/lrpc.h>
 #include <base/mem.h>
 #include <base/stddef.h>
@@ -28,6 +29,8 @@ struct thread {
 	struct lrpc_chan_in		txcmdq;
 	pid_t					tid;
 	int32_t					park_efd;
+	struct gen_num			rq_gen;
+	struct gen_num			rxq_gen;
 	/* only valid if this thread's bit in available_threads is not set */
 	unsigned int			core;
 };
@@ -141,3 +144,4 @@ extern int cores_pin_thread(pid_t tid, int core);
 extern void cores_park_kthread(struct proc *p, int kthread);
 extern int cores_reserve_core(struct proc *p);
 extern void cores_wake_kthread(struct proc *p, int kthread);
+extern void cores_adjust_assignments();

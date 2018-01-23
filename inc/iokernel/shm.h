@@ -7,8 +7,9 @@
 #include <limits.h>
 
 #include <base/atomic.h>
-#include <base/stddef.h>
+#include <base/gen.h>
 #include <base/lrpc.h>
+#include <base/stddef.h>
 
 #define INGRESS_MBUF_SHM_KEY 0x696d736b /* "imsk" */
 #define INGRESS_MBUF_SHM_SIZE 0x20000000
@@ -150,4 +151,24 @@ static inline int shm_init_lrpc_out(struct shm_region *r, struct queue_spec *s,
 		return -EINVAL;
 
 	return lrpc_init_out(c, tbl, s->msg_count, wb);
+}
+
+/**
+ * shm_init_gen - initializes a generation number in shared memory from a
+ * shared memory pointer
+ * @r: the shared memory region the gen number resides in
+ * @gen_ptr: the shared memory pointer to the gen number
+ * @g: the struct gen_num to initialize
+ */
+static inline int shm_init_gen(struct shm_region *r, shmptr_t gen_ptr,
+		struct gen_num *g)
+{
+	uint32_t *gen;
+
+	gen = (uint32_t *) shmptr_to_ptr(r, gen_ptr, sizeof(uint32_t));
+	if (!gen)
+		return -EINVAL;
+
+	gen_init(g, gen);
+	return 0;
 }
