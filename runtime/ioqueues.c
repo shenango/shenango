@@ -114,9 +114,11 @@ static int ioqueues_shm_setup(unsigned int threads)
 	int i, ret;
 	size_t shm_len;
 
-	ret = generate_random_mac(&netcfg.mac);
-	if (ret < 0)
-		return ret;
+	if (!netcfg.mac.addr[0]) {
+		ret = generate_random_mac(&netcfg.mac);
+		if (ret < 0)
+			return ret;
+	}
 
 	BUILD_ASSERT(sizeof(netcfg.mac) >= sizeof(mem_key_t));
 	iok.key = *(mem_key_t*)(&netcfg.mac);

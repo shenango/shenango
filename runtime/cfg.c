@@ -95,6 +95,35 @@ static int parse_runtime_kthreads(const char *name, const char *val)
 	return 0;
 }
 
+static int parse_mac_address(const char *name, const char *val)
+{
+	int i;
+	struct eth_addr mac;
+
+	static const char *fmts[] = {
+		"%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
+		"%hhx-%hhx-%hhx-%hhx-%hhx-%hhx",
+		"%hhx%hhx%hhx%hhx%hhx%hhx"
+	};
+
+	for (i = 0; i < ARRAY_SIZE(fmts); i++) {
+		if (sscanf(val, fmts[i], &mac.addr[0], &mac.addr[1],
+			   &mac.addr[2], &mac.addr[3], &mac.addr[4],
+			   &mac.addr[5]) == 6) {
+			if (mac.addr[0] & ETH_ADDR_GROUP ||
+			    !(mac.addr[0] & ETH_ADDR_LOCAL_ADMIN)) {
+				log_err("Invalid mac address");
+				return -EINVAL;
+			}
+			netcfg.mac = mac;
+			return 0;
+		}
+	}
+
+	log_err("Could not parse mac address");
+	return -EINVAL;
+}
+
 
 /*
  * Parsing Infrastructure
@@ -112,6 +141,7 @@ static const struct cfg_handler cfg_handlers[] = {
 	{ "host_addr", parse_host_ip, true },
 	{ "host_netmask", parse_host_ip, true },
 	{ "host_gateway", parse_host_ip, true },
+	{ "host_mac", parse_mac_address, false },
 	{ "runtime_kthreads", parse_runtime_kthreads, true },
 };
 
