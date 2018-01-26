@@ -241,7 +241,9 @@ int timer_init_thread(void)
 {
 	struct kthread *k = myk();
 
-	k->timers = malloc(sizeof(struct timer_idx) * RUNTIME_MAX_TIMERS);
+	k->timers = aligned_alloc(CACHE_LINE_SIZE,
+			align_up(sizeof(struct timer_idx) * RUNTIME_MAX_TIMERS,
+				 CACHE_LINE_SIZE));
 	if (!k->timers)
 		return -ENOMEM;
 
