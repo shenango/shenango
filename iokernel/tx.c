@@ -33,8 +33,9 @@ static inline struct tx_pktmbuf_priv *tx_pktmbuf_get_priv(struct rte_mbuf *buf)
 /*
  * Prepare rte_mbuf struct for transmission.
  */
-static void tx_prepare_tx_mbuf(struct rte_mbuf *buf, struct tx_net_hdr *net_hdr,
-		struct proc *p, struct thread *thread)
+static void tx_prepare_tx_mbuf(struct rte_mbuf *buf,
+			       const struct tx_net_hdr *net_hdr,
+			       struct proc *p, struct thread *thread)
 {
 	uint32_t page_number;
 	struct tx_pktmbuf_priv *priv_data;
@@ -87,7 +88,7 @@ bool tx_send_completion(void *obj) {
 		return true;
 
 	/* check if runtime is still registered */
-	buf = (struct rte_mbuf *) obj;
+	buf = (struct rte_mbuf *)obj;
 	priv_data = tx_pktmbuf_get_priv(buf);
 	ret = rte_hash_lookup_data(dp.pid_to_proc, &priv_data->pid, &data);
 	if (ret < 0) {
@@ -106,60 +107,96 @@ bool tx_send_completion(void *obj) {
 	return true;
 }
 
+struct mbuf_meta {
+	struct proc *p;
+	struct thread *t;
+};
+
+static int tx_drain_queue(struct proc *p, struct thread *t, int n,
+			  const struct tx_net_hdr **hdrs,
+			  struct mbuf_meta *metas)
+{
+	int i;
+
+	for (i = 0; i < n; i++) {
+		uint64_t cmd;
+		unsigned long payload;
+
+		if (!lrpc_recv(&t->txpktq, &cmd, &payload))
+			break;
+
+		/* TODO: need to kill the process? */
+		BUG_ON(cmd != TXPKT_NET_XMIT);
+
+		hdrs[i] = shmptr_to_ptr(&p->region, payload,
+					sizeof(struct tx_net_hdr));
+		/* TODO: need to kill the process? */
+		BUG_ON(!hdrs[i]);
+
+		/* fill in metadata for this mbuf */
+		metas[i].p = p;
+		metas[i].t = t;
+	}
+
+	return i;
+}
+
+
 /*
  * Process a batch of outgoing packets.
  */
-void tx_burst()
+void tx_burst(void)
 {
-	struct rte_mbuf *bufs[IOKERNEL_PKT_BURST_SIZE];
-	uint16_t i, j, n_pkts, nb_tx;
+	const struct tx_net_hdr *hdrs[IOKERNEL_TX_BURST_SIZE];
+	struct mbuf_meta metas[IOKERNEL_TX_BURST_SIZE];
+	struct rte_mbuf *bufs[IOKERNEL_TX_BURST_SIZE];
 	struct proc *p;
 	struct thread *t;
-	uint64_t cmd;
-	unsigned long payload;
-	struct tx_net_hdr *net_hdr;
-	int ret;
-	struct rte_mbuf *buf;
+	int i, j, ret, n_pkts = 0;
 
-	/* Poll each thread in each runtime until all have been polled or we have
-	 * PKT_BURST_SIZE pkts. TODO: maintain state across calls to this function
-	 * to avoid starving threads/runtimes with higher indices. */
-	n_pkts = 0;
+	/*
+	 * Poll each thread in each runtime until all have been polled or we
+	 * have PKT_BURST_SIZE pkts. TODO: maintain state across calls to this
+	 * function to avoid starving threads/runtimes with higher indices.
+	 */
 	for (i = 0; i < dp.nr_clients; i++) {
 		p = dp.clients[i];
 		for (j = 0; j < p->thread_count; j++) {
 			t = &p->threads[j];
-			if (lrpc_recv(&t->txpktq, &cmd, &payload)) {
-				net_hdr = shmptr_to_ptr(&p->region, payload,
-						sizeof(struct tx_net_hdr));
+			n_pkts += tx_drain_queue(p, t,
+				IOKERNEL_TX_BURST_SIZE - n_pkts,
+				&hdrs[n_pkts], &metas[n_pkts]);
 
-				ret = rte_mempool_get(tx_mbuf_pool, (void **) &buf);
-				if (ret < 0) {
-					/* TODO: send completion to free net_hdr's memory */
-					log_warn("tx: error getting mbuf from mempool");
-					goto done_polling;
-				}
-
-				tx_prepare_tx_mbuf(buf, net_hdr, p, t);
-
-				bufs[n_pkts++] = buf;
-
-				if (n_pkts >= IOKERNEL_PKT_BURST_SIZE)
-					goto done_polling;
-			}
+			if (n_pkts == IOKERNEL_TX_BURST_SIZE)
+				goto done_polling;
 		}
 	}
 
+done_polling:
 	if (n_pkts == 0)
 		return;
 
-done_polling:
-	/* send packets to NIC queue */
-	nb_tx = rte_eth_tx_burst(dp.port, 0, bufs, n_pkts);
-	log_debug("tx: transmitted %d packets on port %d", nb_tx, dp.port);
+	/* allocate mbufs */
+	ret = rte_mempool_get_bulk(tx_mbuf_pool, (void **)bufs, n_pkts);
+	if (ret) {
+		/* TODO: send completion to free net_hdr's memory */
+		log_warn("tx: error getting mbuf from mempool");
+		return;
+	}
 
-	if (nb_tx < n_pkts) {
-		for (i = nb_tx; i < n_pkts; i++)
+	/* fill in packet metadata */
+	for (i = 0; i < n_pkts; i++)
+		tx_prepare_tx_mbuf(bufs[i], hdrs[i], metas[i].p, metas[i].t);
+
+	/* finally, send the packets on the wire */
+	ret = rte_eth_tx_burst(dp.port, 0, bufs, n_pkts);
+	log_debug("tx: transmitted %d packets on port %d", ret, dp.port);
+
+	if (unlikely(ret < n_pkts)) {
+		/* TODO: back pressure */
+		log_warn("tx: tried to xmit %d packets, only did %d",
+			 n_pkts, ret);
+		for (i = ret; i < n_pkts; i++)
 			rte_pktmbuf_free(bufs[i]);
 	}
 }

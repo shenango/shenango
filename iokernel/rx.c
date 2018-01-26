@@ -48,6 +48,7 @@ static struct rx_net_hdr *rx_prepend_rx_preamble(struct rte_mbuf *buf)
  */
 static bool rx_enqueue_to_runtime(struct rx_net_hdr *net_hdr, struct proc *p)
 {
+	static int rr = 0;
 	bool wake_kthread = false;
 	int kthread, r, index;
 	struct thread *t;
@@ -63,8 +64,8 @@ static bool rx_enqueue_to_runtime(struct rx_net_hdr *net_hdr, struct proc *p)
 			BUG(); /* not handled */
 		}
 	} else {
-		/* choose a random thread from the active threads */
-		r = rand() % p->active_thread_count;
+		/* round-robin through the active threads */
+		r = rr++ % p->active_thread_count;
 		index = -1;
 		bitmap_for_each_cleared(p->available_threads, p->thread_count,
 				kthread) {
@@ -93,7 +94,7 @@ static bool rx_enqueue_to_runtime(struct rx_net_hdr *net_hdr, struct proc *p)
  */
 void rx_burst()
 {
-	struct rte_mbuf *bufs[IOKERNEL_PKT_BURST_SIZE];
+	struct rte_mbuf *bufs[IOKERNEL_RX_BURST_SIZE];
 	uint16_t nb_rx, i, j, n_sent;
 	struct rte_mbuf *buf;
 	struct ether_hdr *ptr_mac_hdr;
@@ -105,7 +106,7 @@ void rx_burst()
 	bool success;
 
 	/* retrieve packets from NIC queue */
-	nb_rx = rte_eth_rx_burst(dp.port, 0, bufs, IOKERNEL_PKT_BURST_SIZE);
+	nb_rx = rte_eth_rx_burst(dp.port, 0, bufs, IOKERNEL_RX_BURST_SIZE);
 	if (nb_rx > 0)
 		log_debug("rx: received %d packets on port %d", nb_rx, dp.port);
 

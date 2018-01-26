@@ -16,7 +16,7 @@
 #define UDP_SEED		0x48FA8BC1
 #define UDP_TABLE_SIZE		1024
 #define UDP_IN_DEFAULT_CAP	512
-#define UDP_OUT_DEFAULT_CAP	512
+#define UDP_OUT_DEFAULT_CAP	2048
 
 /* ephemeral port definitions (IANA suggested range) */
 #define MIN_EPHEMERAL		49152
