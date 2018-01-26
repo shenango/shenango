@@ -11,6 +11,7 @@
 #include "defs.h"
 
 #define IP_ID_SEED	0x42345323
+#define RX_PREFETCH_STRIDE 2
 
 /* the maximum number of packets to process per scheduler invocation */
 #define MAX_BUDGET	512
@@ -226,8 +227,10 @@ static void net_rx_worker(void *arg)
 		mbuf_free(c->compl_reqs[i]);
 
 	/* deliver new RX packets to the runtime */
-	for (i = 0; i < c->recv_cnt; i++)
+	for (i = 0; i < c->recv_cnt; i++) {
+		prefetch(c->recv_reqs[i + RX_PREFETCH_STRIDE]);
 		net_rx_one(c->recv_reqs[i]);
+	}
 }
 
 /**

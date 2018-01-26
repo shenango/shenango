@@ -13,6 +13,8 @@
 
 #include "defs.h"
 
+#define TX_PREFETCH_STRIDE 2
+
 struct rte_mempool *tx_mbuf_pool;
 
 /*
@@ -185,8 +187,10 @@ done_polling:
 	}
 
 	/* fill in packet metadata */
-	for (i = 0; i < n_pkts; i++)
+	for (i = 0; i < n_pkts; i++) {
+		prefetch(hdrs[i + TX_PREFETCH_STRIDE]);
 		tx_prepare_tx_mbuf(bufs[i], hdrs[i], metas[i].p, metas[i].t);
+	}
 
 	/* finally, send the packets on the wire */
 	ret = rte_eth_tx_burst(dp.port, 0, bufs, n_pkts);
