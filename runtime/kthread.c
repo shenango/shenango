@@ -28,7 +28,7 @@ static struct kthread *allock(void)
 {
 	struct kthread *k;
 
-	k = malloc(sizeof(*k));
+	k = malloc(align_up(sizeof(*k), CACHE_LINE_SIZE));
 	if (!k)
 		return NULL;
 
