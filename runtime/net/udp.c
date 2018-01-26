@@ -296,7 +296,6 @@ static int udp_send_raw(struct mbuf *m, size_t len,
 struct udpconn {
 	struct udp_entry	e;
 	bool			shutdown;
-	struct kref		ref;
 
 	/* ingress support */
 	spinlock_t		inq_lock;
@@ -308,6 +307,7 @@ struct udpconn {
 
 	/* egress support */
 	spinlock_t		outq_lock;
+	bool			outq_free;
 	int			outq_cap;
 	int			outq_len;
 	struct list_head	outq_waiters;
@@ -370,7 +370,6 @@ const struct udp_ops udp_conn_ops = {
 static void udp_init_conn(udpconn_t *c)
 {
 	c->shutdown = false;
-	kref_init(&c->ref);
 	c->e.ops = &udp_conn_ops;
 
 	/* initialize ingress fields */
@@ -383,6 +382,7 @@ static void udp_init_conn(udpconn_t *c)
 
 	/* initialize egress fields */
 	spin_lock_init(&c->outq_lock);
+	c->outq_free = false;
 	c->outq_cap = UDP_OUT_DEFAULT_CAP;
 	c->outq_len = 0;
 	list_head_init(&c->outq_waiters);
@@ -394,9 +394,8 @@ static void udp_finish_release_conn(struct rcu_head *h)
 	sfree(c);
 }
 
-static void udp_release_conn(struct kref *ref)
+static void udp_release_conn(udpconn_t *c)
 {
-	udpconn_t *c = container_of(ref, udpconn_t, ref);
 	assert(list_empty(&c->inq_waiters) && list_empty(&c->outq_waiters));
 	assert(mbufq_empty(&c->inq));
 	rcu_free(&c->e.rcu, udp_finish_release_conn);
@@ -584,16 +583,19 @@ static void udp_tx_release_mbuf(struct mbuf *m)
 {
 	udpconn_t *c = (udpconn_t *)m->release_data;
 	thread_t *th;
+	bool free_conn;
 
 	spin_lock(&c->outq_lock);
 	c->outq_len--;
 	th = list_pop(&c->outq_waiters, thread_t, link);
+	free_conn = (c->outq_free && c->outq_len == 0);
 	spin_unlock(&c->outq_lock);
 	if (th)
 		thread_ready(th);
 
-	kref_put(&c->ref, udp_release_conn);
 	net_tx_release_mbuf(m);
+	if (free_conn)
+		udp_release_conn(c);
 }
 
 /**
@@ -657,11 +659,9 @@ ssize_t udp_write_to(udpconn_t *c, const void *buf, size_t len,
 	m->release = udp_tx_release_mbuf;
 	m->release_data = (unsigned long)c;
 
-	kref_get(&c->ref);
 	ret = udp_send_raw(m, len, c->e.laddr, addr);
 	if (unlikely(ret)) {
 		net_tx_release_mbuf(m);
-		kref_put(&c->ref, udp_release_conn);
 		return ret;
 	}
 
@@ -762,9 +762,17 @@ void udp_shutdown(udpconn_t *c)
  */
 void udp_close(udpconn_t *c)
 {
+	bool free_conn;
+
 	if (!c->shutdown)
 		udp_shutdown(c);
-	kref_put(&c->ref, udp_release_conn);
+
+	spin_lock(&c->outq_lock);
+	free_conn = c->outq_len == 0;
+	spin_unlock(&c->outq_lock);
+
+	if (free_conn)
+		udp_release_conn(c);
 }
 
 
