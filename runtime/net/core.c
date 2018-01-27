@@ -228,7 +228,8 @@ static void net_rx_worker(void *arg)
 
 	/* deliver new RX packets to the runtime */
 	for (i = 0; i < c->recv_cnt; i++) {
-		prefetch(c->recv_reqs[i + RX_PREFETCH_STRIDE]);
+		if (i + RX_PREFETCH_STRIDE < c->recv_cnt)
+			prefetch(c->recv_reqs[i + RX_PREFETCH_STRIDE]);
 		net_rx_one(c->recv_reqs[i]);
 	}
 }

@@ -21,19 +21,21 @@ static int nworkers;
 static int seconds;
 static uint64_t stop_us;
 static size_t payload_len;
+static int depth;
 
 struct client_rr_args {
 	waitgroup_t *wg;
 	uint64_t reqs;
 };
 
-static void client_rr_worker(void *arg)
+static void client_worker(void *arg)
 {
 	unsigned char buf[UDP_MAX_PAYLOAD];
 	struct client_rr_args *args = (struct client_rr_args *)arg;
 	udpconn_t *c;
 	struct udpaddr laddr;
 	ssize_t ret;
+	int budget = depth;
 
 	/* local IP + ephemeral port */
 	laddr.ip = 0;
@@ -48,10 +50,13 @@ static void client_rr_worker(void *arg)
 	}
 
 	while (microtime() < stop_us) {
-		ret = udp_write(c, buf, payload_len);
-		if (ret != payload_len) {
-			log_err("udp_write() failed, ret = %ld", ret);
-			break;
+		while (budget) {
+			ret = udp_write(c, buf, payload_len);
+			if (ret != payload_len) {
+				log_err("udp_write() failed, ret = %ld", ret);
+				break;
+			}
+			budget--;
 		}
 
 		ret = udp_read(c, buf, UDP_MAX_PAYLOAD);
@@ -60,6 +65,7 @@ static void client_rr_worker(void *arg)
 			break;
 		}
 
+		budget++;
 		args->reqs++;
 	}
 
@@ -68,15 +74,15 @@ done:
 	waitgroup_done(args->wg);
 }
 
-static void do_client_rr(void *arg)
+static void do_client(void *arg)
 {
 	waitgroup_t wg;
 	struct client_rr_args *arg_tbl;
 	int i, ret;
 	uint64_t reqs = 0;
 
-	log_info("client-mode UDP_RR: %d workers, %ld bytes, %d seconds",
-		 nworkers, payload_len, seconds);
+	log_info("client-mode UDP: %d workers, %ld bytes, %d seconds %d depth",
+		 nworkers, payload_len, seconds, depth);
 
 	arg_tbl = calloc(nworkers, sizeof(*arg_tbl));
 	BUG_ON(!arg_tbl);
@@ -87,7 +93,7 @@ static void do_client_rr(void *arg)
 	for (i = 0; i < nworkers; i++) {
 		arg_tbl[i].wg = &wg;
 		arg_tbl[i].reqs = 0;
-		ret = thread_spawn(client_rr_worker, &arg_tbl[i]);
+		ret = thread_spawn(client_worker, &arg_tbl[i]);
 		BUG_ON(ret);
 	}
 
@@ -99,14 +105,14 @@ static void do_client_rr(void *arg)
 	log_info("measured %f reqs/s", (double)reqs / seconds);
 }
 
-static void server_rr_recv_one(struct udp_spawn_data *d)
+static void server_recv_one(struct udp_spawn_data *d)
 {
 	/* try to echo the packet back */
 	udp_send(d->buf, d->len, d->laddr, d->raddr);
 	udp_spawn_data_release(d->release_data);
 }
 
-static void do_server_rr(void *arg)
+static void do_server(void *arg)
 {
 	waitgroup_t wg;
 	struct udpaddr laddr;
@@ -116,7 +122,7 @@ static void do_server_rr(void *arg)
 	laddr.ip = 0;
 	laddr.port = NETPERF_PORT;
 
-	ret = udp_create_spawner(laddr, server_rr_recv_one, &s);
+	ret = udp_create_spawner(laddr, server_recv_one, &s);
 	BUG_ON(ret);
 
 	/* wait forever */
@@ -154,16 +160,16 @@ int main(int argc, char *argv[])
 	uint32_t addr;
 	thread_fn_t fn;
 
-	if (argc < 7) {
+	if (argc < 8) {
 		printf("%s: [config_file_path] [mode] [nworkers] [ip] [time] "
-		       "[payload_len]\n", argv[0]);
+		       "[payload_len] [depth]\n", argv[0]);
 		return -EINVAL;
 	}
 
-	if (!strcmp(argv[2], "UDP_RR_CLIENT")) {
-		fn = do_client_rr;
-	} else if (!strcmp(argv[2], "UDP_RR_SERVER")) {
-		fn = do_server_rr;
+	if (!strcmp(argv[2], "UDP_CLIENT")) {
+		fn = do_client;
+	} else if (!strcmp(argv[2], "UDP_SERVER")) {
+		fn = do_server;
 	} else {
 		printf("invalid mode '%s'\n", argv[2]);
 		return -EINVAL;
@@ -197,6 +203,13 @@ int main(int argc, char *argv[])
 		return -EINVAL;
 	}
 	payload_len = tmp;
+
+	ret = str_to_long(argv[7], &tmp);
+	if (ret) {
+		printf("couldn't parse [depth] '%s'\n", argv[7]);
+		return -EINVAL;
+	}
+	depth = tmp;
 
 	ret = runtime_init(argv[1], fn, NULL);
 	if (ret) {

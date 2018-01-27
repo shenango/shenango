@@ -56,9 +56,8 @@ static inline bool lrpc_send(struct lrpc_chan_out *chan, uint64_t cmd,
 		return __lrpc_send(chan, cmd, payload);
 
 	dst = &chan->tbl[chan->send_head & (chan->size - 1)];
-	dst->payload = payload;
-
 	cmd |= (chan->send_head++ & chan->size) ? 0 : LRPC_DONE_PARITY;
+	dst->payload = payload;
 	store_release(&dst->cmd, cmd);
 	return true;
 }

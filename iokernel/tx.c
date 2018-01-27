@@ -188,7 +188,8 @@ done_polling:
 
 	/* fill in packet metadata */
 	for (i = 0; i < n_pkts; i++) {
-		prefetch(hdrs[i + TX_PREFETCH_STRIDE]);
+		if (i + TX_PREFETCH_STRIDE < n_pkts)
+			prefetch(hdrs[i + TX_PREFETCH_STRIDE]);
 		tx_prepare_tx_mbuf(bufs[i], hdrs[i], metas[i].p, metas[i].t);
 	}
 
