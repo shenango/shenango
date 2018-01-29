@@ -22,8 +22,10 @@ static void net_rx_icmp_echo(struct mbuf *m_in,
 	log_debug("icmp: responding to icmp echo request");
 
 	m = net_tx_alloc_mbuf();
-	if (unlikely(!m))
-		goto drop;
+	if (unlikely(!m)) {
+		mbuf_drop(m_in);
+		return;
+	}
 
 	/* copy incoming ICMP hdr and data, set type and checksum */
 	out_icmp_hdr = (struct icmp_hdr *)mbuf_put(m, len);
@@ -34,9 +36,7 @@ static void net_rx_icmp_echo(struct mbuf *m_in,
 
 	/* send the echo reply */
 	net_tx_ip_or_free(m, IPPROTO_ICMP, ntoh32(in_iphdr->saddr));
-
-drop:
-	mbuf_drop(m_in);
+	mbuf_free(m_in);
 }
 
 static void net_rx_icmp_echo_reply(struct mbuf *m,

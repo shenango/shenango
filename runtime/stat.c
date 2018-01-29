@@ -54,7 +54,7 @@ static ssize_t stat_write_buf(char *buf, size_t len)
 
 	/* write out the stats to the buffer */
 	for (j = 0; j < STAT_NR; j++) {
-		ret = snprintf(buf, end - pos, "%s:%ld,",
+		ret = snprintf(pos, end - pos, "%s:%ld,",
 			       stat_names[j], stats[j]);
 		if (ret < 0) {
 			return -EINVAL;
@@ -65,7 +65,8 @@ static ssize_t stat_write_buf(char *buf, size_t len)
 		pos += ret;
 	}
 
-	return pos - buf + 1;
+	pos[-1] = '\0'; /* clip off last ',' */
+	return pos - buf;
 }
 
 static void stat_worker(void *arg)
