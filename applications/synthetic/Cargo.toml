@@ -1,0 +1,12 @@
+[package]
+name = "synthetic"
+version = "0.1.0"
+authors = ["The Shenango Developers"]
+
+[dependencies]
+clap = "2.29.1"
+libc = "0.2"
+shenango = { path = "../../bindings/rust" }
+serde = "1.0"
+serde_derive = "1.0"
+bincode = "0.9"
