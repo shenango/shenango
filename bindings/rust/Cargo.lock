@@ -46,6 +46,11 @@ version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
+name = "byteorder"
+version = "1.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+
+[[package]]
 name = "cexpr"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -196,6 +201,7 @@ name = "shenango"
 version = "0.1.0"
 dependencies = [
  "bindgen 0.32.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "byteorder 1.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc 0.2.33 (registry+https://github.com/rust-lang/crates.io-index)",
  "spin 0.4.6 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
@@ -289,6 +295,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 "checksum atty 0.2.3 (registry+https://github.com/rust-lang/crates.io-index)" = "21e50800ec991574876040fff8ee46b136a53e985286fbe6a3bdfe6421b78860"
 "checksum bindgen 0.32.1 (registry+https://github.com/rust-lang/crates.io-index)" = "6e0e57fd015c86d16b28d6409995045124a07665f36b38ca1992b1caf882fde6"
 "checksum bitflags 0.9.1 (registry+https://github.com/rust-lang/crates.io-index)" = "4efd02e230a02e18f92fc2735f44597385ed02ad8f831e7c1c1156ee5e1ab3a5"
+"checksum byteorder 1.2.1 (registry+https://github.com/rust-lang/crates.io-index)" = "652805b7e73fada9d85e9a6682a4abd490cb52d96aeecc12e33a0de34dfd0d23"
 "checksum cexpr 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)" = "cdbb21df6ff3497a61df5059994297f746267020ba38ce237aad9c875f7b4313"
 "checksum cfg-if 0.1.2 (registry+https://github.com/rust-lang/crates.io-index)" = "d4c819a1287eb618df47cc647173c5c4c66ba19d888a6e50d605672aed3140de"
 "checksum clang-sys 0.21.1 (registry+https://github.com/rust-lang/crates.io-index)" = "00048189ee171715296dfe3b2fcfd439563c7bfec0d98d3976ce3402d62c8f07"
