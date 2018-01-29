@@ -4,6 +4,7 @@ test_base_lrpc
 test_base_smalloc
 test_base_thread
 test_hello
+test_kthread_wakeup
 test_many_threads
 test_multiple_runtimes
 test_ping

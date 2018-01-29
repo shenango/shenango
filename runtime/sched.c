@@ -256,10 +256,8 @@ done:
 	assert(l->rq_head != l->rq_tail);
 	th = l->rq[l->rq_tail++ % RUNTIME_RQ_SIZE];
 
-	/* check if we still have runnable threads */
-	if (l->rq_head != l->rq_tail)
-		gen_active(&l->rq_gen);
-	else
+	/* check if we have emptied the runqueue */
+	if (l->rq_head == l->rq_tail)
 		gen_inactive(&l->rq_gen);
 
 	spin_unlock(&l->lock);
@@ -326,6 +324,9 @@ void thread_ready(thread_t *th)
 		spin_unlock(&k->lock);
 		return;
 	}
+
+	/* at least one thread to run - we are in a generation */
+	gen_active(&k->rq_gen);
 
 	k->rq[k->rq_head % RUNTIME_RQ_SIZE] = th;
 	store_release(&k->rq_head, k->rq_head + 1);
