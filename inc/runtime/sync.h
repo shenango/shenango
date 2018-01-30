@@ -6,25 +6,24 @@
 
 #include <base/stddef.h>
 #include <base/list.h>
-#include <base/atomic.h>
 #include <runtime/thread.h>
+
 
 /*
  * Mutex support
  */
 
 struct mutex {
-	atomic_t		state;
+	bool			held;
 	spinlock_t		waiter_lock;
 	struct list_head	waiters;
 };
 
 typedef struct mutex mutex_t;
 
-/* slow-path mutex routines */
-extern void __mutex_lock(mutex_t *m);
-extern void __mutex_unlock(mutex_t *m);
-
+extern bool mutex_try_lock(mutex_t *m);
+extern void mutex_lock(mutex_t *m);
+extern void mutex_unlock(mutex_t *m);
 extern void mutex_init(mutex_t *m);
 
 /**
@@ -33,7 +32,7 @@ extern void mutex_init(mutex_t *m);
  */
 static inline bool mutex_held(mutex_t *m)
 {
-	return atomic_read(&m->state) > 0;
+	return m->held;
 }
 
 /**
@@ -43,38 +42,6 @@ static inline bool mutex_held(mutex_t *m)
 static inline void assert_mutex_held(mutex_t *m)
 {
 	assert(mutex_held(m));
-}
-
-/**
- * mutex_try_lock - attempts to acquire a mutex
- * @m: the mutex to acquire
- *
- * Returns true if the acquire was successful.
- */
-static inline bool mutex_try_lock(mutex_t *m)
-{
-	return atomic_cmpxchg(&m->state, 0, 1);
-}
-
-/**
- * mutex_lock - acquires a mutex
- * @m: the mutex to acquire
- */
-static inline void mutex_lock(mutex_t *m)
-{
-	if (atomic_fetch_and_add(&m->state, 1))
-		__mutex_lock(m);
-}
-
-/**
- * mutex_unlock - releases a mutex
- * @m: the mutex to release
- */
-static inline void mutex_unlock(mutex_t *m)
-{
-	assert_mutex_held(m);
-	if (atomic_sub_and_fetch(&m->state, 1))
-		__mutex_unlock(m);
 }
 
 
