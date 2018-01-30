@@ -32,7 +32,7 @@ struct thread {
 	pid_t					tid;
 	int32_t					park_efd;
 	struct gen_num			rq_gen;
-	struct gen_num			rxq_gen;
+	struct gen_num			rxq_gen; /* currently unused */
 	/* only valid if this thread's bit in available_threads is not set */
 	unsigned int			core;
 };
