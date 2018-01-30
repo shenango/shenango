@@ -5,6 +5,8 @@
 #![feature(integer_atomics)]
 #![feature(thread_local)]
 
+extern crate byteorder;
+
 use std::cell::UnsafeCell;
 use std::ffi::CString;
 use std::os::raw::{c_int, c_void};
@@ -17,6 +19,7 @@ pub mod ffi {
 
 mod asm;
 pub mod thread;
+pub mod udp;
 
 pub use asm::*;
 

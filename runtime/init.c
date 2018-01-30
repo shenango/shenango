@@ -17,6 +17,11 @@ struct init_entry {
 	int (*init)(void);
 };
 
+static initializer_fn_t global_init_hook = NULL;
+static initializer_fn_t perthread_init_hook = NULL;
+static initializer_fn_t late_init_hook = NULL;
+
+
 #define GLOBAL_INITIALIZER(name) \
 	{__cstr(name), &name ## _init}
 
@@ -85,8 +90,13 @@ static int runtime_init_thread(void)
 		return ret;
 	}
 
-	return run_init_handlers("per-thread", thread_init_handlers,
+	ret = run_init_handlers("per-thread", thread_init_handlers,
 				 ARRAY_SIZE(thread_init_handlers));
+	if (ret || perthread_init_hook == NULL)
+		return ret;
+
+	return perthread_init_hook();
+
 }
 
 static void *pthread_entry(void *data)
@@ -102,6 +112,20 @@ static void *pthread_entry(void *data)
 	/* never reached unless things are broken */
 	BUG();
 	return NULL;
+}
+
+/**
+ * runtime_set_initializers - allow runtime to specifcy a function to run in
+ * each stage of intialization (called before runtime_init).
+ */
+int runtime_set_initializers(initializer_fn_t global_fn,
+			     initializer_fn_t perthread_fn,
+			     initializer_fn_t late_fn)
+{
+	global_init_hook = global_fn;
+	perthread_init_hook = perthread_fn;
+	late_init_hook = late_fn;
+	return 0;
 }
 
 /**
@@ -138,6 +162,14 @@ int runtime_init(const char *cfgpath, thread_fn_t main_fn, void *arg)
 	if (ret)
 		return ret;
 
+	if (global_init_hook) {
+		ret = global_init_hook();
+		if (ret) {
+			log_err("User-specificed global initializer failed, ret = %d", ret);
+			return ret;
+		}
+	}
+
 	log_info("spawning %d kthreads", maxks);
 	for (i = 1; i < maxks; i++) {
 		ret = pthread_create(&tid[i], NULL, pthread_entry, NULL);
@@ -163,6 +195,14 @@ int runtime_init(const char *cfgpath, thread_fn_t main_fn, void *arg)
 	ret = run_init_handlers("late", late_init_handlers,
 			ARRAY_SIZE(late_init_handlers));
 	BUG_ON(ret);
+
+	if (late_init_hook) {
+		ret = late_init_hook();
+		if (ret) {
+			log_err("User-specificed late initializer failed, ret = %d", ret);
+			return ret;
+		}
+	}
 
 	sched_start();
 

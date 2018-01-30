@@ -90,6 +90,18 @@ static inline uint32_t lrpc_get_send_window(struct lrpc_chan_out *chan)
 	return lrpc_get_cached_send_window(chan);
 }
 
+/**
+ * lrpc_get_length - retrieves the number of queued messages
+ * @chan: the egress channel
+ *
+ * Returns the number of messages queued in the channel.
+ */
+static inline uint32_t lrpc_get_length(struct lrpc_chan_out *chan)
+{
+	chan->send_tail = load_acquire(chan->recv_head_wb);
+	return chan->send_head - chan->send_tail;
+}
+
 extern int lrpc_init_out(struct lrpc_chan_out *chan, struct lrpc_msg *tbl,
 			 unsigned int size, uint32_t *recv_head_wb);
 

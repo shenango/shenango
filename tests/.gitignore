@@ -4,6 +4,7 @@ test_base_lrpc
 test_base_smalloc
 test_base_thread
 test_hello
+test_kthread_wakeup
 test_many_threads
 test_multiple_runtimes
 test_ping
@@ -14,4 +15,5 @@ test_runtime_rcu
 test_runtime_timer
 test_smalloc
 test_thread
+test_udp_echo
 netperf

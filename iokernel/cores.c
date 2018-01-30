@@ -214,8 +214,8 @@ void cores_adjust_assignments()
 			if (gen_in_same_gen(&p->threads[j].rq_gen))
 				goto wake_kthread;
 
-			/* check if rx packet queue remained non-empty */
-			if (gen_in_same_gen(&p->threads[j].rxq_gen))
+			/* check if rx packet queue has pending packets */
+			if (lrpc_get_length(&p->threads[j].rxq) > 0)
 				goto wake_kthread;
 
 			/* TODO: check on timers */
