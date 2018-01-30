@@ -92,7 +92,7 @@ static bool rx_enqueue_to_runtime(struct rx_net_hdr *net_hdr, struct proc *p)
 /*
  * Process a batch of incoming packets.
  */
-void rx_burst()
+bool rx_burst()
 {
 	struct rte_mbuf *bufs[IOKERNEL_RX_BURST_SIZE];
 	uint16_t nb_rx, i, j, n_sent;
@@ -165,6 +165,8 @@ void rx_burst()
 			rte_pktmbuf_free(buf);
 		}
 	}
+
+	return nb_rx > 0;
 }
 
 /*

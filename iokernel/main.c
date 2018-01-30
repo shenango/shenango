@@ -64,6 +64,7 @@ static int run_init_handlers(const char *phase, const struct init_entry *h,
  */
 void dataplane_loop()
 {
+	bool work_done;
 	uint64_t next_adjust_time;
 	/*
 	 * Check that the port is on the same NUMA node as the polling thread
@@ -80,17 +81,20 @@ void dataplane_loop()
 	next_adjust_time = microtime();
 	/* run until quit or killed */
 	for (;;) {
+		work_done = false;
+
 		/* handle a burst of ingress packets */
-		rx_burst();
+		work_done |= rx_burst();
 
 		/* send a burst of egress packets */
-		tx_burst();
+		work_done |= tx_burst();
 
 		/* process a batch of commands from runtimes */
-		commands_rx();
+		work_done |= commands_rx();
 
 		/* handle control messages */
-		dp_clients_rx_control_lrpcs();
+		if (!work_done)
+			dp_clients_rx_control_lrpcs();
 
 		/* adjust core assignments */
 		if (microtime() > next_adjust_time) {

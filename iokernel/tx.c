@@ -147,7 +147,7 @@ static int tx_drain_queue(struct proc *p, struct thread *t, int n,
 /*
  * Process a batch of outgoing packets.
  */
-void tx_burst(void)
+bool tx_burst(void)
 {
 	const struct tx_net_hdr *hdrs[IOKERNEL_TX_BURST_SIZE];
 	struct mbuf_meta metas[IOKERNEL_TX_BURST_SIZE];
@@ -176,14 +176,14 @@ void tx_burst(void)
 
 done_polling:
 	if (n_pkts == 0)
-		return;
+		return false;
 
 	/* allocate mbufs */
 	ret = rte_mempool_get_bulk(tx_mbuf_pool, (void **)bufs, n_pkts);
 	if (ret) {
 		/* TODO: send completion to free net_hdr's memory */
 		log_warn("tx: error getting mbuf from mempool");
-		return;
+		return true;
 	}
 
 	/* fill in packet metadata */
@@ -204,6 +204,8 @@ done_polling:
 		for (i = ret; i < n_pkts; i++)
 			rte_pktmbuf_free(bufs[i]);
 	}
+
+	return true;
 }
 
 /*

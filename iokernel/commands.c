@@ -44,7 +44,7 @@ static int commands_drain_queue(struct proc *p, int j, struct lrpc_chan_in *l,
 /*
  * Process a batch of commands from runtimes.
  */
-void commands_rx(void)
+bool commands_rx(void)
 {
 	struct rte_mbuf *bufs[IOKERNEL_CMD_BURST_SIZE];
 	struct proc *p;
@@ -72,4 +72,6 @@ void commands_rx(void)
 done_polling:
 	for (i = 0; i < n_bufs; i++)
 		rte_pktmbuf_free(bufs[i]);
+
+	return n_bufs > 0;
 }

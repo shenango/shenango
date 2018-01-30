@@ -127,15 +127,15 @@ extern int dpdk_late_init();
 /*
  * dataplane RX/TX functions
  */
-extern void rx_burst();
-extern void tx_burst();
+extern bool rx_burst();
+extern bool tx_burst();
 extern bool tx_send_completion(void *obj);
 
 /*
  * dataplane functions for communicating with runtimes and the control plane
  */
 extern void dp_clients_rx_control_lrpcs();
-extern void commands_rx();
+extern bool commands_rx();
 
 /*
  * functions for manipulating core assignments
