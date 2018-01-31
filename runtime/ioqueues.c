@@ -309,9 +309,6 @@ int ioqueues_init_thread(void)
 	ret = shm_init_gen(r, ts->rq_gen, &myk()->rq_gen);
 	BUG_ON(ret);
 
-	ret = shm_init_gen(r, ts->rxq_gen, &myk()->rxq_gen);
-	BUG_ON(ret);
-
 	pthread_barrier_wait(&barrier);
 
 	return 0;

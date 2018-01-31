@@ -264,41 +264,37 @@ struct kthread {
 	struct list_head	rq_overflow;
 	struct lrpc_chan_in	rxq;
 	int			park_efd;
-	int			pad;
+	bool			parked;
 
 	/* 2nd cache-line */
-	struct gen_num	rq_gen;
-	struct gen_num	rxq_gen;
-	unsigned long	pad2[4];
+	struct gen_num		rq_gen;
+	struct mbufq		txpktq_overflow;
+	struct mbufq		txcmdq_overflow;
+	unsigned int		rcu_gen;
+	unsigned int		pad[3];
 
-	/* 3rd-6th cache-line */
-	thread_t		*rq[RUNTIME_RQ_SIZE];
-
-	/* 7th cache-line */
+	/* 3rd cache-line */
 	struct lrpc_chan_out	txpktq;
 	struct lrpc_chan_out	txcmdq;
 
-	/* 8th cache-line */
-	struct mbufq		txpktq_overflow;
-	struct mbufq		txcmdq_overflow;
-	unsigned long		pad3[4];
+	/* 4th-7th cache-line */
+	thread_t		*rq[RUNTIME_RQ_SIZE];
 
-	/* 9th cache-line */
+	/* 8th cache-line */
 	spinlock_t		timer_lock;
 	unsigned int		timern;
 	struct timer_idx	*timers;
-	unsigned long		pad4[6];
+	unsigned long		pad2[6];
 
-	/* 10th cache-line, statistics counters this point onward */
+	/* 9th cache-line, statistics counters this point onward */
 	uint64_t		stats[STAT_NR];
 };
 
 /* compile-time verification of cache-line alignment */
 BUILD_ASSERT(offsetof(struct kthread, lock) % CACHE_LINE_SIZE == 0);
 BUILD_ASSERT(offsetof(struct kthread, rq_gen) % CACHE_LINE_SIZE == 0);
-BUILD_ASSERT(offsetof(struct kthread, rq) % CACHE_LINE_SIZE == 0);
 BUILD_ASSERT(offsetof(struct kthread, txpktq) % CACHE_LINE_SIZE == 0);
-BUILD_ASSERT(offsetof(struct kthread, txpktq_overflow) % CACHE_LINE_SIZE == 0);
+BUILD_ASSERT(offsetof(struct kthread, rq) % CACHE_LINE_SIZE == 0);
 BUILD_ASSERT(offsetof(struct kthread, timer_lock) % CACHE_LINE_SIZE == 0);
 BUILD_ASSERT(offsetof(struct kthread, stats) % CACHE_LINE_SIZE == 0);
 
@@ -318,7 +314,7 @@ extern unsigned int nrks;
 extern struct kthread *ks[NCPU];
 
 extern void kthread_attach(void);
-extern void kthread_detach(void);
+extern void kthread_detach(struct kthread *r);
 
 /**
  * STAT - gets a stat counter
@@ -334,7 +330,8 @@ extern void kthread_detach(void);
 
 extern unsigned int rcu_gen;
 extern __thread unsigned int rcu_tlgen;
-extern void __rcu_recurrent(void);
+extern void __rcu_recurrent(struct kthread *k);
+extern void rcu_detach(struct kthread *k, unsigned int rgen);
 
 /**
  * rcu_poll - advances to the next quiescent period
@@ -343,12 +340,14 @@ extern void __rcu_recurrent(void);
  */
 static inline void rcu_recurrent(void)
 {
+	struct kthread *k = myk();
+
 #ifdef DEBUG
 	assert(rcu_read_count == 0);
 #endif /* DEBUG */
 
-	if (unlikely(load_acquire(&rcu_gen) != rcu_tlgen))
-		__rcu_recurrent();
+	if (unlikely(load_acquire(&rcu_gen) != k->rcu_gen))
+		__rcu_recurrent(k);
 }
 
 

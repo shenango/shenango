@@ -29,8 +29,8 @@ librt++.a: $(rt_obj)
 	$(AR) rcs $@ $^
 
 test: $(test_obj) librt++.a
-	$(LD) $(LDFLAGS) -o $@ $(test_obj) ../../libbase.a ../../libruntime.a librt++.a \
-	-lpthread
+	$(LD) $(LDFLAGS) -o $@ $(test_obj) librt++.a ../../libruntime.a \
+	../../libnet.a ../../libbase.a -lpthread
 
 # general build rules for all targets
 src = $(rt_src) $(test_src)

@@ -73,23 +73,47 @@ void kthread_attach(void)
 }
 
 /**
- * kthread_detach - detaches the thread-local kthread from the runtime
+ * kthread_detach - detaches a kthread from the runtime
  *
- * A detached kthread no longer handles scheduling, RCU, and I/O.
- * TODO: Early prototype. Probably need more synchronization.
+ * @r: the remote kthread to detach
+ *
+ * A detached kthread can no longer be stolen from. It must not receive I/O,
+ * have outstanding timers, or participate in RCU.
  */
-void kthread_detach(void)
+void kthread_detach(struct kthread *r)
 {
+	struct kthread *k = myk();
+	unsigned int rgen;
 	int i;
+
+	assert(r != k);
+	assert(r->parked);
 
 	spin_lock(&klock);
 	assert(nrks > 0);
 	for (i = 0; i < nrks; i++)
-		if (ks[i] == mykthread)
+		if (ks[i] == r)
 			goto found;
 	BUG();
 
 found:
 	ks[i] = ks[nrks--];
+	rgen = load_acquire(&rcu_gen);
 	spin_unlock(&klock);
+
+	/* remove from the current RCU generation */
+	rcu_detach(r, rgen);
+
+	/* steal all overflow packets and completions */
+	mbufq_merge_to_tail(&k->txpktq_overflow, &r->txpktq_overflow);
+	mbufq_merge_to_tail(&k->txcmdq_overflow, &r->txcmdq_overflow);
+
+	/* TODO: merge timer queues */
+
+	/* verify the kthread is correctly detached */
+	assert(r->rq_head == 0);
+	assert(r->rq_tail == 0);
+	assert(list_empty(&r->rq_overflow));
+	assert(mbufq_empty(&r->txpktq_overflow));
+	assert(mbufq_empty(&r->txcmdq_overflow));
 }

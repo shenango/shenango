@@ -143,14 +143,14 @@ static bool steal_work(struct kthread *l, struct kthread *r)
 	store_release(&r->rq_tail, rq_tail);
 	spin_unlock(&r->lock);
 
-	STAT(THREADS_STOLEN)++;
+	STAT(THREADS_STOLEN) += avail;
 	return true;
 }
 
 /*
  * Block the calling kthread until woken up by iokernel.
  */
-static inline void block_kthread()
+static void block_kthread(void)
 {
 	struct kthread *l = myk();
 	ssize_t s;
@@ -168,15 +168,23 @@ static inline void block_kthread()
  * Park a kthread. The iokernel will deallocate this kthread's core and the
  * kthread will block on its eventfd until the iokernel wakes it up.
  */
-static void park_kthread()
+static void park_kthread(void)
 {
 	struct kthread *l = myk();
+
+	assert_spin_lock_held(&l->lock);
+	l->parked = true;
+	spin_unlock(&l->lock);
 
 	/* signal to iokernel that we're about to park */
 	while (!lrpc_send(&l->txcmdq, TXCMD_NET_PARKING, 0))
 		cpu_relax();
 
+	/* yield to the kernel */
 	block_kthread();
+
+	spin_lock(&l->lock);
+	l->parked = false;
 }
 
 /* the main scheduler routine, decides what to run next */
@@ -243,7 +251,9 @@ again:
 
 	if (l->timern == 0) {
 		/* did not find anything to run, park this kthread */
+		STAT(SCHED_CYCLES) += rdtsc() - start_tsc;
 		park_kthread();
+		start_tsc = rdtsc();
 	} else {
 		/* TODO: support parking of kthreads with active timers */
 		cpu_relax();

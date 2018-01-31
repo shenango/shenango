@@ -45,7 +45,12 @@ void MainHandler(void *arg) {
 int main(int argc, char *argv[]) {
   int ret;
 
-  ret = runtime_init(MainHandler, NULL, 1);
+  if (argc < 2) {
+    printf("arg must be config file\n");
+    return -EINVAL;
+  }
+
+  ret = runtime_init(argv[1], MainHandler, NULL);
   if (ret) {
     log_err("failed to start runtime");
     return ret;

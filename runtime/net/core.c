@@ -283,12 +283,6 @@ thread_t *net_run(struct kthread *k, unsigned int budget)
 		}
 	}
 
-	/* check if we still have queued packets */
-	if (budget_left < 0)
-		gen_active(&k->rxq_gen);
-	else
-		gen_inactive(&k->rxq_gen);
-
 	assert(recv_cnt + compl_cnt > 0);
 	c->recv_cnt = recv_cnt;
 	c->compl_cnt = compl_cnt;

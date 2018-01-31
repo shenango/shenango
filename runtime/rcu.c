@@ -18,8 +18,6 @@
 static DEFINE_SPINLOCK(rcu_lock);
 /* The current RCU reclaim generation number (protected by @klock). */
 unsigned int rcu_gen;
-/* The last observed RCU reclaim generation number on the local thread. */
-__thread unsigned int rcu_tlgen;
 /* The head of the RCU free list. */
 static struct rcu_head *rcu_head;
 /* A pointer to the pending RCU worker thread. */
@@ -93,13 +91,26 @@ void rcu_free(struct rcu_head *head, rcu_callback_t func)
 }
 
 /* internal cold-path handler for reschedules */
-void __rcu_recurrent(void)
+void __rcu_recurrent(struct kthread *k)
 {
-	rcu_tlgen = rcu_gen; /* prevents future invocations for this gen */
+	k->rcu_gen = rcu_gen; /* prevents future invocations for this gen */
 
 	spin_lock(&rcu_lock);
 	assert(rcu_reclaim_in_progress > 0);
 	if (--rcu_reclaim_in_progress == 0)
 		rcu_finish_reclaim();
 	spin_unlock(&rcu_lock);
+}
+
+/**
+ * rcu_detach - teardown RCU for a detached kthread
+ * @k: the kthread that was detached
+ * @rgen: the RCU generation number at the time of detach
+ */
+void rcu_detach(struct kthread *k, unsigned int rgen)
+{
+	if (k->rcu_gen == rcu_gen)
+		return;
+
+	__rcu_recurrent(k);
 }
