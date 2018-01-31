@@ -68,7 +68,7 @@ void kthread_attach(void)
 	spin_lock(&klock);
 	assert(nrks < maxks);
 	ks[nrks++] = mykthread;
-	rcu_tlgen = rcu_gen;
+	mykthread->rcu_gen = rcu_gen;
 	spin_unlock(&klock);
 }
 

@@ -59,7 +59,7 @@ static void rcu_start_reclaim(void)
 	rcu_reclaim_in_progress = nrks - 1;
 	store_release(&rcu_gen, rcu_gen + 1);
 	spin_unlock(&klock);
-	rcu_tlgen = rcu_gen;
+	myk()->rcu_gen = rcu_gen;
 }
 
 /* finishes an RCU reclaim period */

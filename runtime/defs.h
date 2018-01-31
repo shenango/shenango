@@ -329,7 +329,6 @@ extern void kthread_detach(struct kthread *r);
  */
 
 extern unsigned int rcu_gen;
-extern __thread unsigned int rcu_tlgen;
 extern void __rcu_recurrent(struct kthread *k);
 extern void rcu_detach(struct kthread *k, unsigned int rgen);
 
