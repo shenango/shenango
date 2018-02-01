@@ -7,6 +7,7 @@
 
 #include <base/stddef.h>
 #include <base/log.h>
+#include <base/time.h>
 #include <runtime/thread.h>
 #include <runtime/udp.h>
 
@@ -37,6 +38,11 @@ static const char *stat_names[] = {
 /* must correspond exactly to STAT_* enum definitions in defs.h */
 BUILD_ASSERT(ARRAY_SIZE(stat_names) == STAT_NR);
 
+static int append_stat(char *pos, size_t len, const char *name, uint64_t val)
+{
+	return snprintf(pos, len, "%s:%ld,", name, val);
+}
+
 static ssize_t stat_write_buf(char *buf, size_t len)
 {
 	uint64_t stats[STAT_NR];
@@ -54,8 +60,7 @@ static ssize_t stat_write_buf(char *buf, size_t len)
 
 	/* write out the stats to the buffer */
 	for (j = 0; j < STAT_NR; j++) {
-		ret = snprintf(pos, end - pos, "%s:%ld,",
-			       stat_names[j], stats[j]);
+		ret = append_stat(pos, end - pos, stat_names[j], stats[j]);
 		if (ret < 0) {
 			return -EINVAL;
 		} else if (ret >= end - pos) {
@@ -65,6 +70,15 @@ static ssize_t stat_write_buf(char *buf, size_t len)
 		pos += ret;
 	}
 
+	/* report the clock rate */
+	ret = append_stat(pos, end - pos, "cycles_per_us", cycles_per_us);
+	if (ret < 0) {
+		return -EINVAL;
+	} else if (ret >= end - pos) {
+		return -E2BIG;
+	}
+
+	pos += ret;
 	pos[-1] = '\0'; /* clip off last ',' */
 	return pos - buf;
 }
