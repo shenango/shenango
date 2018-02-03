@@ -246,7 +246,7 @@ void net_rx_udp(struct mbuf *m, const struct ip_hdr *iphdr, uint16_t len)
 	return;
 
 drop:
-	mbuf_drop(m);
+	mbuf_free(m);
 }
 
 /**

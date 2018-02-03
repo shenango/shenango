@@ -23,7 +23,7 @@ static struct lrpc_chan_in lrpc_control_to_data;
  */
 static void dp_clients_add_client(struct proc *p)
 {
-	int ret, kthread;
+	int ret;
 
 	dp.clients[dp.nr_clients++] = p;
 
@@ -35,16 +35,7 @@ static void dp_clients_add_client(struct proc *p)
 	if (ret < 0)
 		log_err("dp_clients: failed to add PID to hash table in add_client");
 
-	/* reserve a kthread and wake it up */
-	kthread = cores_reserve_core(p);
-	if (kthread < 0) {
-		/* TODO: preempt a running kthread? */
-		log_err("dp_clients: no available kthreads for new runtime");
-		BUG();
-	}
-	BUG_ON(kthread >= p->thread_count);
-
-	cores_wake_kthread(p, kthread);
+	cores_wake_kthread(p);
 }
 
 /*

@@ -10,8 +10,7 @@
 
 #include "defs.h"
 
-static int commands_drain_queue(struct proc *p, int j, struct lrpc_chan_in *l,
-				struct rte_mbuf **bufs, int n)
+static int commands_drain_queue(struct thread *t, struct rte_mbuf **bufs, int n)
 {
 	int i, n_bufs = 0;
 
@@ -19,7 +18,7 @@ static int commands_drain_queue(struct proc *p, int j, struct lrpc_chan_in *l,
 		uint64_t cmd;
 		unsigned long payload;
 
-		if (!lrpc_recv(l, &cmd, &payload))
+		if (!lrpc_recv(&t->txcmdq, &cmd, &payload))
 			break;
 
 		switch (cmd) {
@@ -29,7 +28,7 @@ static int commands_drain_queue(struct proc *p, int j, struct lrpc_chan_in *l,
 			break;
 
 		case TXCMD_NET_PARKING:
-			cores_park_kthread(p, j);
+			cores_park_kthread(t);
 			break;
 
 		default:
@@ -47,31 +46,24 @@ static int commands_drain_queue(struct proc *p, int j, struct lrpc_chan_in *l,
 bool commands_rx(void)
 {
 	struct rte_mbuf *bufs[IOKERNEL_CMD_BURST_SIZE];
-	struct proc *p;
-	struct thread *t;
-	uint16_t i, j, n_bufs = 0;
+	int i, n_bufs = 0;
+	static unsigned int pos = 0;
 
 	/*
 	 * Poll each thread in each runtime until all have been polled or we
-	 * have processed CMD_BURST_SIZE commands. TODO: maintain state across
-	 * calls to this function to avoid starving threads/runtimes with higher
-	 * indices.
+	 * have processed CMD_BURST_SIZE commands.
 	 */
-	for (i = 0; i < dp.nr_clients; i++) {
-		p = dp.clients[i];
-		for (j = 0; j < p->thread_count; j++) {
-			t = &p->threads[j];
-			n_bufs += commands_drain_queue(p, j, &t->txcmdq,
-					&bufs[n_bufs],
-					IOKERNEL_CMD_BURST_SIZE - n_bufs);
-			if (n_bufs >= IOKERNEL_CMD_BURST_SIZE)
-				goto done_polling;
-		}
+	for (i = 0; i < nrts; i++) {
+		unsigned int idx = (pos + i) % nrts;
+
+		if (n_bufs >= IOKERNEL_CMD_BURST_SIZE)
+			break;
+		n_bufs += commands_drain_queue(ts[idx], &bufs[n_bufs],
+				IOKERNEL_CMD_BURST_SIZE - n_bufs);
 	}
 
-done_polling:
+	pos++;
 	for (i = 0; i < n_bufs; i++)
 		rte_pktmbuf_free(bufs[i]);
-
 	return n_bufs > 0;
 }

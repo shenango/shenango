@@ -49,44 +49,32 @@ static struct rx_net_hdr *rx_prepend_rx_preamble(struct rte_mbuf *buf)
 static bool rx_enqueue_to_runtime(struct rx_net_hdr *net_hdr, struct proc *p)
 {
 	static int rr = 0;
-	bool wake_kthread = false;
 	int kthread, r, index;
 	struct thread *t;
 	shmptr_t shmptr;
-	bool success;
 
 	if (p->active_thread_count == 0) {
 		/* reserve a kthread and core to use */
-		wake_kthread = true;
-		kthread = cores_reserve_core(p);
-		if (kthread < 0) {
-			log_err("rx: no available kthreads to handle rx packet");
-			BUG(); /* not handled */
-		}
+		t = cores_wake_kthread(p);
+		if (unlikely(!t))
+			return false;
 	} else {
 		/* round-robin through the active threads */
 		r = rr++ % p->active_thread_count;
 		index = -1;
 		bitmap_for_each_cleared(p->available_threads, p->thread_count,
-				kthread) {
+					kthread) {
 			if (++index == r)
 				break;
 		}
 		BUG_ON(kthread == -1); /* didn't find an active kthread */
+		t = &p->threads[kthread];
 	}
-	t = &p->threads[kthread];
 
 	shmptr = ptr_to_shmptr(&ingress_mbuf_region, net_hdr,
 			sizeof(struct rx_net_hdr));
 
-	success = lrpc_send(&t->rxq, RX_NET_RECV, shmptr);
-
-	/* enqueue the packet before we wake the kthread so there's no risk of it
-	 * immediately parking again */
-	if (wake_kthread)
-		cores_wake_kthread(p, kthread);
-
-	return success;
+	return lrpc_send(&t->rxq, RX_NET_RECV, shmptr);
 }
 
 /*

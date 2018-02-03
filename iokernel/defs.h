@@ -25,16 +25,20 @@
  * Process Support
  */
 
+struct proc;
+
 struct thread {
+	struct proc		*p;
 	struct lrpc_chan_out	rxq;
-	struct lrpc_chan_in		txpktq;
-	struct lrpc_chan_in		txcmdq;
-	pid_t					tid;
-	int32_t					park_efd;
-	struct gen_num			rq_gen;
-	struct gen_num			rxq_gen; /* currently unused */
+	struct lrpc_chan_in	txpktq;
+	struct lrpc_chan_in	txcmdq;
+	pid_t			tid;
+	int32_t			park_efd;
+	struct gen_num		rq_gen;
 	/* only valid if this thread's bit in available_threads is not set */
-	unsigned int			core;
+	unsigned int		core;
+	/* the @ts index (if active) */
+	unsigned int		idx;
 };
 
 struct proc {
@@ -57,6 +61,11 @@ struct proc {
 	/* table of physical addresses for shared memory */
 	physaddr_t		page_paddrs[];
 };
+
+/* the number of active threads to be polled (across all procs) */
+extern unsigned int nrts;
+/* an array of active threads to be polled (across all procs) */
+extern struct thread *ts[NCPU];
 
 /*
  * Communication between control plane and data-plane in the I/O kernel
@@ -90,11 +99,11 @@ enum {
  * Dataplane state
  */
 struct dataplane {
-	uint8_t				port;
+	uint8_t			port;
 	struct rte_mempool	*rx_mbuf_pool;
 
-	struct proc			*clients[IOKERNEL_MAX_PROC];
-	int					nr_clients;
+	struct proc		*clients[IOKERNEL_MAX_PROC];
+	int			nr_clients;
 	struct rte_hash		*mac_to_proc;
 	struct rte_hash		*pid_to_proc;
 };
@@ -143,7 +152,6 @@ extern bool commands_rx();
 extern void cores_init_proc(struct proc *p);
 extern void cores_free_proc(struct proc *p);
 extern int cores_pin_thread(pid_t tid, int core);
-extern void cores_park_kthread(struct proc *p, int kthread);
-extern int cores_reserve_core(struct proc *p);
-extern void cores_wake_kthread(struct proc *p, int kthread);
+extern void cores_park_kthread(struct thread *t);
+extern struct thread *cores_wake_kthread(struct proc *p);
 extern void cores_adjust_assignments();
