@@ -241,6 +241,7 @@ enum {
 	STAT_TIMERS_STOLEN,
 	STAT_NETS_LOCAL,
 	STAT_TIMERS_LOCAL,
+	STAT_PARKS,
 
 	/* network stack counters */
 	STAT_RX_BYTES,

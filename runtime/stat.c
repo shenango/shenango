@@ -26,6 +26,7 @@ static const char *stat_names[] = {
 	"timers_stolen",
 	"nets_local",
 	"timers_local",
+	"parks",
 
 	/* network stack counters */
 	"rx_bytes",

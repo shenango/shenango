@@ -11,7 +11,7 @@
 
 #include "defs.h"
 
-#define CORES_ADJUST_INTERVAL_US	100
+#define CORES_ADJUST_INTERVAL_US	5
 struct dataplane dp;
 
 struct init_entry {

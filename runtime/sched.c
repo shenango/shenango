@@ -174,6 +174,7 @@ static void park_kthread(void)
 
 	assert_spin_lock_held(&l->lock);
 	l->parked = true;
+	STAT(PARKS)++;
 	spin_unlock(&l->lock);
 
 	/* signal to iokernel that we're about to park */

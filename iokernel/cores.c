@@ -207,34 +207,39 @@ void cores_free_proc(struct proc *p)
  */
 void cores_adjust_assignments()
 {
-	int core, i, j;
+	struct thread *th;
 	struct proc *p;
+	uint32_t send_tail, len;
+	int core, i;
 
 	/* check for available cores */
 	core = bitmap_find_next_set(avail_cores, cpu_count, 0);
 	if (core == cpu_count)
 		return; /* no cores available */
 
-	for (i = 0; i < dp.nr_clients; i++) {
-		p = dp.clients[i];
+	for (i = 0; i < nrts; i++) {
+		th = ts[i];
+		p = th->p;
 
 		/* check if runtime is already using max kthreads */
 		if (p->active_thread_count == p->thread_count)
 			continue;
 
-		/* if any kthread has been busy over the last interval, wake
-		 * another kthread */
-		bitmap_for_each_cleared(p->available_threads, p->thread_count, j) {
-			/* check if runqueue remained non-empty */
-			if (gen_in_same_gen(&p->threads[j].rq_gen))
-				goto wake_kthread;
+		/* check if runqueue remained non-empty */
+		if (gen_in_same_gen(&th->rq_gen))
+			goto wake_kthread;
 
-			/* check if rx packet queue has pending packets */
-			if (lrpc_get_length(&p->threads[j].rxq) > 0)
-				goto wake_kthread;
-
-			/* TODO: check on timers */
+		/* check if rx queue remained non-empty or overflow */
+		send_tail = lrpc_poll_send_tail(&th->rxq);
+		len = lrpc_get_cached_length(&th->rxq);
+		if (len > 0 && (len >= IOKERNEL_RX_WAKE_THRESH ||
+				send_tail == th->last_send_tail)) {
+			th->last_send_tail = send_tail;
+			goto wake_kthread;
 		}
+		th->last_send_tail = send_tail;
+
+		/* TODO: check on timers */
 
 		continue; /* no need to wake a kthread */
 
