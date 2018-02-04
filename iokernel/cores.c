@@ -50,7 +50,7 @@ static void cores_log_assignments()
 /*
  * Parks the given kthread (if it exists) and frees its core.
  */
-void cores_park_kthread(struct thread *th)
+void cores_park_kthread(struct thread *th, bool force)
 {
 	struct proc *p = th->p;
 	unsigned int core = th->core;
@@ -68,8 +68,8 @@ void cores_park_kthread(struct thread *th)
 	/* check for race conditions with the runtime */
 	/* TODO: just need to drain the txpktq instead of waking */
 	lrpc_poll_send_tail(&th->rxq);
-	if (unlikely(lrpc_get_cached_length(&th->rxq) > 0 ||
-		     !lrpc_empty(&th->txpktq))) {
+	if (unlikely(!force && (lrpc_get_cached_length(&th->rxq) > 0 ||
+				!lrpc_empty(&th->txpktq)))) {
 		/* the runtime parked while packets were in flight */
 		s = write(th->park_efd, &val, sizeof(val));
 		BUG_ON(s != sizeof(uint64_t));
@@ -209,7 +209,7 @@ void cores_free_proc(struct proc *p)
 	int i;
 
 	bitmap_for_each_cleared(p->available_threads, p->thread_count, i)
-		cores_park_kthread(&p->threads[i]);
+		cores_park_kthread(&p->threads[i], true);
 }
 
 /*

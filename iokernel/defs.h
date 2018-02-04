@@ -154,6 +154,6 @@ extern bool commands_rx();
 extern void cores_init_proc(struct proc *p);
 extern void cores_free_proc(struct proc *p);
 extern int cores_pin_thread(pid_t tid, int core);
-extern void cores_park_kthread(struct thread *t);
+extern void cores_park_kthread(struct thread *t, bool force);
 extern struct thread *cores_wake_kthread(struct proc *p);
 extern void cores_adjust_assignments();
