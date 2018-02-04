@@ -55,6 +55,8 @@ void cores_park_kthread(struct thread *th)
 	struct proc *p = th->p;
 	unsigned int core = th->core;
 	unsigned int kthread = th - p->threads;
+	ssize_t s;
+	uint64_t val = 1;
 	int ret;
 
 	assert(kthread < NCPU);
@@ -62,6 +64,17 @@ void cores_park_kthread(struct thread *th)
 	/* make sure this core and kthread are currently reserved */
 	BUG_ON(bitmap_test(avail_cores, core));
 	BUG_ON(bitmap_test(p->available_threads, kthread));
+
+	/* check for race conditions with the runtime */
+	/* TODO: just need to drain the txpktq instead of waking */
+	lrpc_poll_send_tail(&th->rxq);
+	if (unlikely(lrpc_get_cached_length(&th->rxq) > 0 ||
+		     !lrpc_empty(&th->txpktq))) {
+		/* the runtime parked while packets were in flight */
+		s = write(th->park_efd, &val, sizeof(val));
+		BUG_ON(s != sizeof(uint64_t));
+		return;
+	}
 
 	/* move the kthread to the linux core */
 	ret = cores_pin_thread(th->tid, core_assign.linux_core);
