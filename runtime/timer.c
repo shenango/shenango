@@ -22,6 +22,28 @@ struct timer_idx {
 	struct timer_entry	*e;
 };
 
+/**
+ * is_valid_heap - checks that the timer heap is a valid min heap
+ * @heap: the timer heap
+ * @n: the number of timers in the heap
+ *
+ * Returns true if valid, false otherwise.
+ */
+static bool is_valid_heap(struct timer_idx *heap, int n)
+{
+	int i, p;
+
+	/* check that each timer's deadline is later or equal to its parent's
+	 * deadline */
+	for (i = n-1; i > 1; i--) {
+		p = (i - 1) / D;
+		if (heap[p].deadline_us > heap[i].deadline_us)
+			return false;
+	}
+
+	return true;
+}
+
 static void sift_up(struct timer_idx *heap, int i)
 {
 	struct timer_idx tmp = heap[i];
@@ -49,7 +71,7 @@ static void sift_down(struct timer_idx *heap, int i, int n)
 		w = tmp.deadline_us;
 		c = INT_MAX;
 		for (j = (i * D + 1); j <= (i * D + D); j++) {
-			if (j + i >= n)
+			if (j >= n)
 				break;
 			if (heap[j].deadline_us < w) {
 				w = heap[j].deadline_us;
