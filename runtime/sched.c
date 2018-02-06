@@ -168,24 +168,29 @@ static void block_kthread(void)
  * Park a kthread. The iokernel will deallocate this kthread's core and the
  * kthread will block on its eventfd until the iokernel wakes it up.
  */
-static void park_kthread(void)
+static void park_kthread(bool notify_iokernel)
 {
 	struct kthread *l = myk();
 
 	assert_spin_lock_held(&l->lock);
-	l->parked = true;
+	assert(l->state == KTHREAD_STATE_ACTIVE);
+
+	l->state = KTHREAD_STATE_PARKED_ATTACHED;
 	STAT(PARKS)++;
 	spin_unlock(&l->lock);
 
 	/* signal to iokernel that we're about to park */
-	while (!lrpc_send(&l->txcmdq, TXCMD_NET_PARKING, 0))
-		cpu_relax();
+	if (notify_iokernel) {
+		while (!lrpc_send(&l->txcmdq, TXCMD_NET_PARKING, 0))
+			cpu_relax();
+	}
 
 	/* yield to the kernel */
 	block_kthread();
 
+	/* reattach kthread if necessary */
 	spin_lock(&l->lock);
-	l->parked = false;
+	kthread_attach();
 }
 
 /* the main scheduler routine, decides what to run next */
@@ -208,6 +213,7 @@ static __noreturn void schedule(void)
 
 	__self = NULL;
 	spin_lock(&l->lock);
+	assert(l->state == KTHREAD_STATE_ACTIVE);
 
 	/* move overflow tasks into the runqueue */
 	if (unlikely(!list_empty(&l->rq_overflow)))
@@ -253,7 +259,7 @@ again:
 	if (l->timern == 0) {
 		/* did not find anything to run, park this kthread */
 		STAT(SCHED_CYCLES) += rdtsc() - start_tsc;
-		park_kthread();
+		park_kthread(true);
 		start_tsc = rdtsc();
 	} else {
 		/* TODO: support parking of kthreads with active timers */
@@ -287,7 +293,14 @@ done:
  */
 static __noreturn void schedule_start(void)
 {
-	block_kthread();
+	struct kthread *l = myk();
+
+	/* park kthread but don't notify iokernel, which assumes all kthreads are
+	 * parked initially */
+	spin_lock(&l->lock);
+	park_kthread(false);
+	spin_unlock(&l->lock);
+
 	schedule();
 }
 

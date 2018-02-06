@@ -265,7 +265,7 @@ struct kthread {
 	struct list_head	rq_overflow;
 	struct lrpc_chan_in	rxq;
 	int			park_efd;
-	bool			parked;
+	uint8_t			state;
 
 	/* 2nd cache-line */
 	struct gen_num		rq_gen;
@@ -300,6 +300,13 @@ BUILD_ASSERT(offsetof(struct kthread, timer_lock) % CACHE_LINE_SIZE == 0);
 BUILD_ASSERT(offsetof(struct kthread, stats) % CACHE_LINE_SIZE == 0);
 
 extern __thread struct kthread *mykthread;
+
+/* possible values for @state above */
+enum {
+	KTHREAD_STATE_PARKED_DETACHED,
+	KTHREAD_STATE_PARKED_ATTACHED,
+	KTHREAD_STATE_ACTIVE,
+};
 
 /**
  * myk - returns the per-kernel-thread data

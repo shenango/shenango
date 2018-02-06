@@ -106,7 +106,9 @@ static void *pthread_entry(void *data)
 	ret = runtime_init_thread();
 	BUG_ON(ret);
 
+	spin_lock(&myk()->lock);
 	kthread_attach();
+	spin_unlock(&myk()->lock);
 	sched_start();
 
 	/* never reached unless things are broken */
@@ -190,7 +192,9 @@ int runtime_init(const char *cfgpath, thread_fn_t main_fn, void *arg)
 	ret = thread_spawn_main(main_fn, arg);
 	BUG_ON(ret);
 
+	spin_lock(&myk()->lock);
 	kthread_attach();
+	spin_unlock(&myk()->lock);
 
 	ret = run_init_handlers("late", late_init_handlers,
 			ARRAY_SIZE(late_init_handlers));

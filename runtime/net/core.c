@@ -215,6 +215,8 @@ struct net_rx_closure {
 	unsigned int recv_cnt, compl_cnt;
 	struct rx_net_hdr *recv_reqs[MAX_BUDGET];
 	struct mbuf *compl_reqs[MAX_BUDGET];
+	bool kthread_parked;
+	struct kthread *k;
 };
 
 static void net_rx_worker(void *arg)
@@ -231,6 +233,13 @@ static void net_rx_worker(void *arg)
 		if (i + RX_PREFETCH_STRIDE < c->recv_cnt)
 			prefetch(c->recv_reqs[i + RX_PREFETCH_STRIDE]);
 		net_rx_one(c->recv_reqs[i]);
+	}
+
+	/* detach kthread if iokernel has parked it */
+	if (c->kthread_parked) {
+		spin_lock(&c->k->lock);
+		kthread_detach(c->k);
+		spin_unlock(&c->k->lock);
 	}
 }
 
@@ -258,6 +267,8 @@ thread_t *net_run(struct kthread *k, unsigned int budget)
 	if (unlikely(!th))
 		return NULL;
 
+	c->kthread_parked = false;
+	c->k = k;
 	budget_left = min(budget, MAX_BUDGET);
 	while (budget_left--) {
 		uint64_t cmd;
@@ -278,12 +289,16 @@ thread_t *net_run(struct kthread *k, unsigned int budget)
 			c->compl_reqs[compl_cnt++] = (struct mbuf *)payload;
 			break;
 
+		case RX_NET_PARKED:
+			c->kthread_parked = true;
+			break;
+
 		default:
 			log_err_ratelimited("net: invalid RXQ cmd '%ld'", cmd);
 		}
 	}
 
-	assert(recv_cnt + compl_cnt > 0);
+	assert(recv_cnt + compl_cnt > 0 || c->kthread_parked);
 	c->recv_cnt = recv_cnt;
 	c->compl_cnt = compl_cnt;
 	th->state = THREAD_STATE_RUNNABLE;

@@ -8,6 +8,7 @@
 #include <base/bitmap.h>
 #include <base/cpu.h>
 #include <base/log.h>
+#include <iokernel/queue.h>
 
 #include "defs.h"
 
@@ -93,6 +94,11 @@ void cores_park_kthread(struct thread *th, bool force)
 	/* remove the thread from the polling array */
 	ts[th->idx] = ts[--nrts];
 	ts[th->idx]->idx = th->idx;
+
+	/* notify kthread that it has been parked so that another kthread can
+	   detach it */
+	if (!lrpc_send(&p->threads[kthread].rxq, RX_NET_PARKED, 0))
+		log_warn("cores: failed to enqueue parked command to runtime");
 }
 
 /*

@@ -59,21 +59,36 @@ int kthread_init_thread(void)
 }
 
 /**
- * kthread_attach - attaches the thread-local kthread to the runtime
+ * kthread_attach - attaches the thread-local kthread to the runtime if it isn't
+ * already attached
  *
  * An attached kthread participates in scheduling, RCU, and I/O.
  */
 void kthread_attach(void)
 {
+	assert_spin_lock_held(&mykthread->lock);
+	assert(mykthread->state == KTHREAD_STATE_PARKED_DETACHED ||
+		mykthread->state == KTHREAD_STATE_PARKED_ATTACHED);
+
+	if (mykthread->state == KTHREAD_STATE_PARKED_ATTACHED) {
+		/* already attached */
+		goto done;
+	}
+
 	spin_lock(&klock);
 	assert(nrks < maxks);
 	ks[nrks++] = mykthread;
 	mykthread->rcu_gen = rcu_gen;
 	spin_unlock(&klock);
+
+done:
+	mykthread->state = KTHREAD_STATE_ACTIVE;
+
 }
 
 /**
- * kthread_detach - detaches a kthread from the runtime
+ * kthread_detach - detaches a kthread from the runtime if it isn't already
+ * detached
  *
  * @r: the remote kthread to detach
  *
@@ -86,10 +101,14 @@ void kthread_detach(struct kthread *r)
 	unsigned int rgen;
 	int i;
 
-	assert(r != k);
-	assert(r->parked);
+	assert_spin_lock_held(&r->lock);
+	if (r->state != KTHREAD_STATE_PARKED_ATTACHED) {
+		/* cannot be detached because active or already detached */
+		return;
+	}
 
 	spin_lock(&klock);
+	assert(r != k);
 	assert(nrks > 0);
 	for (i = 0; i < nrks; i++)
 		if (ks[i] == r)
@@ -97,7 +116,7 @@ void kthread_detach(struct kthread *r)
 	BUG();
 
 found:
-	ks[i] = ks[nrks--];
+	ks[i] = ks[--nrks];
 	rgen = load_acquire(&rcu_gen);
 	spin_unlock(&klock);
 
@@ -116,4 +135,8 @@ found:
 	assert(list_empty(&r->rq_overflow));
 	assert(mbufq_empty(&r->txpktq_overflow));
 	assert(mbufq_empty(&r->txcmdq_overflow));
+	assert(r->timern == 0);
+
+	/* set state */
+	r->state = KTHREAD_STATE_PARKED_DETACHED;
 }
