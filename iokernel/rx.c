@@ -32,7 +32,7 @@ static struct rx_net_hdr *rx_prepend_rx_preamble(struct rte_mbuf *buf)
 
 	net_hdr->completion_data = (unsigned long)buf;
 	net_hdr->len = rte_pktmbuf_pkt_len(buf) - sizeof(*net_hdr);
-	net_hdr->rss_hash = 0; /* unused for now */
+	net_hdr->rss_hash = buf->hash.rss;
 	masked_ol_flags = buf->ol_flags & PKT_RX_IP_CKSUM_MASK;
 	if (masked_ol_flags == PKT_RX_IP_CKSUM_GOOD)
 		net_hdr->csum_type = CHECKSUM_TYPE_UNNECESSARY;
@@ -59,8 +59,12 @@ static bool rx_enqueue_to_runtime(struct rx_net_hdr *net_hdr, struct proc *p)
 		if (unlikely(!t))
 			return false;
 	} else {
+#if 0
 		/* round-robin through the active threads */
 		r = rr++ % p->active_thread_count;
+#else
+		r = net_hdr->rss_hash % p->active_thread_count;
+#endif
 		index = -1;
 		bitmap_for_each_cleared(p->available_threads, p->thread_count,
 					kthread) {

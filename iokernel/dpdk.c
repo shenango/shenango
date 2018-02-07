@@ -49,9 +49,16 @@
 
 static const struct rte_eth_conf port_conf_default = {
 	.rxmode = {
-			.max_rx_pkt_len = ETHER_MAX_LEN,
-			.hw_ip_checksum = 1,
-	}
+		.max_rx_pkt_len = ETHER_MAX_LEN,
+		.hw_ip_checksum = 1,
+		.mq_mode = ETH_MQ_RX_RSS,
+	},
+	.rx_adv_conf = {
+		.rss_conf = {
+			.rss_key = NULL,
+			.rss_hf = ETH_RSS_UDP,
+		},
+	},
 };
 
 /*
