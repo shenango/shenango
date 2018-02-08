@@ -147,52 +147,6 @@ static bool steal_work(struct kthread *l, struct kthread *r)
 	return true;
 }
 
-/*
- * Block the calling kthread until woken up by iokernel.
- */
-static void block_kthread(void)
-{
-	struct kthread *l = myk();
-	ssize_t s;
-	uint64_t val;
-
-	/* block until iokernel unparks us */
-	s = read(l->park_efd, &val, sizeof(val));
-	BUG_ON(s != sizeof(uint64_t));
-	BUG_ON(val != 1);
-
-	/* iokernel has unparked us */
-}
-
-/*
- * Park a kthread. The iokernel will deallocate this kthread's core and the
- * kthread will block on its eventfd until the iokernel wakes it up.
- */
-static void park_kthread(bool notify_iokernel)
-{
-	struct kthread *l = myk();
-
-	assert_spin_lock_held(&l->lock);
-	assert(l->state == KTHREAD_STATE_ACTIVE);
-
-	l->state = KTHREAD_STATE_PARKED_ATTACHED;
-	STAT(PARKS)++;
-	spin_unlock(&l->lock);
-
-	/* signal to iokernel that we're about to park */
-	if (notify_iokernel) {
-		while (!lrpc_send(&l->txcmdq, TXCMD_NET_PARKING, 0))
-			cpu_relax();
-	}
-
-	/* yield to the kernel */
-	block_kthread();
-
-	/* reattach kthread if necessary */
-	spin_lock(&l->lock);
-	kthread_attach();
-}
-
 /* the main scheduler routine, decides what to run next */
 static __noreturn void schedule(void)
 {
@@ -256,15 +210,10 @@ again:
 			goto done;
 	}
 
-	if (l->timern == 0) {
-		/* did not find anything to run, park this kthread */
-		STAT(SCHED_CYCLES) += rdtsc() - start_tsc;
-		park_kthread(true);
-		start_tsc = rdtsc();
-	} else {
-		/* TODO: support parking of kthreads with active timers */
-		cpu_relax();
-	}
+	/* did not find anything to run, park this kthread */
+	STAT(SCHED_CYCLES) += rdtsc() - start_tsc;
+	kthread_park(false);
+	start_tsc = rdtsc();
 
 	goto again;
 
@@ -295,10 +244,10 @@ static __noreturn void schedule_start(void)
 {
 	struct kthread *l = myk();
 
-	/* park kthread but don't notify iokernel, which assumes all kthreads are
-	 * parked initially */
+	/* force kthread parking (iokernel assumes all kthreads are parked
+	 * initially) */
 	spin_lock(&l->lock);
-	park_kthread(false);
+	kthread_park(true);
 	spin_unlock(&l->lock);
 
 	schedule();

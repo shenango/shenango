@@ -29,6 +29,7 @@ struct timer_idx {
  *
  * Returns true if valid, false otherwise.
  */
+__attribute__((unused))
 static bool is_valid_heap(struct timer_idx *heap, int n)
 {
 	int i, p;
@@ -86,6 +87,44 @@ static void sift_down(struct timer_idx *heap, int i, int n)
 		heap[c].e->idx = c;
 		i = c;
 	}
+}
+
+/**
+ * timer_merge - merges a timer heap from another kthread into our timer heap
+ * @r: the remote kthread whose timer heap we will absorb
+ */
+void timer_merge(struct kthread *r)
+{
+	struct kthread *k = myk();
+	int i;
+
+	spin_lock(&k->timer_lock);
+	spin_lock(&r->timer_lock);
+
+	if (r->timern == 0) {
+		spin_unlock(&r->timer_lock);
+		goto done;
+	}
+
+	/* move all timers from r to the end of our array */
+	for (i = 0; i < r->timern; i++) {
+		k->timers[k->timern] = r->timers[i];
+		k->timers[k->timern].e->idx = k->timern;
+		k->timern++;
+
+		if (k->timern >= RUNTIME_MAX_TIMERS)
+			BUG();
+	}
+	r->timern = 0;
+	spin_unlock(&r->timer_lock);
+
+	/* restore heap order by sifting each non-leaf element downward, starting
+	 * from the bottom of the heap and working upward (runs in linear time) */
+	for (i = k->timern / D; i >= 0; i--)
+		sift_down(k->timers, i, k->timern);
+
+done:
+	spin_unlock(&k->timer_lock);
 }
 
 static void timer_start_locked(struct timer_entry *e, uint64_t deadline_us)

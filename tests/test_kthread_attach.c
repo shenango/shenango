@@ -8,9 +8,10 @@
 #include <base/stddef.h>
 #include <base/log.h>
 #include <base/time.h>
-#include <runtime/thread.h>
-#include <runtime/sync.h>
 #include <runtime/rcu.h>
+#include <runtime/sync.h>
+#include <runtime/thread.h>
+#include <runtime/timer.h>
 
 #define N		1000
 #define NTHREADS	32
@@ -34,7 +35,7 @@ static void test_release(struct rcu_head *head)
 	waitgroup_done(&release_wg);
 }
 
-static void read_handler(void *arg)
+static void rcu_read_handler(void *arg)
 {
 	bool ptr_swapped;
 	struct test_obj *o;
@@ -51,6 +52,20 @@ static void read_handler(void *arg)
 		thread_yield();
 	}
 	waitgroup_t *wg_parent = (waitgroup_t *)arg;
+	waitgroup_done(wg_parent);
+}
+
+static void timer_handler(void *arg)
+{
+	waitgroup_t *wg_parent = (waitgroup_t *)arg;
+	int i;
+
+	for (i = 0; i < N; i++) {
+		/* make each sleep long enough for a kthread to accumulate multiple
+		 * timers */
+		timer_sleep(10);
+	}
+
 	waitgroup_done(wg_parent);
 }
 
@@ -74,7 +89,7 @@ static void main_handler(void *arg)
 	for (i = 0; i < NROUNDS; i++) {
 		waitgroup_add(&wg, NTHREADS);
 		for (j = 0; j < NTHREADS; j++) {
-			ret = thread_spawn(read_handler, &wg);
+			ret = thread_spawn(rcu_read_handler, &wg);
 			BUG_ON(ret);
 		}
 
@@ -101,7 +116,20 @@ static void main_handler(void *arg)
 
 		waitgroup_wait(&wg);
 	}
-	log_info("finished %d rounds of spawning threads", N);
+	log_info("finished %d rounds of spawning threads to test RCU", NROUNDS);
+
+	/* test timer merging as kthreads attach and detach */
+	waitgroup_init(&wg);
+	for (i = 0; i < NROUNDS; i++) {
+		waitgroup_add(&wg, NTHREADS);
+		for (j = 0; j < NTHREADS; j++) {
+			ret = thread_spawn(timer_handler, &wg);
+			BUG_ON(ret);
+		}
+		waitgroup_wait(&wg);
+	}
+	log_info("finished %d rounds of spawning threads to test timer merging",
+			NROUNDS);
 }
 
 int main(int argc, char *argv[])

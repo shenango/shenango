@@ -20,6 +20,7 @@ struct thread *ts[NCPU];
 /*
  * Debugging function that logs how each core is currently being used.
  */
+__attribute__((unused))
 static void cores_log_assignments()
 {
 	int i, j;

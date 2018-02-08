@@ -319,10 +319,12 @@ static inline struct kthread *myk(void)
 DECLARE_SPINLOCK(klock);
 extern unsigned int maxks;
 extern unsigned int nrks;
+extern unsigned int nactiveks;
 extern struct kthread *ks[NCPU];
 
 extern void kthread_attach(void);
 extern void kthread_detach(struct kthread *r);
+extern void kthread_park(bool force);
 
 /**
  * STAT - gets a stat counter

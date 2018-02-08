@@ -5,11 +5,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/eventfd.h>
+#include <unistd.h>
 
 #include <base/cpu.h>
 #include <base/list.h>
 #include <base/lock.h>
 #include <base/log.h>
+#include <runtime/timer.h>
 
 #include "defs.h"
 
@@ -17,8 +19,10 @@
 DEFINE_SPINLOCK(klock);
 /* the maximum number of kthreads */
 unsigned int maxks;
-/* the total number of kthreads (i.e. the size of @ks) */
-unsigned int nrks;
+/* the total number of attached kthreads (i.e. the size of @ks) */
+unsigned int nrks = 0;
+/* the number of active kthreads (not parked) */
+unsigned int nactiveks = 0;
 /* an array of all the kthreads (for work-stealing) */
 struct kthread *ks[NCPU];
 /* kernel thread-local data */
@@ -70,19 +74,20 @@ void kthread_attach(void)
 	assert(mykthread->state == KTHREAD_STATE_PARKED_DETACHED ||
 		mykthread->state == KTHREAD_STATE_PARKED_ATTACHED);
 
+	spin_lock(&klock);
 	if (mykthread->state == KTHREAD_STATE_PARKED_ATTACHED) {
 		/* already attached */
 		goto done;
 	}
 
-	spin_lock(&klock);
 	assert(nrks < maxks);
 	ks[nrks++] = mykthread;
 	mykthread->rcu_gen = rcu_gen;
-	spin_unlock(&klock);
 
 done:
+	nactiveks++;
 	mykthread->state = KTHREAD_STATE_ACTIVE;
+	spin_unlock(&klock);
 
 }
 
@@ -127,7 +132,8 @@ found:
 	mbufq_merge_to_tail(&k->txpktq_overflow, &r->txpktq_overflow);
 	mbufq_merge_to_tail(&k->txcmdq_overflow, &r->txcmdq_overflow);
 
-	/* TODO: merge timer queues */
+	/* merge timer queue into our own */
+	timer_merge(r);
 
 	/* verify the kthread is correctly detached */
 	assert(r->rq_head == 0);
@@ -139,4 +145,63 @@ found:
 
 	/* set state */
 	r->state = KTHREAD_STATE_PARKED_DETACHED;
+}
+
+/*
+ * kthread_park - block this kthread until the iokernel wakes it up. The
+ * iokernel will deallocate this thread's core. Parked kthreads will be
+ * detached once all work has been stolen off of them.
+ *
+ * @force: park regardless of active timers, etc. and don't notify the iokernel
+ * (used during initial parking)
+ */
+void kthread_park(bool force)
+{
+	struct kthread *l = myk();
+	ssize_t s;
+	uint64_t val;
+
+	assert_spin_lock_held(&l->lock);
+	assert(l->state == KTHREAD_STATE_ACTIVE);
+
+	spin_lock(&klock);
+	if (!force) {
+		if (nactiveks == 1 && nrks > 1) {
+			/* wait until we have detached all other kthreads and absorbed
+			 * their timer heaps */
+			spin_unlock(&klock);
+			cpu_relax();
+			return;
+		}
+
+		if (nactiveks == 1 && l->timern > 0) {
+			/* TODO: convey soonest timer expiry to iokernel when parking */
+			spin_unlock(&klock);
+			cpu_relax();
+			return;
+		}
+	}
+	nactiveks--;
+	spin_unlock(&klock);
+
+	l->state = KTHREAD_STATE_PARKED_ATTACHED;
+	STAT(PARKS)++;
+	spin_unlock(&l->lock);
+
+	if (!force) {
+		/* signal to iokernel that we're about to park */
+		while (!lrpc_send(&l->txcmdq, TXCMD_NET_PARKING, 0))
+			cpu_relax();
+	}
+
+	/* yield to the iokernel */
+	s = read(l->park_efd, &val, sizeof(val));
+	BUG_ON(s != sizeof(uint64_t));
+	BUG_ON(val != 1);
+
+	/* iokernel has unparked us */
+
+	/* reattach kthread if necessary */
+	spin_lock(&l->lock);
+	kthread_attach();
 }
