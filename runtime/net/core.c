@@ -37,6 +37,8 @@ void __noinline __net_recurrent(void)
 	struct rx_net_hdr *rxhdr;
 	struct kthread *k = myk();
 
+	assert_preempt_disabled();
+
 	/* drain TX packets */
 	while (!mbufq_empty(&k->txpktq_overflow)) {
 		m = mbufq_peak_head(&k->txpktq_overflow);
@@ -45,6 +47,8 @@ void __noinline __net_recurrent(void)
 		if (!lrpc_send(&k->txpktq, TXPKT_NET_XMIT, shm))
 			break;
 		mbufq_pop_head(&k->txpktq_overflow);
+		if (unlikely(preempt_needed()))
+			return;
 	}
 
 	/* drain RX completions */
@@ -57,6 +61,8 @@ void __noinline __net_recurrent(void)
 			break;
 		mbufq_pop_head(&k->txcmdq_overflow);
 		tcache_free(&net_mbuf_pt, m);
+		if (unlikely(preempt_needed()))
+			return;
 	}
 }
 
@@ -69,22 +75,29 @@ static void net_rx_release_mbuf(struct mbuf *m)
 {
 	struct rx_net_hdr *hdr = container_of((void *)m->head,
 					      struct rx_net_hdr, payload);
+	struct kthread *k = getk();
 
-	if (!lrpc_send(&myk()->txcmdq, TXCMD_NET_COMPLETE,
+	if (!lrpc_send(&k->txcmdq, TXCMD_NET_COMPLETE,
 		       hdr->completion_data)) {
-		mbufq_push_tail(&myk()->txcmdq_overflow, m);
+		mbufq_push_tail(&k->txcmdq_overflow, m);
+		putk();
 		return;
 	}
 	tcache_free(&net_mbuf_pt, m);
+	putk();
 }
 
 static struct mbuf *net_rx_alloc_mbuf(struct rx_net_hdr *hdr)
 {
 	struct mbuf *m;
 
+	preempt_disable();
 	m = tcache_alloc(&net_mbuf_pt);
-	if (unlikely(!m))
+	if (unlikely(!m)) {
+		preempt_enable();
 		return NULL;
+	}
+	preempt_enable();
 
 	mbuf_init(m, (unsigned char *)hdr->payload, hdr->len, 0);
 	m->len = hdr->len;
@@ -137,10 +150,15 @@ static void net_rx_one(struct rx_net_hdr *hdr)
 
 	m = net_rx_alloc_mbuf(hdr);
 	if (unlikely(!m)) {
-		while (!lrpc_send(&myk()->txcmdq, TXCMD_NET_COMPLETE,
+		struct kthread *k = getk();
+
+		while (!lrpc_send(&k->txcmdq, TXCMD_NET_COMPLETE,
 				  hdr->completion_data)) {
+			putk();
 			cpu_relax();
+			k = getk();
 		}
+		putk();
 		return;
 	}
 
@@ -215,8 +233,6 @@ struct net_rx_closure {
 	unsigned int recv_cnt, compl_cnt;
 	struct rx_net_hdr *recv_reqs[MAX_BUDGET];
 	struct mbuf *compl_reqs[MAX_BUDGET];
-	bool kthread_parked;
-	struct kthread *k;
 };
 
 static void net_rx_worker(void *arg)
@@ -234,13 +250,6 @@ static void net_rx_worker(void *arg)
 			prefetch(c->recv_reqs[i + RX_PREFETCH_STRIDE]);
 		net_rx_one(c->recv_reqs[i]);
 	}
-
-	/* detach kthread if iokernel has parked it */
-	if (c->kthread_parked) {
-		spin_lock(&c->k->lock);
-		kthread_detach(c->k);
-		spin_unlock(&c->k->lock);
-	}
 }
 
 /**
@@ -257,6 +266,7 @@ thread_t *net_run(struct kthread *k, unsigned int budget)
 	struct net_rx_closure *c;
 	unsigned int recv_cnt = 0, compl_cnt = 0;
 	int budget_left;
+	bool detach = false;
 
 	assert_spin_lock_held(&k->lock);
 
@@ -267,8 +277,6 @@ thread_t *net_run(struct kthread *k, unsigned int budget)
 	if (unlikely(!th))
 		return NULL;
 
-	c->kthread_parked = false;
-	c->k = k;
 	budget_left = min(budget, MAX_BUDGET);
 	while (budget_left--) {
 		uint64_t cmd;
@@ -290,7 +298,7 @@ thread_t *net_run(struct kthread *k, unsigned int budget)
 			break;
 
 		case RX_NET_PARKED:
-			c->kthread_parked = true;
+			detach = true;
 			break;
 
 		default:
@@ -298,7 +306,11 @@ thread_t *net_run(struct kthread *k, unsigned int budget)
 		}
 	}
 
-	assert(recv_cnt + compl_cnt > 0 || c->kthread_parked);
+	if (detach && k->parked)
+		kthread_detach(k);
+	if (recv_cnt + compl_cnt == 0)
+		return NULL;
+
 	c->recv_cnt = recv_cnt;
 	c->compl_cnt = compl_cnt;
 	th->state = THREAD_STATE_RUNNABLE;
@@ -333,15 +345,20 @@ struct mbuf *net_tx_alloc_mbuf(void)
 	struct mbuf *m;
 	unsigned char *buf;
 
+	preempt_disable();
 	m = tcache_alloc(&net_mbuf_pt);
-	if (unlikely(!m))
+	if (unlikely(!m)) {
+		preempt_enable();
 		return NULL;
+	}
 
 	buf = tcache_alloc(&net_tx_buf_pt);
 	if (unlikely(!buf)) {
 		tcache_free(&net_mbuf_pt, m);
+		preempt_enable();
 		return NULL;
 	}
+	preempt_enable();
 
 	mbuf_init(m, buf, MBUF_DEFAULT_LEN, MBUF_DEFAULT_HEADROOM);
 	m->csum_type = CHECKSUM_TYPE_NEEDED;
@@ -353,10 +370,12 @@ struct mbuf *net_tx_alloc_mbuf(void)
 
 static void net_tx_raw(struct mbuf *m)
 {
+	struct kthread *k;
 	shmptr_t shm;
 	struct tx_net_hdr *hdr;
 	unsigned int len = mbuf_length(m);
 
+	k = getk();
 	/* drain pending overflow packets first */
 	net_recurrent();
 
@@ -367,10 +386,11 @@ static void net_tx_raw(struct mbuf *m)
 	hdr->completion_data = (unsigned long)m;
 	hdr->len = len;
 	hdr->olflags = m->txflags;
-
 	shm = ptr_to_shmptr(&netcfg.tx_region, hdr, len + sizeof(*hdr));
-	if (!lrpc_send(&myk()->txpktq, TXPKT_NET_XMIT, shm))
-		mbufq_push_tail(&myk()->txpktq_overflow, m);
+
+	if (!lrpc_send(&k->txpktq, TXPKT_NET_XMIT, shm))
+		mbufq_push_tail(&k->txpktq_overflow, m);
+	putk();
 }
 
 /**

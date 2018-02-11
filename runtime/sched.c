@@ -37,23 +37,23 @@ static __thread uint64_t last_tsc;
 thread_t *thread_self(void);
 
 /**
- * call_thread - runs a thread, popping its trap frame
+ * jmp_thread - runs a thread, popping its trap frame
  * @th: the thread to run
  *
  * This function restores the state of the thread and switches from the runtime
  * stack to the thread's stack. Runtime state is not saved.
  */
-static __noreturn void call_thread(thread_t *th)
+static __noreturn void jmp_thread(thread_t *th)
 {
 	__self = th;
 	assert(th->state == THREAD_STATE_RUNNABLE);
 	th->state = THREAD_STATE_RUNNING;
-	__pop_tf(&th->tf);
+	__jmp_thread(&th->tf);
 }
 
 /**
- * call_runtime - saves the current trap frame and calls a function in the
- *                runtime
+ * jmp_runtime - saves the current trap frame and jumps to a function in the
+ *               runtime
  * @fn: the runtime function to call
  * @arg: an argument to pass to the runtime function
  *
@@ -62,25 +62,21 @@ static __noreturn void call_thread(thread_t *th)
  * This function saves state of the running thread and switches to the runtime
  * stack, making it safe to run the thread elsewhere.
  */
-static void call_runtime(runtime_fn_t fn, unsigned long arg)
+static void jmp_runtime(runtime_fn_t fn, unsigned long arg)
 {
 	assert(thread_self() != NULL);
-	__call_runtime(&thread_self()->tf, fn, runtime_stack, arg);
+	__jmp_runtime(&thread_self()->tf, fn, runtime_stack, arg);
 }
 
 /**
- * call_runtime_nosave - calls a function in the runtime without saving the
- *			 trap frame
+ * jmp_runtime_nosave - jumps to a function in the runtime without saving the
+ *			caller's state
  * @fn: the runtime function to call
  * @arg: an argument to pass to the runtime function
  */
-static __noreturn void call_runtime_nosave(runtime_fn_t fn, unsigned long arg)
+static __noreturn void jmp_runtime_nosave(runtime_fn_t fn, unsigned long arg)
 {
-	struct thread_tf tf;
-	tf.rbp = (uint64_t)0; /* just in case base pointers are enabled */
-	tf.rip = (uint64_t)fn;
-	tf.rsp = (uint64_t)runtime_stack;
-	__pop_tf(&tf);
+	__jmp_runtime_nosave(fn, runtime_stack, arg);
 }
 
 static void drain_overflow(struct kthread *l)
@@ -107,6 +103,13 @@ static bool steal_work(struct kthread *l, struct kthread *r)
 
 	if (!spin_try_lock(&r->lock))
 		return false;
+
+	/* harmless race condition */
+	if (unlikely(r->detached)) {
+		spin_unlock(&r->lock);
+		return false;
+	}
+
 	avail = load_acquire(&r->rq_head) - r->rq_tail;
 	if (!avail) {
 		/* check for overflow tasks */
@@ -150,9 +153,10 @@ static bool steal_work(struct kthread *l, struct kthread *r)
 /* the main scheduler routine, decides what to run next */
 static __noreturn void schedule(void)
 {
+	struct kthread *r, *l = myk();
 	uint64_t start_tsc, end_tsc;
 	thread_t *th;
-	struct kthread *r, *l = myk();
+	unsigned int last_nrks;
 	int i;
 
 	/* update entry stat counters */
@@ -167,7 +171,9 @@ static __noreturn void schedule(void)
 
 	__self = NULL;
 	spin_lock(&l->lock);
-	assert(l->state == KTHREAD_STATE_ACTIVE);
+
+	assert(l->parked == false);
+	assert(l->detached == false);
 
 	/* move overflow tasks into the runqueue */
 	if (unlikely(!list_empty(&l->rq_overflow)))
@@ -197,13 +203,15 @@ again:
 		goto done;
 	}
 
+	last_nrks = load_acquire(&nrks);
+
 	/* then attempt to steal tasks or packets from a random kthread */
-	r = ks[rand_crc32c((uintptr_t)l) % nrks];
+	r = ks[rand_crc32c((uintptr_t)l) % last_nrks];
 	if (r != l && steal_work(l, r))
 		goto done;
 
 	/* finally try to steal from every kthread */
-	for (i = 0; i < nrks; i++) {
+	for (i = 0; i < last_nrks; i++) {
 		if (ks[i] == l)
 			continue;
 		if (steal_work(l, ks[i]))
@@ -212,7 +220,7 @@ again:
 
 	/* did not find anything to run, park this kthread */
 	STAT(SCHED_CYCLES) += rdtsc() - start_tsc;
-	kthread_park(false);
+	kthread_park_locked(true);
 	start_tsc = rdtsc();
 
 	goto again;
@@ -233,7 +241,7 @@ done:
 	STAT(SCHED_CYCLES) += end_tsc - start_tsc;
 	last_tsc = end_tsc;
 
-	call_thread(th);
+	jmp_thread(th);
 }
 
 /**
@@ -242,13 +250,9 @@ done:
  */
 static __noreturn void schedule_start(void)
 {
-	struct kthread *l = myk();
-
 	/* force kthread parking (iokernel assumes all kthreads are parked
 	 * initially) */
-	spin_lock(&l->lock);
-	kthread_park(true);
-	spin_unlock(&l->lock);
+	kthread_park(false);
 
 	schedule();
 }
@@ -272,7 +276,7 @@ static void thread_finish_park_and_unlock(unsigned long data)
 void thread_park_and_unlock(spinlock_t *lock)
 {
 	/* this will switch from the thread stack to the runtime stack */
-	call_runtime(thread_finish_park_and_unlock, (unsigned long)lock);
+	jmp_runtime(thread_finish_park_and_unlock, (unsigned long)lock);
 }
 
 /**
@@ -283,18 +287,20 @@ void thread_park_and_unlock(spinlock_t *lock)
  */
 void thread_ready(thread_t *th)
 {
-	struct kthread *k = myk();
+	struct kthread *k;
 	uint32_t rq_tail;
 
 	assert(th->state == THREAD_STATE_SLEEPING);
 	th->state = THREAD_STATE_RUNNABLE;
 
+	k = getk();
 	rq_tail = load_acquire(&k->rq_tail);
 	if (unlikely(k->rq_head - rq_tail >= RUNTIME_RQ_SIZE)) {
 		assert(k->rq_head - rq_tail == RUNTIME_RQ_SIZE);
 		spin_lock(&k->lock);
 		list_add_tail(&k->rq_overflow, &th->link);
 		spin_unlock(&k->lock);
+		putk();
 		return;
 	}
 
@@ -303,6 +309,7 @@ void thread_ready(thread_t *th)
 
 	k->rq[k->rq_head % RUNTIME_RQ_SIZE] = th;
 	store_release(&k->rq_head, k->rq_head + 1);
+	putk();
 }
 
 static void thread_finish_yield(unsigned long data)
@@ -324,7 +331,7 @@ static void thread_finish_yield(unsigned long data)
 void thread_yield(void)
 {
 	/* this will switch from the thread stack to the runtime stack */
-	call_runtime(thread_finish_yield, 0);
+	jmp_runtime(thread_finish_yield, 0);
 }
 
 static __always_inline thread_t *__thread_create(void)
@@ -332,15 +339,20 @@ static __always_inline thread_t *__thread_create(void)
 	struct thread *th;
 	struct stack *s;
 
+	preempt_disable();
 	th = tcache_alloc(&thread_pt);
-	if (unlikely(!th))
+	if (unlikely(!th)) {
+		preempt_enable();
 		return NULL;
+	}
 
 	s = stack_alloc();
 	if (unlikely(!s)) {
 		tcache_free(&thread_pt, th);
+		preempt_enable();
 		return NULL;
 	}
+	preempt_enable();
 
 	th->stack = s;
 	th->state = THREAD_STATE_SLEEPING;
@@ -453,7 +465,7 @@ static void thread_finish_exit(unsigned long data)
 void thread_exit(void)
 {
 	/* can't free the stack we're currently using, so switch */
-	call_runtime_nosave(thread_finish_exit, 0);
+	jmp_runtime_nosave(thread_finish_exit, 0);
 }
 
 /**
@@ -462,7 +474,7 @@ void thread_exit(void)
 void sched_start(void)
 {
 	last_tsc = rdtsc();
-	call_runtime_nosave((runtime_fn_t)schedule_start, 0);
+	jmp_runtime_nosave((runtime_fn_t)schedule_start, 0);
 }
 
 static void runtime_top_of_stack(void)

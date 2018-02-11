@@ -30,7 +30,6 @@ DEFINE_SPINLOCK(qlock);
 unsigned int nrqs = 0;
 
 struct iokernel_control iok;
-pthread_barrier_t barrier;
 
 static int generate_random_mac(struct eth_addr *mac)
 {
@@ -309,8 +308,6 @@ int ioqueues_init_thread(void)
 	ret = shm_init_gen(r, ts->rq_gen, &myk()->rq_gen);
 	BUG_ON(ret);
 
-	pthread_barrier_wait(&barrier);
-
 	return 0;
 }
 
@@ -323,7 +320,6 @@ int ioqueues_init(unsigned int threads)
 	int ret;
 
 	spin_lock_init(&qlock);
-	pthread_barrier_init(&barrier, NULL, maxks);
 
 	ret = ioqueues_shm_setup(threads);
 	if (ret) {

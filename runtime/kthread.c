@@ -45,6 +45,7 @@ static struct kthread *allock(void)
 	spin_lock_init(&k->timer_lock);
 	k->park_efd = eventfd(0, 0);
 	BUG_ON(k->park_efd < 0);
+	k->detached = true;
 	return k;
 }
 
@@ -58,7 +59,6 @@ int kthread_init_thread(void)
 	mykthread = allock();
 	if (!mykthread)
 		return -ENOMEM;
-
 	return 0;
 }
 
@@ -68,34 +68,30 @@ int kthread_init_thread(void)
  *
  * An attached kthread participates in scheduling, RCU, and I/O.
  */
-void kthread_attach(void)
+static void kthread_attach(void)
 {
-	assert_spin_lock_held(&mykthread->lock);
-	assert(mykthread->state == KTHREAD_STATE_PARKED_DETACHED ||
-		mykthread->state == KTHREAD_STATE_PARKED_ATTACHED);
+	struct kthread *k = myk();
+
+	assert_spin_lock_held(&k->lock);
+	assert(k->parked == false);
+	assert(k->detached == true);
+
+	k->detached = false;
 
 	spin_lock(&klock);
-	if (mykthread->state == KTHREAD_STATE_PARKED_ATTACHED) {
-		/* already attached */
-		goto done;
-	}
-
+	k->rcu_gen = rcu_gen;
 	assert(nrks < maxks);
-	ks[nrks++] = mykthread;
-	mykthread->rcu_gen = rcu_gen;
-
-done:
+	ks[nrks] = k;
+	store_release(&nrks, nrks + 1);
 	nactiveks++;
-	mykthread->state = KTHREAD_STATE_ACTIVE;
 	spin_unlock(&klock);
-
 }
 
 /**
- * kthread_detach - detaches a kthread from the runtime if it isn't already
- * detached
- *
+ * kthread_detach_locked - detaches a kthread from the runtime
  * @r: the remote kthread to detach
+ *
+ * @r->lock must be held before calling this function.
  *
  * A detached kthread can no longer be stolen from. It must not receive I/O,
  * have outstanding timers, or participate in RCU.
@@ -107,10 +103,9 @@ void kthread_detach(struct kthread *r)
 	int i;
 
 	assert_spin_lock_held(&r->lock);
-	if (r->state != KTHREAD_STATE_PARKED_ATTACHED) {
-		/* cannot be detached because active or already detached */
-		return;
-	}
+	assert(r != k);
+	assert(r->parked == true);
+	assert(r->detached == false);
 
 	spin_lock(&klock);
 	assert(r != k);
@@ -144,64 +139,67 @@ found:
 	assert(r->timern == 0);
 
 	/* set state */
-	r->state = KTHREAD_STATE_PARKED_DETACHED;
+	r->detached = true;
 }
 
 /*
- * kthread_park - block this kthread until the iokernel wakes it up. The
- * iokernel will deallocate this thread's core. Parked kthreads will be
- * detached once all work has been stolen off of them.
+ * kthread_park_locked - block this kthread until the iokernel wakes it up.
+ * @notify: if true, inform the iokernel that the kthread is parked
  *
- * @force: park regardless of active timers, etc. and don't notify the iokernel
- * (used during initial parking)
+ * @notify should only be false during initialization because the iokernel
+ * assumes kthreads start in a parked state.
+ *
+ * This variant must be called with the local kthread lock held. It is intended
+ * for use by the scheduler.
  */
-void kthread_park(bool force)
+void kthread_park_locked(bool notify)
 {
-	struct kthread *l = myk();
+	struct kthread *k = myk();
 	ssize_t s;
 	uint64_t val;
 
-	assert_spin_lock_held(&l->lock);
-	assert(l->state == KTHREAD_STATE_ACTIVE);
+	assert_spin_lock_held(&k->lock);
+	assert(k->parked == false);
 
-	spin_lock(&klock);
-	if (!force) {
-		if (nactiveks == 1 && nrks > 1) {
-			/* wait until we have detached all other kthreads and absorbed
-			 * their timer heaps */
-			spin_unlock(&klock);
-			cpu_relax();
-			return;
-		}
-
-		if (nactiveks == 1 && l->timern > 0) {
-			/* TODO: convey soonest timer expiry to iokernel when parking */
-			spin_unlock(&klock);
-			cpu_relax();
-			return;
-		}
-	}
-	nactiveks--;
-	spin_unlock(&klock);
-
-	l->state = KTHREAD_STATE_PARKED_ATTACHED;
+	k->parked = true;
 	STAT(PARKS)++;
-	spin_unlock(&l->lock);
+	spin_unlock(&k->lock);
 
-	if (!force) {
+	if (notify) {
 		/* signal to iokernel that we're about to park */
-		while (!lrpc_send(&l->txcmdq, TXCMD_NET_PARKING, 0))
+		while (!lrpc_send(&k->txcmdq, TXCMD_NET_PARKING, 0))
 			cpu_relax();
 	}
 
 	/* yield to the iokernel */
-	s = read(l->park_efd, &val, sizeof(val));
+	s = read(k->park_efd, &val, sizeof(val));
 	BUG_ON(s != sizeof(uint64_t));
 	BUG_ON(val != 1);
 
 	/* iokernel has unparked us */
 
 	/* reattach kthread if necessary */
-	spin_lock(&l->lock);
-	kthread_attach();
+	spin_lock(&k->lock);
+	k->parked = false;
+	if (k->detached)
+		kthread_attach();
+}
+
+/**
+ * kthread_park - block this kthread until the iokernel wakes it up.
+ * @notify: if true, inform the iokernel that the kthread is parked
+ *
+ * @notify should only be false during initialization because the iokernel
+ * assumes kthreads start in a parked state.
+ *
+ * This variant is intended for initialization and for use in signal handlers.
+ */
+void kthread_park(bool notify)
+{
+	struct kthread *k = getk();
+
+	spin_lock(&k->lock);
+	kthread_park_locked(notify);
+	spin_unlock(&k->lock);
+	putk();
 }

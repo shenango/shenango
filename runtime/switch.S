@@ -34,15 +34,15 @@
 #define RSP	(128)	/* stack pointer */
 
 /**
- * __pop_tf - pops a stack frame
+ * __jmp_thread - executes a thread from the runtime
  * @tf: the trap frame to pop (%rdi)
  *
  * This low-level variant isn't intended to be called directly.
- *
+ * Re-enables preemption, parking the kthread if necessary.
  * Does not return.
  */
-.globl __pop_tf
-__pop_tf:
+.globl __jmp_thread
+__jmp_thread:
 	/* restore callee regs */
 	movq    RBX(%rdi), %rbx
 	movq    RBP(%rdi), %rbp
@@ -58,23 +58,32 @@ __pop_tf:
 	/* set first argument (in case new thread) */
 	movq    RDI(%rdi), %rdi /* ARG0 */
 
-	/* jump into trap frame */
+	/* re-enable preemption */
+	decl	%fs:preempt_cnt@tpoff
+	jz	2f
+
+1:	/* jump into trap frame */
 	jmpq    *%rsi
+	nop
+
+2:	/* cold-path, park the kthread */
+	call	__preempt
+	jmp	1b
 
 /**
- * __call_runtime - saves the current trap frame and calls a function in the
- *                  runtime
+ * __jmp_runtime - saves the current trap frame and jumps to a function in the
+ *                 runtime
  * @tf: the struct thread_tf to save state (%rdi)
  * @fn: the function pointer to call (%rsi)
  * @stack: the start of the runtime stack (%rdx)
  * @arg: an argument to @fn (%rcx)
  *
  * This low-level variant isn't intended to be called directly.
- *
+ * Disables preemption.
  * No return value.
  */
-.globl __call_runtime
-__call_runtime:
+.globl __jmp_runtime
+__jmp_runtime:
 	/* save callee regs */
 	movq    %rbx, RBX(%rdi)
 	movq    %rbp, RBP(%rdi)
@@ -92,4 +101,33 @@ __call_runtime:
 	/* jump into runtime function */
 	movq    %rdx, %rsp
 	movq	%rcx, %rdi
+
+	/* disable preemption */
+	incl	%fs:preempt_cnt@tpoff
+
+	/* jump into runtime code */
+	jmpq    *%rsi
+
+/**
+ * __jmp_runtime_nosave - jumps to a function in the runtime without saving the
+ *			  current stack frame
+ * @fn: the function pointer to call (%rdi)
+ * @stack: the start of the runtime stack (%rsi)
+ * @arg: an argument to @fn (%rdx)
+ *
+ * This low-level variant isn't intended to be called directly.
+ * Disables preemption.
+ * No return value.
+ */
+.globl __jmp_runtime_nosave
+__jmp_runtime_nosave:
+	/* jump into runtime function */
+	movq    %rsi, %rsp
+	movq	%rdi, %rsi
+	movq	%rdx, %rdi
+
+	/* disable preemption */
+	incl	%fs:preempt_cnt@tpoff
+
+	/* jump into runtime code */
 	jmpq    *%rsi

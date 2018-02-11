@@ -29,7 +29,6 @@ struct timer_idx {
  *
  * Returns true if valid, false otherwise.
  */
-__attribute__((unused))
 static bool is_valid_heap(struct timer_idx *heap, int n)
 {
 	int i, p;
@@ -160,11 +159,12 @@ static void timer_start_locked(struct timer_entry *e, uint64_t deadline_us)
  */
 void timer_start(struct timer_entry *e, uint64_t deadline_us)
 {
-	struct kthread *k = myk();
+	struct kthread *k = getk();
 
 	spin_lock(&k->timer_lock);
 	timer_start_locked(e, deadline_us);
 	spin_unlock(&k->timer_lock);
+	putk();
 }
 
 /**
@@ -176,12 +176,13 @@ void timer_start(struct timer_entry *e, uint64_t deadline_us)
  */
 bool timer_cancel(struct timer_entry *e)
 {
-	struct kthread *k = myk();
+	struct kthread *k = getk();
 	int last;
 
 	spin_lock(&k->timer_lock);
 	if (!e->armed) {
 		spin_unlock(&k->timer_lock);
+		putk();
 		return false;
 	}
 	e->armed = false;
@@ -189,6 +190,7 @@ bool timer_cancel(struct timer_entry *e)
 	last = --k->timern;
 	if (e->idx == last) {
 		spin_unlock(&k->timer_lock);
+		putk();
 		return true;
 	}
 
@@ -198,6 +200,7 @@ bool timer_cancel(struct timer_entry *e)
 	sift_down(k->timers, e->idx, k->timern);
 	spin_unlock(&k->timer_lock);
 
+	putk();
 	return true;
 }
 
@@ -209,11 +212,14 @@ static void timer_finish_sleep(unsigned long arg)
 
 static void __timer_sleep(uint64_t deadline_us)
 {
-	struct kthread *k = myk();
+	struct kthread *k;
 	struct timer_entry e;
 
 	timer_init(&e, timer_finish_sleep, (unsigned long)thread_self());
+
+	k = getk();
 	spin_lock(&k->timer_lock);
+	putk();
 	timer_start_locked(&e, deadline_us);
 	thread_park_and_unlock(&k->timer_lock);
 }
@@ -280,6 +286,8 @@ thread_t *timer_run(struct kthread *k)
 {
 	thread_t *th;
 	uint64_t now_us = microtime();
+
+	assert(is_valid_heap(k->timers, k->timern));
 
 	/* deliberate race condition */
 	if (k->timern == 0 || k->timers[0].deadline_us > now_us)

@@ -12,6 +12,8 @@
 
 #include "defs.h"
 
+static pthread_barrier_t init_barrier;
+
 struct init_entry {
 	const char *name;
 	int (*init)(void);
@@ -48,6 +50,7 @@ static const struct init_entry thread_init_handlers[] = {
 	THREAD_INITIALIZER(stack),
 	THREAD_INITIALIZER(timer),
 	THREAD_INITIALIZER(sched),
+	THREAD_INITIALIZER(stat),
 
 	/* network stack */
 	THREAD_INITIALIZER(net),
@@ -106,9 +109,7 @@ static void *pthread_entry(void *data)
 	ret = runtime_init_thread();
 	BUG_ON(ret);
 
-	spin_lock(&myk()->lock);
-	kthread_attach();
-	spin_unlock(&myk()->lock);
+	pthread_barrier_wait(&init_barrier);
 	sched_start();
 
 	/* never reached unless things are broken */
@@ -153,6 +154,8 @@ int runtime_init(const char *cfgpath, thread_fn_t main_fn, void *arg)
 	if (ret)
 		return ret;
 
+	pthread_barrier_init(&init_barrier, NULL, maxks);
+
 	ret = ioqueues_init(maxks);
 	if (ret) {
 		log_err("couldn't initialize ioqueues, ret = %d", ret);
@@ -160,7 +163,7 @@ int runtime_init(const char *cfgpath, thread_fn_t main_fn, void *arg)
 	}
 
 	ret = run_init_handlers("global", global_init_handlers,
-			ARRAY_SIZE(global_init_handlers));
+				ARRAY_SIZE(global_init_handlers));
 	if (ret)
 		return ret;
 
@@ -172,14 +175,16 @@ int runtime_init(const char *cfgpath, thread_fn_t main_fn, void *arg)
 		}
 	}
 
+	ret = runtime_init_thread();
+	BUG_ON(ret);
+
 	log_info("spawning %d kthreads", maxks);
 	for (i = 1; i < maxks; i++) {
 		ret = pthread_create(&tid[i], NULL, pthread_entry, NULL);
 		BUG_ON(ret);
 	}
 
-	ret = runtime_init_thread();
-	BUG_ON(ret);
+	pthread_barrier_wait(&init_barrier);
 
 	ret = ioqueues_register_iokernel();
 	if (ret) {
@@ -192,12 +197,8 @@ int runtime_init(const char *cfgpath, thread_fn_t main_fn, void *arg)
 	ret = thread_spawn_main(main_fn, arg);
 	BUG_ON(ret);
 
-	spin_lock(&myk()->lock);
-	kthread_attach();
-	spin_unlock(&myk()->lock);
-
 	ret = run_init_handlers("late", late_init_handlers,
-			ARRAY_SIZE(late_init_handlers));
+				ARRAY_SIZE(late_init_handlers));
 	BUG_ON(ret);
 
 	if (late_init_hook) {

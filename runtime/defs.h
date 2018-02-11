@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <ucontext.h>
+
 #include <base/stddef.h>
 #include <base/list.h>
 #include <base/mem.h>
@@ -16,6 +18,7 @@
 #include <net/mbufq.h>
 #include <runtime/thread.h>
 #include <runtime/rcu.h>
+#include <runtime/preempt.h>
 
 
 /*
@@ -100,9 +103,11 @@ struct thread {
 typedef void (*runtime_fn_t)(unsigned long arg);
 
 /* assembly helper routines from switch.S */
-extern void __pop_tf(struct thread_tf *tf) __noreturn;
-extern void __call_runtime(struct thread_tf *tf, runtime_fn_t fn,
-			   void *stack, unsigned long arg);
+extern void __jmp_thread(struct thread_tf *tf) __noreturn;
+extern void __jmp_runtime(struct thread_tf *tf, runtime_fn_t fn,
+			  void *stack, unsigned long arg);
+extern void __jmp_runtime_nosave(runtime_fn_t fn, void *stack,
+				 unsigned long arg) __noreturn;
 
 
 /*
@@ -265,7 +270,9 @@ struct kthread {
 	struct list_head	rq_overflow;
 	struct lrpc_chan_in	rxq;
 	int			park_efd;
-	uint8_t			state;
+	unsigned int		parked:1;
+	unsigned int		detached:1;
+	unsigned int		preempted:1;
 
 	/* 2nd cache-line */
 	struct gen_num		rq_gen;
@@ -287,8 +294,12 @@ struct kthread {
 	struct timer_idx	*timers;
 	unsigned long		pad2[6];
 
-	/* 9th cache-line, statistics counters this point onward */
+	/* 9th cache-line, statistics counters */
 	uint64_t		stats[STAT_NR];
+
+	/* cold-data this point onward */
+	thread_t		*preempted_th;
+	ucontext_t		preempted_uctx;
 };
 
 /* compile-time verification of cache-line alignment */
@@ -301,13 +312,6 @@ BUILD_ASSERT(offsetof(struct kthread, stats) % CACHE_LINE_SIZE == 0);
 
 extern __thread struct kthread *mykthread;
 
-/* possible values for @state above */
-enum {
-	KTHREAD_STATE_PARKED_DETACHED,
-	KTHREAD_STATE_PARKED_ATTACHED,
-	KTHREAD_STATE_ACTIVE,
-};
-
 /**
  * myk - returns the per-kernel-thread data
  */
@@ -316,20 +320,42 @@ static inline struct kthread *myk(void)
 	return mykthread;
 }
 
+/**
+ * getk - returns the per-kernel-thread data and disables preemption
+ *
+ * WARNING: If you're using myk() instead of getk(), that's a bug if preemption
+ * is enabled. The local kthread can change at anytime.
+ */
+static inline struct kthread *getk(void)
+{
+	preempt_disable();
+	return mykthread;
+}
+
+/**
+ * putk - reenables preemption after calling getk()
+ */
+static inline void putk(void)
+{
+	preempt_enable();
+}
+
 DECLARE_SPINLOCK(klock);
 extern unsigned int maxks;
 extern unsigned int nrks;
 extern unsigned int nactiveks;
 extern struct kthread *ks[NCPU];
 
-extern void kthread_attach(void);
 extern void kthread_detach(struct kthread *r);
-extern void kthread_park(bool force);
+extern void kthread_park_locked(bool notify);
+extern void kthread_park(bool notify);
 
 /**
  * STAT - gets a stat counter
  *
  * e.g. STAT(DROPS)++;
+ *
+ * Deliberately could race with preemption.
  */
 #define STAT(counter) (myk()->stats[STAT_ ## counter])
 
@@ -389,6 +415,7 @@ extern void __net_recurrent(void);
 static inline void net_recurrent(void)
 {
 	struct kthread *k = myk();
+
 	if (!mbufq_empty(&k->txpktq_overflow) ||
 	    !mbufq_empty(&k->txcmdq_overflow))
 		__net_recurrent();
@@ -412,6 +439,7 @@ extern int ioqueues_init_thread(void);
 extern int stack_init_thread(void);
 extern int timer_init_thread(void);
 extern int sched_init_thread(void);
+extern int stat_init_thread(void);
 extern int net_init_thread(void);
 
 /* global initialization */
