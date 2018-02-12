@@ -44,6 +44,22 @@ static bool is_valid_heap(struct timer_idx *heap, int n)
 	return true;
 }
 
+/**
+ * timer_heap_is_valid_unlocked - checks that this kthread's timer heap is a
+ * valid min heap, assumes that the caller does not hold the timer lock
+ * @k: the kthread
+ */
+static bool timer_heap_is_valid_unlocked(struct kthread *k)
+{
+	bool res;
+
+	spin_lock(&k->timer_lock);
+	res = is_valid_heap(k->timers, k->timern);
+	spin_unlock(&k->timer_lock);
+
+	return res;
+}
+
 static void sift_up(struct timer_idx *heap, int i)
 {
 	struct timer_idx tmp = heap[i];
@@ -287,7 +303,7 @@ thread_t *timer_run(struct kthread *k)
 	thread_t *th;
 	uint64_t now_us = microtime();
 
-	assert(is_valid_heap(k->timers, k->timern));
+	assert(timer_heap_is_valid_unlocked(k));
 
 	/* deliberate race condition */
 	if (k->timern == 0 || k->timers[0].deadline_us > now_us)
