@@ -3,6 +3,7 @@
  */
 
 #include <stdlib.h>
+#include <string.h>
 
 #include <base/stddef.h>
 #include <base/lock.h>
@@ -95,6 +96,7 @@ static void drain_overflow(struct kthread *l)
 
 static bool steal_work(struct kthread *l, struct kthread *r)
 {
+	ucontext_t uctx;
 	thread_t *th;
 	uint32_t i, avail, rq_tail;
 
@@ -108,6 +110,19 @@ static bool steal_work(struct kthread *l, struct kthread *r)
 	if (unlikely(r->detached)) {
 		spin_unlock(&r->lock);
 		return false;
+	}
+
+	/* resume execution of a preempted thread */
+	if (r->preempted) {
+		__self = r->preempted_th;
+		r->preempted = false;
+		memcpy(&uctx, &r->preempted_uctx, sizeof(uctx));
+		spin_unlock(&r->lock);
+		spin_unlock(&l->lock);
+		preempt_reenter(&uctx);
+
+		/* preempt_reenter() doesn't return */
+		unreachable();
 	}
 
 	avail = load_acquire(&r->rq_head) - r->rq_tail;

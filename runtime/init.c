@@ -32,6 +32,7 @@ static const struct init_entry global_init_handlers[] = {
 	/* runtime core */
 	GLOBAL_INITIALIZER(stack),
 	GLOBAL_INITIALIZER(sched),
+	GLOBAL_INITIALIZER(preempt),
 
 	/* network stack */
 	GLOBAL_INITIALIZER(net),

@@ -430,6 +430,13 @@ extern thread_t *timer_run(struct kthread *k);
 
 
 /*
+ * Preemption support
+ */
+
+extern void preempt_reenter(ucontext_t *c) __noreturn;
+
+
+/*
  * Init
  */
 
@@ -446,6 +453,7 @@ extern int net_init_thread(void);
 extern int ioqueues_init(unsigned int threads);
 extern int stack_init(void);
 extern int sched_init(void);
+extern int preempt_init(void);
 extern int net_init(void);
 extern int arp_init(void);
 extern int udp_init(void);

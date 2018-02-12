@@ -63,9 +63,14 @@ static void handle_sigusr1(int s, siginfo_t *si, void *ctx)
  */
 void preempt_reenter(ucontext_t *c)
 {
+	int ret;
+
 	preempt_enable();
 	/* FIXME: race condition here */
-	setcontext(c);
+	ret = setcontext(c);
+
+	BUG_ON(ret != 0);
+	unreachable();
 }
 
 /**
