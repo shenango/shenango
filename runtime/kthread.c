@@ -72,7 +72,6 @@ static void kthread_attach(void)
 {
 	struct kthread *k = myk();
 
-	assert_spin_lock_held(&k->lock);
 	assert(k->parked == false);
 	assert(k->detached == true);
 
@@ -143,16 +142,12 @@ found:
 }
 
 /*
- * kthread_park_locked - block this kthread until the iokernel wakes it up.
- * @notify: if true, inform the iokernel that the kthread is parked
- *
- * @notify should only be false during initialization because the iokernel
- * assumes kthreads start in a parked state.
+ * kthread_park - block this kthread until the iokernel wakes it up.
  *
  * This variant must be called with the local kthread lock held. It is intended
- * for use by the scheduler.
+ * for use by the scheduler and for use by signal handlers.
  */
-void kthread_park_locked(bool notify)
+void kthread_park(void)
 {
 	struct kthread *k = myk();
 	ssize_t s;
@@ -165,11 +160,9 @@ void kthread_park_locked(bool notify)
 	STAT(PARKS)++;
 	spin_unlock(&k->lock);
 
-	if (notify) {
-		/* signal to iokernel that we're about to park */
-		while (!lrpc_send(&k->txcmdq, TXCMD_NET_PARKING, 0))
-			cpu_relax();
-	}
+	/* signal to iokernel that we're about to park */
+	while (!lrpc_send(&k->txcmdq, TXCMD_NET_PARKING, 0))
+		cpu_relax();
 
 	/* yield to the iokernel */
 	s = read(k->park_efd, &val, sizeof(val));
@@ -186,20 +179,21 @@ void kthread_park_locked(bool notify)
 }
 
 /**
- * kthread_park - block this kthread until the iokernel wakes it up.
- * @notify: if true, inform the iokernel that the kthread is parked
+ * kthread_wait_to_attach - block this kthread until the iokernel wakes it up.
  *
- * @notify should only be false during initialization because the iokernel
- * assumes kthreads start in a parked state.
- *
- * This variant is intended for initialization and for use in signal handlers.
+ * This variant is intended for initialization.
  */
-void kthread_park(bool notify)
+void kthread_wait_to_attach(void)
 {
-	struct kthread *k = getk();
+	struct kthread *k = myk();
+	ssize_t s;
+	uint64_t val;
 
-	spin_lock(&k->lock);
-	kthread_park_locked(notify);
-	spin_unlock(&k->lock);
-	putk();
+	/* yield to the iokernel */
+	s = read(k->park_efd, &val, sizeof(val));
+	BUG_ON(s != sizeof(uint64_t));
+	BUG_ON(val != 1);
+
+	/* attach the kthread for the first time */
+	kthread_attach();
 }

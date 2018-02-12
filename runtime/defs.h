@@ -347,8 +347,8 @@ extern unsigned int nactiveks;
 extern struct kthread *ks[NCPU];
 
 extern void kthread_detach(struct kthread *r);
-extern void kthread_park_locked(bool notify);
-extern void kthread_park(bool notify);
+extern void kthread_park(void);
+extern void kthread_wait_to_attach(void);
 
 /**
  * STAT - gets a stat counter
@@ -460,4 +460,5 @@ extern int cfg_load(const char *path);
 
 /* runtime entry helpers */
 extern void sched_start(void) __noreturn;
+extern void sched_make_uctx(ucontext_t *c);
 extern int thread_spawn_main(thread_fn_t fn, void *arg);

@@ -67,7 +67,7 @@ __jmp_thread:
 	nop
 
 2:	/* cold-path, park the kthread */
-	call	__preempt
+	call	thread_yield
 	jmp	1b
 
 /**
@@ -84,6 +84,9 @@ __jmp_thread:
  */
 .globl __jmp_runtime
 __jmp_runtime:
+	/* disable preemption */
+	incl	%fs:preempt_cnt@tpoff
+
 	/* save callee regs */
 	movq    %rbx, RBX(%rdi)
 	movq    %rbp, RBP(%rdi)
@@ -102,9 +105,6 @@ __jmp_runtime:
 	movq    %rdx, %rsp
 	movq	%rcx, %rdi
 
-	/* disable preemption */
-	incl	%fs:preempt_cnt@tpoff
-
 	/* jump into runtime code */
 	jmpq    *%rsi
 
@@ -121,13 +121,13 @@ __jmp_runtime:
  */
 .globl __jmp_runtime_nosave
 __jmp_runtime_nosave:
+	/* disable preemption */
+	incl	%fs:preempt_cnt@tpoff
+
 	/* jump into runtime function */
 	movq    %rsi, %rsp
 	movq	%rdi, %rsi
 	movq	%rdx, %rdi
-
-	/* disable preemption */
-	incl	%fs:preempt_cnt@tpoff
 
 	/* jump into runtime code */
 	jmpq    *%rsi

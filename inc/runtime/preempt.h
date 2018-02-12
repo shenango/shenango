@@ -5,13 +5,11 @@
 #pragma once
 
 #include <base/stddef.h>
+#include <runtime/thread.h>
 
-extern void __preempt(void);
-extern __thread unsigned int preempt_cnt;
+extern volatile __thread unsigned int preempt_cnt;
 
 #define PREEMPT_NOT_PENDING	(1 << 31)
-
-extern void __preempt(void);
 
 /**
  * preempt_disable - disables preemption
@@ -20,8 +18,19 @@ extern void __preempt(void);
  */
 static inline void preempt_disable(void)
 {
-	preempt_cnt++;
+	asm volatile("incl %%fs:preempt_cnt@tpoff" : : : "memory", "cc");
 	barrier();
+}
+
+/**
+ * preempt_enable_nocheck - reenables preemption without checking for conditions
+ *
+ * Can be nested.
+ */
+static inline void preempt_enable_nocheck(void)
+{
+	barrier();
+	asm volatile("decl %%fs:preempt_cnt@tpoff" : : : "memory", "cc");
 }
 
 /**
@@ -31,20 +40,9 @@ static inline void preempt_disable(void)
  */
 static inline void preempt_enable(void)
 {
-	barrier();
-	if (unlikely(--preempt_cnt == 0))
-		__preempt();
-}
-
-/**
- * preempt_enable - reenables preemption without checking for conditions
- *
- * Can be nested.
- */
-static inline void preempt_enable_nocheck(void)
-{
-	barrier();
-	preempt_cnt--;
+	preempt_enable_nocheck();
+	if (unlikely(preempt_cnt == 0))
+		thread_yield();
 }
 
 /**

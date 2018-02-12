@@ -220,7 +220,7 @@ again:
 
 	/* did not find anything to run, park this kthread */
 	STAT(SCHED_CYCLES) += rdtsc() - start_tsc;
-	kthread_park_locked(true);
+	kthread_park();
 	start_tsc = rdtsc();
 
 	goto again;
@@ -252,7 +252,7 @@ static __noreturn void schedule_start(void)
 {
 	/* force kthread parking (iokernel assumes all kthreads are parked
 	 * initially) */
-	kthread_park(false);
+	kthread_wait_to_attach();
 
 	schedule();
 }
@@ -475,6 +475,18 @@ void sched_start(void)
 {
 	last_tsc = rdtsc();
 	jmp_runtime_nosave((runtime_fn_t)schedule_start, 0);
+}
+
+/**
+ * sched_make_uctx - initializes an existing ucontext so it jumps into the
+ *		     scheduler to reschedule
+ * @c: a valid, existing ucontext (from a signal handler or getcontext()).
+ */
+void sched_make_uctx(ucontext_t *c)
+{
+	c->uc_stack.ss_sp = runtime_stack;
+	c->uc_stack.ss_size = RUNTIME_STACK_SIZE;
+	makecontext(c, schedule, 0);
 }
 
 static void runtime_top_of_stack(void)
