@@ -81,6 +81,9 @@ enum {
  */
 enum {
 	TXCMD_NET_COMPLETE = 0,	/* contains rx_net_hdr.completion_data */
-	TXCMD_NET_PARKING, /* payload is unused */
+	TXCMD_NET_PARKING, /* 0 if no timers pending, otherwise us until next timer
+		expiry | TIMER_PENDING */
 	TXCMD_NR,		/* number of commands */
 };
+
+#define TIMER_PENDING	(1ULL << 63)

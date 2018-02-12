@@ -150,18 +150,42 @@ found:
 void kthread_park(void)
 {
 	struct kthread *k = myk();
+	uint64_t next_timer = 0, now = 0;
+	unsigned long payload = 0;
 	ssize_t s;
 	uint64_t val;
 
 	assert_spin_lock_held(&k->lock);
 	assert(k->parked == false);
 
+	spin_lock(&klock);
+	if (nactiveks == 1 && nrks > 1) {
+		/* must wait for other kthreads to detach so that timer heaps are
+		 * merged */
+		spin_unlock(&klock);
+		return;
+	}
+	nactiveks--;
+	spin_unlock(&klock);
+
 	k->parked = true;
+	/* get soonest timer expiry to convey to iokernel when parking */
+	if (k->timern > 0) {
+		next_timer = timer_earliest_deadline(k);
+		now = microtime();
+
+		if (next_timer <= now) {
+			/* next timer has already expired */
+			payload = TIMER_PENDING;
+		} else
+			payload = (next_timer - now) | TIMER_PENDING;
+	}
+
 	STAT(PARKS)++;
 	spin_unlock(&k->lock);
 
 	/* signal to iokernel that we're about to park */
-	while (!lrpc_send(&k->txcmdq, TXCMD_NET_PARKING, 0))
+	while (!lrpc_send(&k->txcmdq, TXCMD_NET_PARKING, payload))
 		cpu_relax();
 
 	/* yield to the iokernel */
@@ -176,6 +200,11 @@ void kthread_park(void)
 	k->parked = false;
 	if (k->detached)
 		kthread_attach();
+	else {
+		spin_lock(&klock);
+		nactiveks++;
+		spin_unlock(&klock);
+	}
 }
 
 /**

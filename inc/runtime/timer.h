@@ -38,6 +38,7 @@ struct kthread;
 extern void timer_start(struct timer_entry *e, uint64_t deadline_us);
 extern bool timer_cancel(struct timer_entry *e);
 extern void timer_merge(struct kthread *r);
+extern uint64_t timer_earliest_deadline();
 
 
 /*

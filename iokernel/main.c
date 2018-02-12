@@ -96,6 +96,9 @@ void dataplane_loop()
 		if (!work_done)
 			dp_clients_rx_control_lrpcs();
 
+		/* handle any expired runtime timers */
+		cores_handle_timers();
+
 		/* adjust core assignments */
 		if (microtime() > next_adjust_time) {
 			cores_adjust_assignments();

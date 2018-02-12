@@ -28,7 +28,8 @@ static int commands_drain_queue(struct thread *t, struct rte_mbuf **bufs, int n)
 			break;
 
 		case TXCMD_NET_PARKING:
-			cores_park_kthread(t, false);
+			cores_park_kthread(t, false, (payload & TIMER_PENDING) != 0,
+					payload & ~TIMER_PENDING);
 			break;
 
 		default:

@@ -16,6 +16,10 @@ DEFINE_BITMAP(avail_cores, NCPU);
 struct core_assignments core_assign;
 unsigned int nrts;
 struct thread *ts[NCPU];
+/* unordered array of runtimes that are completely parked (no active kthreads)
+ * and have pending timers */
+static struct proc *parked_timer_procs[IOKERNEL_MAX_PROC];
+static int nr_parked_timer_procs = 0;
 
 /*
  * Debugging function that logs how each core is currently being used.
@@ -51,8 +55,14 @@ static void cores_log_assignments()
 
 /*
  * Parks the given kthread (if it exists) and frees its core.
+ *
+ * @th: thread to park
+ * @force: true if this kthread should be parked regardless of pending tx pkts
+ * @pending_timer: true if there is at least one pending timer for this runtime
+ * @us_to_next_timer: the number of us until the next timer expiry
  */
-void cores_park_kthread(struct thread *th, bool force)
+void cores_park_kthread(struct thread *th, bool force, bool pending_timer,
+		uint64_t us_to_next_timer)
 {
 	struct proc *p = th->p;
 	unsigned int core = th->core;
@@ -100,6 +110,15 @@ void cores_park_kthread(struct thread *th, bool force)
 	   detach it */
 	if (!lrpc_send(&p->threads[kthread].rxq, RX_NET_PARKED, 0))
 		log_warn("cores: failed to enqueue parked command to runtime");
+
+	if (pending_timer && (p->active_thread_count == 0)) {
+		/* add to list of completely parked runtimes with at least one
+		   pending timer */
+		BUG_ON(p->pending_timer);
+		p->pending_timer = true;
+		p->deadline_us = microtime() + us_to_next_timer;
+		parked_timer_procs[nr_parked_timer_procs++] = p;
+	}
 }
 
 /*
@@ -138,13 +157,25 @@ static struct thread *cores_reserve_core(struct proc *p)
 struct thread *cores_wake_kthread(struct proc *p)
 {
 	struct thread *th;
-	int ret;
+	int i, ret;
 	ssize_t s;
 	uint64_t val = 1;
 
 	th = cores_reserve_core(p);
 	if (!th)
 		return NULL;
+
+	/* remove from parked proc list, if applicable */
+	if (p->pending_timer) {
+		p->pending_timer = false;
+		for (i = 0; i < nr_parked_timer_procs; i++) {
+			if (parked_timer_procs[i] == p)
+				goto found;
+		}
+		BUG();
+	found:
+		parked_timer_procs[i] = parked_timer_procs[--nr_parked_timer_procs];
+	}
 
 	/* assign the kthread to its core */
 	ret = cores_pin_thread(th->tid, th->core);
@@ -216,7 +247,27 @@ void cores_free_proc(struct proc *p)
 	int i;
 
 	bitmap_for_each_cleared(p->available_threads, p->thread_count, i)
-		cores_park_kthread(&p->threads[i], true);
+		cores_park_kthread(&p->threads[i], true, false, 0);
+}
+
+/*
+ * cores_handle_timers - for each runtime that has an expired timer, wake a
+ * kthread
+ */
+void cores_handle_timers()
+{
+	struct proc *p;
+	uint64_t now = microtime();
+	int i;
+
+	for (i = 0; i < nr_parked_timer_procs; i++) {
+		p = parked_timer_procs[i];
+		BUG_ON(!p->pending_timer);
+		if (p->deadline_us < now) {
+			if (!cores_wake_kthread(p))
+				return; /* no more cores available */
+		}
+	}
 }
 
 /*

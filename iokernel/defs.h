@@ -60,6 +60,10 @@ struct proc {
 	/* network data */
 	struct eth_addr		mac;
 
+	/* next pending timer, only valid if pending_timer is true */
+	bool				pending_timer;
+	uint64_t			deadline_us;
+
 	/* table of physical addresses for shared memory */
 	physaddr_t		page_paddrs[];
 };
@@ -154,6 +158,8 @@ extern bool commands_rx();
 extern void cores_init_proc(struct proc *p);
 extern void cores_free_proc(struct proc *p);
 extern int cores_pin_thread(pid_t tid, int core);
-extern void cores_park_kthread(struct thread *t, bool force);
+extern void cores_park_kthread(struct thread *t, bool force, bool pending_timer,
+		uint64_t us_to_next_timer);
 extern struct thread *cores_wake_kthread(struct proc *p);
 extern void cores_adjust_assignments();
+extern void cores_handle_timers();

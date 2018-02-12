@@ -142,6 +142,27 @@ done:
 	spin_unlock(&k->timer_lock);
 }
 
+/**
+ * timer_earliest_deadline - return the first deadline for this kthread or 0 if
+ * there are no active timers.
+ */
+uint64_t timer_earliest_deadline()
+{
+	struct kthread *k = myk();
+	uint64_t deadline_us;
+
+	spin_lock(&k->timer_lock);
+
+	if (k->timern == 0)
+		deadline_us = 0;
+	else
+		deadline_us = k->timers[0].deadline_us;
+
+	spin_unlock(&k->timer_lock);
+
+	return deadline_us;
+}
+
 static void timer_start_locked(struct timer_entry *e, uint64_t deadline_us)
 {
 	struct kthread *k = myk();

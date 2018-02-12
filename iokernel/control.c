@@ -79,6 +79,7 @@ static struct proc *control_create_proc(mem_key_t key, size_t len, pid_t pid,
 	if (eth_addr_is_multicast(&hdr.mac) || eth_addr_is_zero(&hdr.mac))
 		goto fail_free_proc;
 	p->mac = hdr.mac;
+	p->pending_timer = false;
 
 	/* initialize the threads */
 	for (i = 0; i < hdr.thread_count; i++) {
