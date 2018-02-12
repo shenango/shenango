@@ -85,8 +85,8 @@ static void main_handler(void *arg)
 	/* test RCU reclamation as kthreads attach and detach */
 	/* perform several rounds in which we spawn reader threads, write many
 	 * times to the test object, and then wait for all threads to finish. */
-	waitgroup_init(&wg);
 	for (i = 0; i < NROUNDS; i++) {
+		waitgroup_init(&wg);
 		waitgroup_add(&wg, NTHREADS);
 		for (j = 0; j < NTHREADS; j++) {
 			ret = thread_spawn(rcu_read_handler, &wg);
@@ -96,6 +96,7 @@ static void main_handler(void *arg)
 		thread_yield();
 
 		for (j = 0; j < N; j++) {
+			waitgroup_init(&release_wg);
 			waitgroup_add(&release_wg, 1);
 			o2 = malloc(sizeof(*o));
 			o2->foo = SECOND_VAL;
@@ -103,6 +104,8 @@ static void main_handler(void *arg)
 			rcu_free(&o->rcu, test_release);
 
 			waitgroup_wait(&release_wg);
+
+			waitgroup_init(&release_wg);
 			waitgroup_add(&release_wg, 1);
 
 			thread_yield();
@@ -119,8 +122,8 @@ static void main_handler(void *arg)
 	log_info("finished %d rounds of spawning threads to test RCU", NROUNDS);
 
 	/* test timer merging as kthreads attach and detach */
-	waitgroup_init(&wg);
 	for (i = 0; i < NROUNDS; i++) {
+		waitgroup_init(&wg);
 		waitgroup_add(&wg, NTHREADS);
 		for (j = 0; j < NTHREADS; j++) {
 			ret = thread_spawn(timer_handler, &wg);
