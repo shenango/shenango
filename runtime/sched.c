@@ -146,6 +146,13 @@ static bool steal_work(struct kthread *l, struct kthread *r)
 
 		if (th)
 			l->rq[l->rq_head++] = th;
+		else if (l->rq_head != l->rq_tail) {
+			/* handle the case where net_run -> kthread_detach -> rcu_detach
+			 * leads to a thread being added to the runqueue (but not returned
+			 * here) */
+			th = l->rq[l->rq_head];
+		}
+
 		spin_unlock(&r->lock);
 		STAT(THREADS_STOLEN) += th != NULL ? 1 : 0;
 		return th != NULL;
