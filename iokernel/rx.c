@@ -211,7 +211,7 @@ static struct rte_mempool *rx_pktmbuf_pool_create_in_shm(const char *name,
 	total_elt_sz = mp->header_size + mp->elt_size + mp->trailer_size;
 	pg_size = PGSIZE_2MB;
 	pg_shift = rte_bsf32(pg_size);
-	len = rte_mempool_xmem_size(n, total_elt_sz, pg_shift);
+	len = rte_mempool_xmem_size(n, total_elt_sz, pg_shift, mp->flags);
 	if (len > INGRESS_MBUF_SHM_SIZE) {
 		log_err("rx: shared memory is too small for number of mbufs");
 		goto fail_free_mempool;

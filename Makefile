@@ -60,6 +60,13 @@ DPDK_LIBS += -lrte_mempool
 DPDK_LIBS += -lrte_mempool
 DPDK_LIBS += -lrte_mempool_stack
 DPDK_LIBS += -lrte_ring
+# additional libs for running with Mellanox NICs
+ifneq ($(MLX),)
+DPDK_LIBS += -Wl,-whole-archive -lrte_pmd_mlx4 -Wl,-no-whole-archive
+DPDK_LIBS += -Wl,-whole-archive -libverbs -Wl,-no-whole-archive
+DPDK_LIBS += -Wl,-whole-archive -lmlx4 -Wl,-no-whole-archive
+DPDK_LIBS += -Wl,-whole-archive -lrte_kvargs -Wl,-no-whole-archive
+endif
 
 # must be first
 all: libbase.a libdune.a libnet.a libruntime.a iokerneld $(test_targets)
