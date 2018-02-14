@@ -12,6 +12,7 @@
 #include "defs.h"
 
 #define CORES_ADJUST_INTERVAL_US	10
+#define LOG_INTERVAL_US		(1000 * 1000)
 struct dataplane dp;
 
 struct init_entry {
@@ -65,7 +66,7 @@ static int run_init_handlers(const char *phase, const struct init_entry *h,
 void dataplane_loop()
 {
 	bool work_done;
-	uint64_t next_adjust_time;
+	uint64_t next_adjust_time, next_log_time;
 	/*
 	 * Check that the port is on the same NUMA node as the polling thread
 	 * for best performance.
@@ -79,6 +80,7 @@ void dataplane_loop()
 			rte_lcore_id());
 
 	next_adjust_time = microtime();
+	next_log_time = microtime();
 	/* run until quit or killed */
 	for (;;) {
 		work_done = false;
@@ -103,6 +105,11 @@ void dataplane_loop()
 		if (microtime() > next_adjust_time) {
 			cores_adjust_assignments();
 			next_adjust_time += CORES_ADJUST_INTERVAL_US;
+		}
+
+		if (false && microtime() > next_log_time) {
+			dpdk_print_eth_stats();
+			next_log_time += LOG_INTERVAL_US;
 		}
 	}
 }

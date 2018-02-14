@@ -35,6 +35,7 @@
  * dpdk.c - DPDK initialization for the iokernel dataplane
  */
 
+#include <inttypes.h>
 #include <rte_eal.h>
 #include <rte_ethdev.h>
 #include <rte_ether.h>
@@ -129,6 +130,27 @@ static inline int dpdk_port_init(uint8_t port, struct rte_mempool *mbuf_pool)
 	rte_eth_promiscuous_enable(port);
 
 	return 0;
+}
+
+/*
+ * Log some ethernet port stats.
+ */
+void dpdk_print_eth_stats()
+{
+	int ret;
+	struct rte_eth_stats stats;
+
+	ret = rte_eth_stats_get(dp.port, &stats);
+	if (ret)
+		log_debug("dpdk: error getting eth stats");
+
+	log_debug("eth stats for port %d at time %"PRIu64, dp.port, microtime());
+	log_debug("RX-packets: %"PRIu64" RX-dropped: %"PRIu64" RX-bytes: %"PRIu64,
+			stats.ipackets, stats.imissed, stats.ibytes);
+	log_debug("TX-packets: %"PRIu64" TX-bytes: %"PRIu64, stats.opackets,
+			stats.obytes);
+	log_debug("RX-error: %"PRIu64" TX-error: %"PRIu64" RX-mbuf-fail: %"PRIu64,
+			stats.ierrors, stats.oerrors, stats.rx_nombuf);
 }
 
 /*

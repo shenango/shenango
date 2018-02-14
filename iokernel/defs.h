@@ -147,10 +147,11 @@ extern bool tx_burst();
 extern bool tx_send_completion(void *obj);
 
 /*
- * dataplane functions for communicating with runtimes and the control plane
+ * other dataplane functions
  */
 extern void dp_clients_rx_control_lrpcs();
 extern bool commands_rx();
+extern void dpdk_print_eth_stats();
 
 /*
  * functions for manipulating core assignments
