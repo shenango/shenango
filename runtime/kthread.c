@@ -105,6 +105,7 @@ void kthread_detach(struct kthread *r)
 	assert(r != k);
 	assert(r->parked == true);
 	assert(r->detached == false);
+	assert(r->preempted == false);
 
 	spin_lock(&klock);
 	assert(r != k);
@@ -177,9 +178,14 @@ void kthread_park(void)
 		if (next_timer <= now) {
 			/* next timer has already expired */
 			payload = TIMER_PENDING;
-		} else
+		} else {
+			assert(((next_timer - now) & ~NEXT_TIMER_MASK) == 0);
 			payload = (next_timer - now) | TIMER_PENDING;
+		}
 	}
+
+	if (k->preempted)
+		payload |= PREEMPTED;
 
 	STAT(PARKS)++;
 	spin_unlock(&k->lock);

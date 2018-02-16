@@ -35,7 +35,7 @@ static void dp_clients_add_client(struct proc *p)
 	if (ret < 0)
 		log_err("dp_clients: failed to add PID to hash table in add_client");
 
-	cores_wake_kthread(p);
+	cores_init_proc(p);
 }
 
 /*

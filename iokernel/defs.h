@@ -63,6 +63,11 @@ struct proc {
 	/* next pending timer, only valid if pending_timer is true */
 	bool				pending_timer;
 	uint64_t			deadline_us;
+	unsigned int		timer_idx;
+
+	/* preempted is true if fully parked due to preemption */
+	bool				preempted;
+	unsigned int		preempt_idx;
 
 	/* table of physical addresses for shared memory */
 	physaddr_t		page_paddrs[];
@@ -159,8 +164,8 @@ extern void dpdk_print_eth_stats();
 extern void cores_init_proc(struct proc *p);
 extern void cores_free_proc(struct proc *p);
 extern int cores_pin_thread(pid_t tid, int core);
-extern void cores_park_kthread(struct thread *t, bool force, bool pending_timer,
-		uint64_t us_to_next_timer);
+extern void cores_park_kthread(struct thread *t, bool force,
+		bool pending_timer, uint64_t us_to_next_timer, bool preempted);
 extern struct thread *cores_wake_kthread(struct proc *p);
 extern void cores_adjust_assignments();
 extern void cores_handle_timers();

@@ -14,12 +14,15 @@
 
 DEFINE_BITMAP(avail_cores, NCPU);
 struct core_assignments core_assign;
-unsigned int nrts;
+unsigned int nrts = 0;
 struct thread *ts[NCPU];
 /* unordered array of runtimes that are completely parked (no active kthreads)
  * and have pending timers */
-static struct proc *parked_timer_procs[IOKERNEL_MAX_PROC];
 static int nr_parked_timer_procs = 0;
+static struct proc *parked_timer_procs[IOKERNEL_MAX_PROC];
+/* procs that have tasks to run but are completely parked due to preemption */
+static int nr_parked_preempt_procs = 0;
+static struct proc *parked_preempt_procs[IOKERNEL_MAX_PROC];
 
 /*
  * Debugging function that logs how each core is currently being used.
@@ -60,9 +63,10 @@ static void cores_log_assignments()
  * @force: true if this kthread should be parked regardless of pending tx pkts
  * @pending_timer: true if there is at least one pending timer for this runtime
  * @us_to_next_timer: the number of us until the next timer expiry
+ * @preempted: true if this kthread was preempted
  */
 void cores_park_kthread(struct thread *th, bool force, bool pending_timer,
-		uint64_t us_to_next_timer)
+		uint64_t us_to_next_timer, bool preempted)
 {
 	struct proc *p = th->p;
 	unsigned int core = th->core;
@@ -78,7 +82,7 @@ void cores_park_kthread(struct thread *th, bool force, bool pending_timer,
 	BUG_ON(bitmap_test(p->available_threads, kthread));
 
 	/* check for race conditions with the runtime */
-	/* TODO: just need to drain the txpktq instead of waking */
+	/* TODO: just need to drain the txpktq and txcmdq instead of waking */
 	lrpc_poll_send_tail(&th->rxq);
 	if (unlikely(!force && (lrpc_get_cached_length(&th->rxq) > 0 ||
 				!lrpc_empty(&th->txpktq)))) {
@@ -111,13 +115,24 @@ void cores_park_kthread(struct thread *th, bool force, bool pending_timer,
 	if (!lrpc_send(&p->threads[kthread].rxq, RX_NET_PARKED, 0))
 		log_warn("cores: failed to enqueue parked command to runtime");
 
-	if (pending_timer && (p->active_thread_count == 0)) {
-		/* add to list of completely parked runtimes with at least one
-		   pending timer */
-		BUG_ON(p->pending_timer);
-		p->pending_timer = true;
-		p->deadline_us = microtime() + us_to_next_timer;
-		parked_timer_procs[nr_parked_timer_procs++] = p;
+	if (p->active_thread_count == 0) {
+		if (pending_timer) {
+			/* add to list of completely parked runtimes with at least one
+			 * pending timer */
+			BUG_ON(p->pending_timer);
+			p->pending_timer = true;
+			p->deadline_us = microtime() + us_to_next_timer;
+			p->timer_idx = nr_parked_timer_procs;
+			parked_timer_procs[nr_parked_timer_procs++] = p;
+		}
+
+		if (preempted) {
+			/* add to list of completely parked runtimes that have pending work
+			 * so that we can wake it up later */
+			p->preempted = true;
+			p->preempt_idx = nr_parked_preempt_procs;
+			parked_preempt_procs[nr_parked_preempt_procs++] = p;
+		}
 	}
 }
 
@@ -152,12 +167,33 @@ static struct thread *cores_reserve_core(struct proc *p)
 }
 
 /*
+ * Remove this proc from the lists of parked procs.
+ * @p: the runtime
+ */
+static void cores_remove_from_parked_procs(struct proc *p)
+{
+	/* remove from parked timer proc list */
+	if (p->pending_timer) {
+		p->pending_timer = false;
+		parked_timer_procs[p->timer_idx] =
+				parked_timer_procs[--nr_parked_timer_procs];
+	}
+
+	/* remove from preempted proc list */
+	if (p->preempted) {
+		p->preempted = false;
+		parked_preempt_procs[p->preempt_idx] =
+				parked_preempt_procs[--nr_parked_preempt_procs];
+	}
+}
+
+/*
  * Wakes a kthread for this process (if one is available).
  */
 struct thread *cores_wake_kthread(struct proc *p)
 {
 	struct thread *th;
-	int i, ret;
+	int ret;
 	ssize_t s;
 	uint64_t val = 1;
 
@@ -165,17 +201,7 @@ struct thread *cores_wake_kthread(struct proc *p)
 	if (!th)
 		return NULL;
 
-	/* remove from parked proc list, if applicable */
-	if (p->pending_timer) {
-		p->pending_timer = false;
-		for (i = 0; i < nr_parked_timer_procs; i++) {
-			if (parked_timer_procs[i] == p)
-				goto found;
-		}
-		BUG();
-	found:
-		parked_timer_procs[i] = parked_timer_procs[--nr_parked_timer_procs];
-	}
+	cores_remove_from_parked_procs(p);
 
 	/* assign the kthread to its core */
 	ret = cores_pin_thread(th->tid, th->core);
@@ -237,6 +263,11 @@ void cores_init_proc(struct proc * p)
 			/* continue running but performance is unpredictable */
 		}
 	}
+
+	/* add to preempted proc list so a core will be granted when possible */
+	p->preempted = true;
+	p->preempt_idx = nr_parked_preempt_procs;
+	parked_preempt_procs[nr_parked_preempt_procs++] = p;
 }
 
 /*
@@ -247,7 +278,9 @@ void cores_free_proc(struct proc *p)
 	int i;
 
 	bitmap_for_each_cleared(p->available_threads, p->thread_count, i)
-		cores_park_kthread(&p->threads[i], true, false, 0);
+		cores_park_kthread(&p->threads[i], true, false, 0, false);
+
+	cores_remove_from_parked_procs(p);
 }
 
 /*
@@ -315,7 +348,16 @@ void cores_adjust_assignments()
 		continue; /* no need to wake a kthread */
 
 	wake_kthread:
-		cores_wake_kthread(p);
+		if (!cores_wake_kthread(p))
+			break;
+	}
+
+	/* wake up a kthread for each preempted proc */
+	for (i = nr_parked_preempt_procs - 1; i >= 0; i--) {
+		p = parked_preempt_procs[i];
+
+		if (!cores_wake_kthread(p))
+			break;
 	}
 }
 

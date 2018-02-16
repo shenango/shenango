@@ -87,3 +87,5 @@ enum {
 };
 
 #define TIMER_PENDING	(1ULL << 63)
+#define PREEMPTED		(1ULL << 62)
+#define NEXT_TIMER_MASK	~(TIMER_PENDING | PREEMPTED)
