@@ -32,7 +32,7 @@ static void handle_sigusr1(int s, siginfo_t *si, void *ctx)
 	struct kthread *k = myk();
 
 	/* resume execution if preemption is disabled */
-	if (preempt_cnt != 0) {
+	if (!preempt_enabled()) {
 		set_preempt_needed();
 		return;
 	}

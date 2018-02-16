@@ -54,9 +54,17 @@ static inline bool preempt_needed(void)
 }
 
 /**
+ * preempt_enabled - returns true if preemption is enabled
+ */
+static inline bool preempt_enabled(void)
+{
+	return (preempt_cnt & ~PREEMPT_NOT_PENDING) == 0;
+}
+
+/**
  * assert_preempt_disabled - asserts that preemption is disabled
  */
 static inline void assert_preempt_disabled(void)
 {
-	assert((preempt_cnt & ~PREEMPT_NOT_PENDING) > 0);
+	assert(!preempt_enabled());
 }
