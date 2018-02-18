@@ -32,6 +32,7 @@
 #define RUNTIME_RQ_SIZE		32
 #define RUNTIME_NET_BUDGET	16
 #define RUNTIME_MAX_TIMERS	4096
+#define RUNTIME_DETACH_US	100
 
 
 /*
@@ -279,7 +280,8 @@ struct kthread {
 	struct mbufq		txpktq_overflow;
 	struct mbufq		txcmdq_overflow;
 	unsigned int		rcu_gen;
-	unsigned int		pad[3];
+	unsigned int		pad[1];
+	uint64_t		park_us;
 
 	/* 3rd cache-line */
 	struct lrpc_chan_out	txpktq;
@@ -343,7 +345,6 @@ static inline void putk(void)
 DECLARE_SPINLOCK(klock);
 extern unsigned int maxks;
 extern unsigned int nrks;
-extern unsigned int nactiveks;
 extern struct kthread *ks[NCPU];
 
 extern void kthread_detach(struct kthread *r);

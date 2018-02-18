@@ -27,9 +27,8 @@ static int commands_drain_queue(struct thread *t, struct rte_mbuf **bufs, int n)
 			/* TODO: validate pointer @buf */
 			break;
 
-		case TXCMD_NET_PARKING:
-			cores_park_kthread(t, false, (payload & TIMER_PENDING) != 0,
-					payload & NEXT_TIMER_MASK, (payload & PREEMPTED) != 0);
+		case TXCMD_PARKED:
+			cores_park_kthread(t, false);
 			break;
 
 		default:

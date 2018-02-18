@@ -21,8 +21,6 @@ DEFINE_SPINLOCK(klock);
 unsigned int maxks;
 /* the total number of attached kthreads (i.e. the size of @ks) */
 unsigned int nrks = 0;
-/* the number of active kthreads (not parked) */
-unsigned int nactiveks = 0;
 /* an array of all the kthreads (for work-stealing) */
 struct kthread *ks[NCPU];
 /* kernel thread-local data */
@@ -82,7 +80,6 @@ static void kthread_attach(void)
 	assert(nrks < maxks);
 	ks[nrks] = k;
 	store_release(&nrks, nrks + 1);
-	nactiveks++;
 	spin_unlock(&klock);
 }
 
@@ -106,6 +103,18 @@ void kthread_detach(struct kthread *r)
 	assert(r->parked == true);
 	assert(r->detached == false);
 	assert(r->preempted == false);
+
+	/* should we detach this kthread? */
+	if (microtime() - r->park_us < RUNTIME_DETACH_US)
+		return;
+
+	/* make sure the park rxcmd was processed */
+	lrpc_poll_send_tail(&r->txcmdq);
+	if (unlikely(lrpc_get_cached_length(&r->txcmdq) > 0)) {
+		log_err_ratelimited("iokernel hasn't processed park request "
+				    "quicky enough!");
+		return;
+	}
 
 	spin_lock(&klock);
 	assert(r != k);
@@ -151,7 +160,6 @@ found:
 void kthread_park(void)
 {
 	struct kthread *k = myk();
-	uint64_t next_timer = 0, now = 0;
 	unsigned long payload = 0;
 	ssize_t s;
 	uint64_t val;
@@ -159,39 +167,13 @@ void kthread_park(void)
 	assert_spin_lock_held(&k->lock);
 	assert(k->parked == false);
 
-	spin_lock(&klock);
-	if (nactiveks == 1 && nrks > 1) {
-		/* must wait for other kthreads to detach so that timer heaps are
-		 * merged */
-		spin_unlock(&klock);
-		return;
-	}
-	nactiveks--;
-	spin_unlock(&klock);
-
 	k->parked = true;
-	/* get soonest timer expiry to convey to iokernel when parking */
-	if (k->timern > 0) {
-		next_timer = timer_earliest_deadline(k);
-		now = microtime();
-
-		if (next_timer <= now) {
-			/* next timer has already expired */
-			payload = TIMER_PENDING;
-		} else {
-			assert(((next_timer - now) & ~NEXT_TIMER_MASK) == 0);
-			payload = (next_timer - now) | TIMER_PENDING;
-		}
-	}
-
-	if (k->preempted)
-		payload |= PREEMPTED;
-
+	k->park_us = microtime();
 	STAT(PARKS)++;
 	spin_unlock(&k->lock);
 
 	/* signal to iokernel that we're about to park */
-	while (!lrpc_send(&k->txcmdq, TXCMD_NET_PARKING, payload))
+	while (!lrpc_send(&k->txcmdq, TXCMD_PARKED, payload))
 		cpu_relax();
 
 	/* yield to the iokernel */
@@ -206,11 +188,6 @@ void kthread_park(void)
 	k->parked = false;
 	if (k->detached)
 		kthread_attach();
-	else {
-		spin_lock(&klock);
-		nactiveks++;
-		spin_unlock(&klock);
-	}
 }
 
 /**

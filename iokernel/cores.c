@@ -61,12 +61,8 @@ static void cores_log_assignments()
  *
  * @th: thread to park
  * @force: true if this kthread should be parked regardless of pending tx pkts
- * @pending_timer: true if there is at least one pending timer for this runtime
- * @us_to_next_timer: the number of us until the next timer expiry
- * @preempted: true if this kthread was preempted
  */
-void cores_park_kthread(struct thread *th, bool force, bool pending_timer,
-		uint64_t us_to_next_timer, bool preempted)
+void cores_park_kthread(struct thread *th, bool force)
 {
 	struct proc *p = th->p;
 	unsigned int core = th->core;
@@ -109,31 +105,6 @@ void cores_park_kthread(struct thread *th, bool force, bool pending_timer,
 	/* remove the thread from the polling array */
 	ts[th->idx] = ts[--nrts];
 	ts[th->idx]->idx = th->idx;
-
-	/* notify kthread that it has been parked so that another kthread can
-	   detach it */
-	if (!lrpc_send(&p->threads[kthread].rxq, RX_NET_PARKED, 0))
-		log_warn("cores: failed to enqueue parked command to runtime");
-
-	if (p->active_thread_count == 0) {
-		if (pending_timer) {
-			/* add to list of completely parked runtimes with at least one
-			 * pending timer */
-			BUG_ON(p->pending_timer);
-			p->pending_timer = true;
-			p->deadline_us = microtime() + us_to_next_timer;
-			p->timer_idx = nr_parked_timer_procs;
-			parked_timer_procs[nr_parked_timer_procs++] = p;
-		}
-
-		if (preempted) {
-			/* add to list of completely parked runtimes that have pending work
-			 * so that we can wake it up later */
-			p->preempted = true;
-			p->preempt_idx = nr_parked_preempt_procs;
-			parked_preempt_procs[nr_parked_preempt_procs++] = p;
-		}
-	}
 }
 
 /*
@@ -278,7 +249,7 @@ void cores_free_proc(struct proc *p)
 	int i;
 
 	bitmap_for_each_cleared(p->available_threads, p->thread_count, i)
-		cores_park_kthread(&p->threads[i], true, false, 0, false);
+		cores_park_kthread(&p->threads[i], true);
 
 	cores_remove_from_parked_procs(p);
 }

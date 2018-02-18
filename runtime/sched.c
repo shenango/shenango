@@ -146,12 +146,6 @@ static bool steal_work(struct kthread *l, struct kthread *r)
 
 		if (th)
 			l->rq[l->rq_head++] = th;
-		else if (l->rq_head != l->rq_tail) {
-			/* handle the case where net_run -> kthread_detach -> rcu_detach
-			 * leads to a thread being added to the runqueue (but not returned
-			 * here) */
-			th = l->rq[l->rq_head];
-		}
 
 		spin_unlock(&r->lock);
 		STAT(THREADS_STOLEN) += th != NULL ? 1 : 0;
@@ -166,6 +160,10 @@ static bool steal_work(struct kthread *l, struct kthread *r)
 		l->rq[i] = r->rq[rq_tail++ % RUNTIME_RQ_SIZE];
 	l->rq_head = avail;
 	store_release(&r->rq_tail, rq_tail);
+
+	/* attempt to detach the kthread if there was nothing left to steal */
+	if (!avail && r->parked)
+		kthread_detach(r);
 	spin_unlock(&r->lock);
 
 	STAT(THREADS_STOLEN) += avail;

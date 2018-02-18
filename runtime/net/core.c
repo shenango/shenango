@@ -266,7 +266,6 @@ thread_t *net_run(struct kthread *k, unsigned int budget)
 	struct net_rx_closure *c;
 	unsigned int recv_cnt = 0, compl_cnt = 0;
 	int budget_left;
-	bool detach = false;
 
 	assert_spin_lock_held(&k->lock);
 
@@ -297,20 +296,12 @@ thread_t *net_run(struct kthread *k, unsigned int budget)
 			c->compl_reqs[compl_cnt++] = (struct mbuf *)payload;
 			break;
 
-		case RX_NET_PARKED:
-			detach = true;
-			break;
-
 		default:
 			log_err_ratelimited("net: invalid RXQ cmd '%ld'", cmd);
 		}
 	}
 
-	if (detach && k->parked)
-		kthread_detach(k);
-	if (recv_cnt + compl_cnt == 0)
-		return NULL;
-
+	assert(recv_cnt + compl_cnt > 0);
 	c->recv_cnt = recv_cnt;
 	c->compl_cnt = compl_cnt;
 	th->state = THREAD_STATE_RUNNABLE;

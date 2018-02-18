@@ -59,7 +59,6 @@ enum {
 enum {
 	RX_NET_RECV = 0,	/* points to a struct rx_net_hdr */
 	RX_NET_COMPLETE,	/* contains tx_net_hdr.completion_data */
-	RX_NET_PARKED,		/* payload is unused */
 	RX_CALL_NR,		/* number of commands */
 };
 
@@ -81,11 +80,6 @@ enum {
  */
 enum {
 	TXCMD_NET_COMPLETE = 0,	/* contains rx_net_hdr.completion_data */
-	TXCMD_NET_PARKING, /* 0 if no timers pending, otherwise us until next timer
-		expiry | TIMER_PENDING */
+	TXCMD_PARKED,		/* hint to iokernel that kthread is parked */
 	TXCMD_NR,		/* number of commands */
 };
-
-#define TIMER_PENDING	(1ULL << 63)
-#define PREEMPTED		(1ULL << 62)
-#define NEXT_TIMER_MASK	~(TIMER_PENDING | PREEMPTED)
