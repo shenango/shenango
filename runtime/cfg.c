@@ -95,6 +95,25 @@ static int parse_runtime_kthreads(const char *name, const char *val)
 	return 0;
 }
 
+static int parse_runtime_spinning_kthreads(const char *name, const char *val)
+{
+	long tmp;
+	int ret;
+
+	ret = str_to_long(val, &tmp);
+	if (ret)
+		return ret;
+
+	if (tmp < 0) {
+		log_err("invalid number of spinning kthreads requests, '%ld', "
+			"must be > 0", tmp);
+		return -EINVAL;
+	}
+
+	spinks = tmp;
+	return 0;
+}
+
 static int parse_mac_address(const char *name, const char *val)
 {
 	int i;
@@ -143,6 +162,7 @@ static const struct cfg_handler cfg_handlers[] = {
 	{ "host_gateway", parse_host_ip, true },
 	{ "host_mac", parse_mac_address, false },
 	{ "runtime_kthreads", parse_runtime_kthreads, true },
+	{ "runtime_spinning_kthreads", parse_runtime_spinning_kthreads, false },
 };
 
 /**

@@ -344,6 +344,7 @@ static inline void putk(void)
 
 DECLARE_SPINLOCK(klock);
 extern unsigned int maxks;
+extern unsigned int spinks;
 extern unsigned int nrks;
 extern struct kthread *ks[NCPU];
 

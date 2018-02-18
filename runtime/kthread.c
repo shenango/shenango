@@ -15,12 +15,16 @@
 
 #include "defs.h"
 
-/* protects @ks and @nrks below */
+/* protects @ks, @nrks, and @runningks below */
 DEFINE_SPINLOCK(klock);
 /* the maximum number of kthreads */
 unsigned int maxks;
 /* the total number of attached kthreads (i.e. the size of @ks) */
-unsigned int nrks = 0;
+unsigned int nrks;
+/* the number of busy spinning kthreads (threads that don't park) */
+unsigned int spinks;
+/* the number of executing kthreads */
+static unsigned int runningks;
 /* an array of all the kthreads (for work-stealing) */
 struct kthread *ks[NCPU];
 /* kernel thread-local data */
@@ -167,6 +171,14 @@ void kthread_park(void)
 	assert_spin_lock_held(&k->lock);
 	assert(k->parked == false);
 
+	spin_lock(&klock);
+	if (runningks <= spinks) {
+		spin_unlock(&klock);
+		return;
+	}
+	runningks--;
+	spin_unlock(&klock);
+
 	k->parked = true;
 	k->park_us = microtime();
 	STAT(PARKS)++;
@@ -183,9 +195,13 @@ void kthread_park(void)
 
 	/* iokernel has unparked us */
 
-	/* reattach kthread if necessary */
 	spin_lock(&k->lock);
 	k->parked = false;
+	spin_lock(&klock);
+	runningks++;
+	spin_unlock(&klock);
+
+	/* reattach kthread if necessary */
 	if (k->detached)
 		kthread_attach();
 }
@@ -208,4 +224,7 @@ void kthread_wait_to_attach(void)
 
 	/* attach the kthread for the first time */
 	kthread_attach();
+	spin_lock(&klock);
+	runningks++;
+	spin_unlock(&klock);
 }
