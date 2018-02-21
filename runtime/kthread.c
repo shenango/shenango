@@ -7,6 +7,7 @@
 #include <sys/eventfd.h>
 #include <unistd.h>
 
+#include <base/atomic.h>
 #include <base/cpu.h>
 #include <base/list.h>
 #include <base/lock.h>
@@ -15,7 +16,7 @@
 
 #include "defs.h"
 
-/* protects @ks, @nrks, and @runningks below */
+/* protects @ks and @nrks below */
 DEFINE_SPINLOCK(klock);
 /* the maximum number of kthreads */
 unsigned int maxks;
@@ -24,7 +25,7 @@ unsigned int nrks;
 /* the number of busy spinning kthreads (threads that don't park) */
 unsigned int spinks;
 /* the number of executing kthreads */
-static unsigned int runningks;
+static atomic_t runningks;
 /* an array of all the kthreads (for work-stealing) */
 struct kthread *ks[NCPU];
 /* kernel thread-local data */
@@ -199,13 +200,13 @@ void kthread_park(bool voluntary)
 	assert_spin_lock_held(&k->lock);
 	assert(k->parked == false);
 
-	spin_lock(&klock);
-	if (runningks <= spinks) {
-		spin_unlock(&klock);
+	/* atomically verify we have at least @spinks kthreads running */
+	if (atomic_read(&runningks) <= spinks)
+		return;
+	if (unlikely(atomic_sub_and_fetch(&runningks, 1) < spinks)) {
+		atomic_inc(&runningks);
 		return;
 	}
-	runningks--;
-	spin_unlock(&klock);
 
 	k->parked = true;
 	k->park_us = microtime();
@@ -222,9 +223,7 @@ void kthread_park(bool voluntary)
 
 	spin_lock(&k->lock);
 	k->parked = false;
-	spin_lock(&klock);
-	runningks++;
-	spin_unlock(&klock);
+	atomic_inc(&runningks);
 
 	/* reattach kthread if necessary */
 	if (k->detached)
@@ -242,7 +241,5 @@ void kthread_wait_to_attach(void)
 
 	/* attach the kthread for the first time */
 	kthread_attach();
-	spin_lock(&klock);
-	runningks++;
-	spin_unlock(&klock);
+	atomic_inc(&runningks);
 }
