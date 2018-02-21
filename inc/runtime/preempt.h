@@ -68,3 +68,12 @@ static inline void assert_preempt_disabled(void)
 {
 	assert(!preempt_enabled());
 }
+
+/**
+ * clear_preempt_needed - clear the flag that indicates a preemption request is
+ * pending
+ */
+static inline void clear_preempt_needed(void)
+{
+	preempt_cnt |= PREEMPT_NOT_PENDING;
+}

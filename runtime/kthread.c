@@ -156,17 +156,41 @@ found:
 }
 
 /*
+ * kthread_yield_to_iokernel - block on eventfd until iokernel wakes us up
+ */
+static void kthread_yield_to_iokernel(void)
+{
+	struct kthread *k = myk();
+	ssize_t s;
+	uint64_t val;
+
+	/* prevent us from yielding again immediately */
+	if (preempt_needed())
+		clear_preempt_needed();
+
+	/* yield to the iokernel */
+	s = read(k->park_efd, &val, sizeof(val));
+	if (s != sizeof(uint64_t) && errno == EINTR) {
+		/* preempted while yielding, yield again */
+		assert(preempt_needed());
+		clear_preempt_needed();
+		s = read(k->park_efd, &val, sizeof(val));
+	}
+	BUG_ON(s != sizeof(uint64_t));
+	BUG_ON(val != 1);
+}
+
+/*
  * kthread_park - block this kthread until the iokernel wakes it up.
+ * @voluntary: true if this kthread parked because it had no work left
  *
  * This variant must be called with the local kthread lock held. It is intended
  * for use by the scheduler and for use by signal handlers.
  */
-void kthread_park(void)
+void kthread_park(bool voluntary)
 {
 	struct kthread *k = myk();
 	unsigned long payload = 0;
-	ssize_t s;
-	uint64_t val;
 
 	assert_spin_lock_held(&k->lock);
 	assert(k->parked == false);
@@ -188,10 +212,7 @@ void kthread_park(void)
 	while (!lrpc_send(&k->txcmdq, TXCMD_PARKED, payload))
 		cpu_relax();
 
-	/* yield to the iokernel */
-	s = read(k->park_efd, &val, sizeof(val));
-	BUG_ON(s != sizeof(uint64_t));
-	BUG_ON(val != 1);
+	kthread_yield_to_iokernel();
 
 	/* iokernel has unparked us */
 
@@ -213,14 +234,7 @@ void kthread_park(void)
  */
 void kthread_wait_to_attach(void)
 {
-	struct kthread *k = myk();
-	ssize_t s;
-	uint64_t val;
-
-	/* yield to the iokernel */
-	s = read(k->park_efd, &val, sizeof(val));
-	BUG_ON(s != sizeof(uint64_t));
-	BUG_ON(val != 1);
+	kthread_yield_to_iokernel();
 
 	/* attach the kthread for the first time */
 	kthread_attach();

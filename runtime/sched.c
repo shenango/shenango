@@ -195,6 +195,10 @@ static __noreturn void schedule(void)
 	assert(l->parked == false);
 	assert(l->detached == false);
 
+	/* park if we have been preempted */
+	if (unlikely(preempt_needed()))
+		kthread_park(false);
+
 	/* move overflow tasks into the runqueue */
 	if (unlikely(!list_empty(&l->rq_overflow)))
 		drain_overflow(l);
@@ -240,7 +244,7 @@ again:
 
 	/* did not find anything to run, park this kthread */
 	STAT(SCHED_CYCLES) += rdtsc() - start_tsc;
-	kthread_park();
+	kthread_park(true);
 	start_tsc = rdtsc();
 
 	goto again;

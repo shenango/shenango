@@ -349,7 +349,7 @@ extern unsigned int nrks;
 extern struct kthread *ks[NCPU];
 
 extern void kthread_detach(struct kthread *r);
-extern void kthread_park(void);
+extern void kthread_park(bool voluntary);
 extern void kthread_wait_to_attach(void);
 
 /**

@@ -20,12 +20,6 @@ static void set_preempt_needed(void)
 	preempt_cnt &= ~PREEMPT_NOT_PENDING;
 }
 
-/* clear the flag that indicates a preemption request is pending */
-static void clear_preempt_needed(void)
-{
-	preempt_cnt |= PREEMPT_NOT_PENDING;
-}
-
 /* handles preemption signals from the iokernel */
 static void handle_sigusr1(int s, siginfo_t *si, void *ctx)
 {
@@ -42,7 +36,7 @@ static void handle_sigusr1(int s, siginfo_t *si, void *ctx)
 	k->preempted = true;
 	memcpy(&k->preempted_uctx, ctx, sizeof(k->preempted_uctx));
 	k->preempted_th = thread_self();
-	kthread_park();
+	kthread_park(false);
 
 	/* check if no other kthread stole our preempted work */
 	if (k->preempted) {
