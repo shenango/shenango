@@ -100,11 +100,12 @@ void cores_park_kthread(struct thread *th, bool force)
 	/* mark core and kthread as available */
 	bitmap_set(avail_cores, core);
 	bitmap_set(p->available_threads, kthread);
-	p->active_thread_count--;
+	p->active_threads[th->at_idx] = p->active_threads[--p->active_thread_count];
+	p->active_threads[th->at_idx]->at_idx = th->at_idx;
 
 	/* remove the thread from the polling array */
-	ts[th->idx] = ts[--nrts];
-	ts[th->idx]->idx = th->idx;
+	ts[th->ts_idx] = ts[--nrts];
+	ts[th->ts_idx]->ts_idx = th->ts_idx;
 }
 
 /*
@@ -113,6 +114,7 @@ void cores_park_kthread(struct thread *th, bool force)
  */
 static struct thread *cores_reserve_core(struct proc *p)
 {
+	struct thread *th;
 	unsigned int kthread, core;
 
 	/* pick the lowest available core */
@@ -129,12 +131,14 @@ static struct thread *cores_reserve_core(struct proc *p)
 	}
 
 	/* mark core and kthread as reserved */
+	th = &p->threads[kthread];
 	bitmap_clear(avail_cores, core);
 	bitmap_clear(p->available_threads, kthread);
-	p->active_thread_count++;
 	p->threads[kthread].core = core;
+	p->active_threads[p->active_thread_count] = th;
+	th->at_idx = p->active_thread_count++;
 
-	return &p->threads[kthread];
+	return th;
 }
 
 /*
@@ -188,7 +192,7 @@ struct thread *cores_wake_kthread(struct proc *p)
 
 	/* add the thread to the polling array */
 	ts[nrts] = th;
-	th->idx = nrts++;
+	th->ts_idx = nrts++;
 	return th;
 }
 

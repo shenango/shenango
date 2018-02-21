@@ -49,7 +49,7 @@ static struct rx_net_hdr *rx_prepend_rx_preamble(struct rte_mbuf *buf)
 static bool rx_enqueue_to_runtime(struct rx_net_hdr *net_hdr, struct proc *p)
 {
 	static int rr = 0;
-	int kthread, r, index;
+	int r;
 	struct thread *t;
 	shmptr_t shmptr;
 
@@ -65,14 +65,7 @@ static bool rx_enqueue_to_runtime(struct rx_net_hdr *net_hdr, struct proc *p)
 #else
 		r = net_hdr->rss_hash % p->active_thread_count;
 #endif
-		index = -1;
-		bitmap_for_each_cleared(p->available_threads, p->thread_count,
-					kthread) {
-			if (++index == r)
-				break;
-		}
-		BUG_ON(kthread == -1); /* didn't find an active kthread */
-		t = &p->threads[kthread];
+		t = p->active_threads[r];
 	}
 
 	shmptr = ptr_to_shmptr(&ingress_mbuf_region, net_hdr,

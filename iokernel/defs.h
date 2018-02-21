@@ -40,7 +40,9 @@ struct thread {
 	/* only valid if this thread's bit in available_threads is not set */
 	unsigned int		core;
 	/* the @ts index (if active) */
-	unsigned int		idx;
+	unsigned int		ts_idx;
+	/* the proc->active_threads index (if active) */
+	unsigned int		at_idx;
 };
 
 struct proc {
@@ -53,20 +55,21 @@ struct proc {
 
 	/* runtime threads */
 	unsigned int		thread_count;
-	struct thread		threads[NCPU];
 	unsigned int		active_thread_count;
+	struct thread		threads[NCPU];
+	struct thread		*active_threads[NCPU];
 	DEFINE_BITMAP(available_threads, NCPU);
 
 	/* network data */
 	struct eth_addr		mac;
 
 	/* next pending timer, only valid if pending_timer is true */
-	bool				pending_timer;
-	uint64_t			deadline_us;
+	bool			pending_timer;
+	uint64_t		deadline_us;
 	unsigned int		timer_idx;
 
 	/* preempted is true if fully parked due to preemption */
-	bool				preempted;
+	bool			preempted;
 	unsigned int		preempt_idx;
 
 	/* table of physical addresses for shared memory */
@@ -103,7 +106,7 @@ enum {
  */
 enum {
 	CONTROL_PLANE_REMOVE_CLIENT,	/* points to a struct proc */
-	CONTROL_PLANE_NR,				/* number of commands */
+	CONTROL_PLANE_NR,		/* number of commands */
 };
 
 /*
