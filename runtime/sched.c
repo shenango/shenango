@@ -144,8 +144,11 @@ static bool steal_work(struct kthread *l, struct kthread *r)
 				STAT(NETS_STOLEN)++;
 		}
 
+		/* either enqueue the stolen work or detach the kthread */
 		if (th)
 			l->rq[l->rq_head++] = th;
+		else if (r->parked)
+			kthread_detach(r);
 
 		spin_unlock(&r->lock);
 		STAT(THREADS_STOLEN) += th != NULL ? 1 : 0;
@@ -161,9 +164,6 @@ static bool steal_work(struct kthread *l, struct kthread *r)
 	l->rq_head = avail;
 	store_release(&r->rq_tail, rq_tail);
 
-	/* attempt to detach the kthread if there was nothing left to steal */
-	if (!avail && r->parked)
-		kthread_detach(r);
 	spin_unlock(&r->lock);
 
 	STAT(THREADS_STOLEN) += avail;
