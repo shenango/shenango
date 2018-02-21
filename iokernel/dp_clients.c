@@ -13,7 +13,6 @@
 #include "defs.h"
 
 #define MAC_TO_PROC_ENTRIES	128
-#define PID_TO_PROC_ENTRIES	128
 
 static struct lrpc_chan_out lrpc_data_to_control;
 static struct lrpc_chan_in lrpc_control_to_data;
@@ -25,17 +24,22 @@ static void dp_clients_add_client(struct proc *p)
 {
 	int ret;
 
+	p->kill = false;
 	dp.clients[dp.nr_clients++] = p;
 
 	ret = rte_hash_add_key_data(dp.mac_to_proc, &p->mac.addr[0], p);
 	if (ret < 0)
 		log_err("dp_clients: failed to add MAC to hash table in add_client");
 
-	ret = rte_hash_add_key_data(dp.pid_to_proc, &p->pid, p);
-	if (ret < 0)
-		log_err("dp_clients: failed to add PID to hash table in add_client");
-
 	cores_init_proc(p);
+}
+
+void proc_release(struct ref *r)
+{
+	struct proc *p = container_of(r, struct proc, ref);
+	if (!lrpc_send(&lrpc_data_to_control, CONTROL_PLANE_REMOVE_CLIENT,
+			(unsigned long) p))
+		log_err("dp_clients: failed to inform control of client removal");
 }
 
 /*
@@ -64,19 +68,12 @@ static void dp_clients_remove_client(struct proc *p)
 		log_err("dp_clients: failed to remove MAC from hash table in remove "
 				"client");
 
-	ret = rte_hash_del_key(dp.pid_to_proc, &p->pid);
-	if (ret < 0)
-		log_err("dp_clients: failed to remove PID from hash table in remove "
-				"client");
-
 	/* TODO: free queued packets/commands? */
 
 	/* release cores assigned to this runtime */
+	p->kill = true;
 	cores_free_proc(p);
-
-	if (!lrpc_send(&lrpc_data_to_control, CONTROL_PLANE_REMOVE_CLIENT,
-			(unsigned long) p))
-		log_err("dp_clients: failed to inform control of client removal");
+	proc_put(p);
 }
 
 /*
@@ -145,19 +142,6 @@ int dp_clients_init(void)
 	dp.mac_to_proc = rte_hash_create(&hash_params);
 	if (dp.mac_to_proc == NULL) {
 		log_err("dp_clients: failed to create MAC to proc hash table");
-		return -1;
-	}
-
-	/* initialize the hash table for mapping PIDs to runtimes */
-	hash_params.name = "pid_to_proc_hash_table";
-	hash_params.entries = PID_TO_PROC_ENTRIES;
-	hash_params.key_len = sizeof(pid_t);
-	hash_params.hash_func = rte_jhash;
-	hash_params.hash_func_init_val = 0;
-	hash_params.socket_id = rte_socket_id();
-	dp.pid_to_proc = rte_hash_create(&hash_params);
-	if (dp.pid_to_proc == NULL) {
-		log_err("dp_clients: failed to create PID to proc hash table");
 		return -1;
 	}
 

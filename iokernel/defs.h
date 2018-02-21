@@ -10,6 +10,8 @@
 #include <iokernel/control.h>
 #include <net/ethernet.h>
 
+#include "ref.h"
+
 /*
  * Constant limits
  */
@@ -49,6 +51,8 @@ struct proc {
 	pid_t			pid;
 	struct shm_region	region;
 	bool			removed;
+	struct ref		ref;
+	bool			kill; /* the proc is being torn down */
 
 	/* scheduler data */
 	struct sched_spec	sched_cfg;
@@ -68,13 +72,32 @@ struct proc {
 	uint64_t		deadline_us;
 	unsigned int		timer_idx;
 
-	/* preempted is true if fully parked due to preemption */
-	bool			preempted;
-	unsigned int		preempt_idx;
-
 	/* table of physical addresses for shared memory */
 	physaddr_t		page_paddrs[];
 };
+
+extern void proc_release(struct ref *r);
+
+/**
+ * proc_get - increments the proc reference count
+ * @p: the proc to reference count
+ *
+ * Returns @p.
+ */
+static inline struct proc *proc_get(struct proc *p)
+{
+	ref_get(&p->ref);
+	return p;
+}
+
+/**
+ * proc_put - decrements the proc reference count, freeing if zero
+ * @p: the proc to unreference count
+ */
+static inline void proc_put(struct proc *p)
+{
+	ref_put(&p->ref, proc_release);
+}
 
 /* the number of active threads to be polled (across all procs) */
 extern unsigned int nrts;
@@ -119,7 +142,6 @@ struct dataplane {
 	struct proc		*clients[IOKERNEL_MAX_PROC];
 	int			nr_clients;
 	struct rte_hash		*mac_to_proc;
-	struct rte_hash		*pid_to_proc;
 };
 
 extern struct dataplane dp;
@@ -170,4 +192,3 @@ extern int cores_pin_thread(pid_t tid, int core);
 extern void cores_park_kthread(struct thread *t, bool force);
 extern struct thread *cores_wake_kthread(struct proc *p);
 extern void cores_adjust_assignments();
-extern void cores_handle_timers();

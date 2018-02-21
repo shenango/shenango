@@ -15,20 +15,20 @@
 
 #define TX_PREFETCH_STRIDE 2
 
-struct rte_mempool *tx_mbuf_pool;
+static struct rte_mempool *tx_mbuf_pool;
 
 /*
  * Private data stored in egress mbufs, used to send completions to runtimes.
  */
 struct tx_pktmbuf_priv {
-	pid_t		pid;
-	struct thread	*thread;
+	struct proc	*p;
+	struct thread	*th;
 	unsigned long	completion_data;
 };
 
 static inline struct tx_pktmbuf_priv *tx_pktmbuf_get_priv(struct rte_mbuf *buf)
 {
-	return (struct tx_pktmbuf_priv *) (((char *) buf)
+	return (struct tx_pktmbuf_priv *)(((char *)buf)
 			+ sizeof(struct rte_mbuf));
 }
 
@@ -37,16 +37,15 @@ static inline struct tx_pktmbuf_priv *tx_pktmbuf_get_priv(struct rte_mbuf *buf)
  */
 static void tx_prepare_tx_mbuf(struct rte_mbuf *buf,
 			       const struct tx_net_hdr *net_hdr,
-			       struct thread *t)
+			       struct thread *th)
 {
-	struct proc *p = t->p;
+	struct proc *p = th->p;
 	uint32_t page_number;
 	struct tx_pktmbuf_priv *priv_data;
 
 	/* initialize mbuf to point to net_hdr->payload */
-	buf->buf_addr = (char *) net_hdr->payload;
-	page_number = PGN_2MB((uintptr_t) buf->buf_addr -
-			(uintptr_t) p->region.base);
+	buf->buf_addr = (char *)net_hdr->payload;
+	page_number = PGN_2MB((uintptr_t)buf->buf_addr - (uintptr_t)p->region.base);
 	buf->buf_physaddr = p->page_paddrs[page_number] + PGOFF_2MB(buf->buf_addr);
 	buf->data_off = 0;
 	rte_mbuf_refcnt_set(buf, 1);
@@ -66,47 +65,52 @@ static void tx_prepare_tx_mbuf(struct rte_mbuf *buf,
 		if (net_hdr->olflags & OLFLAG_IPV6)
 			buf->ol_flags |= PKT_TX_IPV6;
 
-		buf->l2_len = ETHER_HDR_LEN;
 		buf->l3_len = sizeof(struct ipv4_hdr);
+		buf->l2_len = ETHER_HDR_LEN;
 	}
 
 	/* initialize the private data, used to send completion events */
 	priv_data = tx_pktmbuf_get_priv(buf);
-	priv_data->pid = p->pid;
-	priv_data->thread = t;
+	priv_data->p = p;
+	priv_data->th = th;
 	priv_data->completion_data = net_hdr->completion_data;
+
+	/* reference count @p so it doesn't get freed before the completion */
+	proc_get(p);
 }
 
 /*
  * Send a completion event to the runtime for the mbuf pointed to by obj.
  */
-bool tx_send_completion(void *obj) {
+bool tx_send_completion(void *obj)
+{
 	struct rte_mbuf *buf;
 	struct tx_pktmbuf_priv *priv_data;
-	int ret;
-	void *data;
-	struct thread *t;
+	struct thread *th;
+	struct proc *p;
 
-	if (unlikely(dp.nr_clients == 0))
+	buf = (struct rte_mbuf *)obj;
+	priv_data = tx_pktmbuf_get_priv(buf);
+	p = priv_data->p;
+
+	/* during initialization, the mbufs are enqueued for the first time */
+	if (unlikely(!p))
 		return true;
 
 	/* check if runtime is still registered */
-	buf = (struct rte_mbuf *)obj;
-	priv_data = tx_pktmbuf_get_priv(buf);
-	ret = rte_hash_lookup_data(dp.pid_to_proc, &priv_data->pid, &data);
-	if (ret < 0) {
-		log_debug("tx: received completion for unregistered pid %u",
-				priv_data->pid);
+	if(unlikely(p->kill)) {
+		proc_put(p);
 		return true; /* no need to send a completion */
 	}
 
 	/* send completion to runtime */
-	t = priv_data->thread;
-	if (!lrpc_send(&t->rxq, RX_NET_COMPLETE, priv_data->completion_data)) {
+	th = priv_data->th;
+	if (!lrpc_send(&th->rxq, RX_NET_COMPLETE, priv_data->completion_data)) {
 		log_warn("tx: failed to enqueue completion event to runtime");
 		return false;
 	}
 
+	proc_put(p);
 	return true;
 }
 
