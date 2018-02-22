@@ -6,7 +6,9 @@
 
 #include <base/stddef.h>
 #include <base/list.h>
+#include <base/lock.h>
 #include <runtime/thread.h>
+#include <runtime/preempt.h>
 
 
 /*
@@ -85,4 +87,45 @@ extern void waitgroup_init(waitgroup_t *wg);
 static inline void waitgroup_done(waitgroup_t *wg)
 {
 	waitgroup_add(wg, -1);
+}
+
+
+/*
+ * Spin lock support
+ */
+
+/**
+ * spin_lock_np - takes a spin lock and disables preemption
+ * @l: the spin lock
+ */
+static inline void spin_lock_np(spinlock_t *l)
+{
+	preempt_disable();
+	spin_lock(l);
+}
+
+/**
+ * spin_try_lock_np - takes a spin lock if its available and disables preemption
+ * @l: the spin lock
+ *
+ * Returns true if successful, otherwise fail.
+ */
+static inline bool spin_try_lock_np(spinlock_t *l)
+{
+	preempt_disable();
+	if (spin_try_lock(l))
+		return true;
+
+	preempt_enable();
+	return false;
+}
+
+/**
+ * spin_unlock_np - releases a spin lock and re-enables preemption
+ * @l: the spin lock
+ */
+static inline void spin_unlock_np(spinlock_t *l)
+{
+	spin_unlock(l);
+	preempt_enable();
 }
