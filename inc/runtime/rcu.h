@@ -6,6 +6,7 @@
 
 #include <base/compiler.h>
 #include <base/atomic.h>
+#include <runtime/preempt.h>
 
 #ifdef DEBUG
 extern __thread int rcu_read_count;
@@ -22,6 +23,7 @@ static inline bool rcu_read_lock_held(void)
 
 static inline void rcu_read_lock(void)
 {
+	preempt_disable();
 #ifdef DEBUG
 	rcu_read_count++;
 #endif /* DEBUG */
@@ -33,6 +35,7 @@ static inline void rcu_read_unlock(void)
 	assert(rcu_read_lock_held());
 	rcu_read_count--;
 #endif /* DEBUG */
+	preempt_enable();
 }
 
 #ifdef __CHECKER__
