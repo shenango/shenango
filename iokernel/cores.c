@@ -71,10 +71,8 @@ void cores_park_kthread(struct thread *th, bool force)
 	BUG_ON(bitmap_test(p->available_threads, kthread));
 
 	/* check for race conditions with the runtime */
-	/* TODO: just need to drain the txpktq and txcmdq instead of waking */
 	lrpc_poll_send_tail(&th->rxq);
-	if (unlikely(!force && (lrpc_get_cached_length(&th->rxq) > 0 ||
-				!lrpc_empty(&th->txpktq)))) {
+	if (unlikely(!force && lrpc_get_cached_length(&th->rxq) > 0)) {
 		/* the runtime parked while packets were in flight */
 		s = write(th->park_efd, &val, sizeof(val));
 		BUG_ON(s != sizeof(uint64_t));
@@ -96,9 +94,10 @@ void cores_park_kthread(struct thread *th, bool force)
 	p->active_threads[th->at_idx] = p->active_threads[--p->active_thread_count];
 	p->active_threads[th->at_idx]->at_idx = th->at_idx;
 
-	/* remove the thread from the polling array */
-	ts[th->ts_idx] = ts[--nrts];
-	ts[th->ts_idx]->ts_idx = th->ts_idx;
+	/* remove the thread from the polling array (if queues are empty) */
+	th->parked = true;
+	if (lrpc_empty(&th->txpktq))
+		unpoll_thread(th);
 }
 
 /*
@@ -161,8 +160,8 @@ struct thread *cores_wake_kthread(struct proc *p)
 	BUG_ON(s != sizeof(uint64_t));
 
 	/* add the thread to the polling array */
-	ts[nrts] = th;
-	th->ts_idx = nrts++;
+	th->parked = false;
+	poll_thread(th);
 	return th;
 }
 
@@ -271,6 +270,13 @@ void cores_adjust_assignments()
 	wake_kthread:
 		if (!cores_wake_kthread(p))
 			break;
+
+		/*
+		 * TODO: temporary hack. Wake just one thread. In reality, we
+		 * want to wake one thread per process but still waiting for
+		 * some infrastructure code first.
+		 */
+		break;
 	}
 }
 

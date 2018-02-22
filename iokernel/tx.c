@@ -123,8 +123,11 @@ static int tx_drain_queue(struct thread *t, int n,
 		uint64_t cmd;
 		unsigned long payload;
 
-		if (!lrpc_recv(&t->txpktq, &cmd, &payload))
+		if (!lrpc_recv(&t->txpktq, &cmd, &payload)) {
+			if (unlikely(t->parked))
+				unpoll_thread(t);
 			break;
+		}
 
 		/* TODO: need to kill the process? */
 		BUG_ON(cmd != TXPKT_NET_XMIT);

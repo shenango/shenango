@@ -46,7 +46,7 @@
 #include "defs.h"
 
 #define RX_RING_SIZE 128
-#define TX_RING_SIZE 512
+#define TX_RING_SIZE 128
 
 static const struct rte_eth_conf port_conf_default = {
 	.rxmode = {

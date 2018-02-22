@@ -32,6 +32,7 @@ struct proc;
 
 struct thread {
 	struct proc		*p;
+	unsigned int		parked:1;
 	struct lrpc_chan_out	rxq;
 	struct lrpc_chan_in	txpktq;
 	struct lrpc_chan_in	txcmdq;
@@ -103,6 +104,35 @@ static inline void proc_put(struct proc *p)
 extern unsigned int nrts;
 /* an array of active threads to be polled (across all procs) */
 extern struct thread *ts[NCPU];
+
+/**
+ * poll_thread - adds a thread to the queue polling array
+ * @th: the thread to poll
+ *
+ * Can be called more than once.
+ */
+static inline void poll_thread(struct thread *th)
+{
+	if (th->ts_idx != -1)
+		return;
+	proc_get(th->p);
+	ts[nrts] = th;
+	th->ts_idx = nrts++;
+}
+
+/**
+ * unpoll_thread - removes a thread from the queue polling array
+ * @th: the thread to no longer poll
+ */
+static inline void unpoll_thread(struct thread *th)
+{
+	if (th->ts_idx == -1)
+		return;
+	ts[th->ts_idx] = ts[--nrts];
+	ts[th->ts_idx]->ts_idx = th->ts_idx;
+	th->ts_idx = -1;
+	proc_put(th->p);
+}
 
 /*
  * Communication between control plane and data-plane in the I/O kernel
