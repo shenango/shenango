@@ -62,6 +62,7 @@ fn run_client(
     runtime: Duration,
     packets_per_second: usize,
     nthreads: u32,
+    trace: bool,
 ) {
     #[derive(Default)]
     struct Packet {
@@ -97,16 +98,22 @@ fn run_client(
     let mut send_threads = Vec::new();
     let mut receive_threads = Vec::new();
     for mut packets in packet_schedules {
-        let socket = Arc::new(backend.create_udp_connection("0.0.0.0:0".parse().unwrap(), Some(addr)));
+        let socket =
+            Arc::new(backend.create_udp_connection("0.0.0.0:0".parse().unwrap(), Some(addr)));
         let socket2 = socket.clone();
 
         let mut receive_times = vec![None; packets.len()];
         receive_threads.push(backend.spawn_thread(move || {
             let mut recv_buf = vec![0; 4096];
             for i in 0..receive_times.len() {
-                let len = socket.recv(&mut recv_buf[..]).unwrap();
-                let _payload = bincode::deserialize::<Payload>(&recv_buf[..len]).unwrap();
-                receive_times[i] = Some(start.elapsed());
+                match socket.recv(&mut recv_buf[..]) {
+                    Ok(len) => {
+                        if let Ok(_payload) = bincode::deserialize::<Payload>(&recv_buf[..len]) {
+                            receive_times[i] = Some(start.elapsed());
+                        }
+                    }
+                    Err(_) => break,
+                }
             }
             receive_times
         }));
@@ -125,6 +132,16 @@ fn run_client(
                 packet.actual_start = Some(start.elapsed());
                 socket2.send(&payload[..]).unwrap();
             }
+
+            // If the receive thread is still running 500 ms from now, then stop it by triggering a
+            // shutdown on the socket.
+            backend.spawn_thread(move || {
+                backend.sleep(Duration::from_millis(500));
+                if Arc::strong_count(&socket2) > 1 {
+                    socket2.shutdown();
+                }
+            });
+
             packets
         }))
     }
@@ -143,10 +160,19 @@ fn run_client(
             ..p
         })
         .collect();
+    let dropped = packets
+        .iter()
+        .filter(|p| p.completion_time.is_none())
+        .count();
+    let last_send = packets.iter().filter_map(|p| p.actual_start).max().unwrap();
     let mut latencies: Vec<_> = packets
         .iter()
-        .map(|p| *p.completion_time.as_ref().unwrap() - p.target_start)
+        .filter_map(|p| match (p.actual_start, p.completion_time) {
+            (Some(ref start), Some(ref end)) => Some(*end - *start),
+            _ => None,
+        })
         .collect();
+
     latencies.sort();
     assert!(!latencies.is_empty());
 
@@ -154,14 +180,30 @@ fn run_client(
         duration_to_ns(latencies[(latencies.len() as f32 * p / 100.0) as usize]) as f32 / 1000.0
     };
     println!(
-        "{}, {:.1}, {:.1}, {:.1}, {:.1}, {:.1}",
-        packets.len() as u64 * 1000_000_000 / duration_to_ns(runtime),
-        percentile(0.0),
+        "{}, {}, {}, {:.1}, {:.1}, {:.1}, {:.1}, {:.1}",
+        packets_per_second as u64 * 1000_000_000 / duration_to_ns(runtime),
+        (packets.len() - dropped) as u64 * 1000_000_000 / duration_to_ns(last_send),
+        dropped,
         percentile(50.0),
         percentile(90.0),
         percentile(99.0),
-        percentile(99.9)
+        percentile(99.9),
+        percentile(99.99)
     );
+
+    if trace {
+        for p in packets {
+            if let Some(completion_time) = p.completion_time {
+                let actual_start = p.actual_start.unwrap();
+                println!(
+                    "{}, {}, {}",
+                    duration_to_ns(actual_start),
+                    duration_to_ns(actual_start - p.target_start),
+                    duration_to_ns(completion_time - actual_start)
+                )
+            }
+        }
+    }
 }
 
 fn main() {
@@ -217,6 +259,12 @@ fn main() {
                 .long("config")
                 .takes_value(true),
         )
+        .arg(
+            Arg::with_name("trace")
+                .long("trace")
+                .takes_value(false)
+                .help("Whether to output trace of all packet latencies."),
+        )
         .get_matches();
 
     let addr = matches.value_of("ADDR").unwrap().to_owned();
@@ -224,6 +272,7 @@ fn main() {
     let runtime = Duration::from_secs(value_t!(matches, "runtime", u64).unwrap());
     let packets_per_second = (1.0e6 * value_t_or_exit!(matches, "mpps", f32)) as usize;
     let config = matches.value_of("config");
+    let trace = matches.is_present("trace");
 
     match matches.value_of("mode").unwrap() {
         "linux-server" => {
@@ -238,6 +287,7 @@ fn main() {
                 runtime,
                 packets_per_second,
                 nthreads,
+                false
             )
         },
         "runtime-server" => shenango::runtime_init(config.unwrap().to_owned(), move || {
@@ -247,13 +297,28 @@ fn main() {
             run_server(Backend::Runtime, UdpConnection::Runtime(socket), nthreads)
         }).unwrap(),
         "runtime-client" => shenango::runtime_init(config.unwrap().to_owned(), move || {
-            run_client(
-                Backend::Runtime,
-                FromStr::from_str(&addr).unwrap(),
-                runtime,
-                packets_per_second,
-                nthreads,
-            )
+            if trace {
+                run_client(
+                    Backend::Runtime,
+                    FromStr::from_str(&addr).unwrap(),
+                    runtime,
+                    packets_per_second,
+                    nthreads,
+                    true,
+                );
+            } else {
+                for packets_per_second in (1..500).map(|i| i * 20000) {
+                    run_client(
+                        Backend::Runtime,
+                        FromStr::from_str(&addr).unwrap(),
+                        runtime,
+                        packets_per_second,
+                        nthreads,
+                        false,
+                    );
+                    shenango::sleep(Duration::from_millis(1000));
+                }
+            }
         }).unwrap(),
         _ => unreachable!(),
     };

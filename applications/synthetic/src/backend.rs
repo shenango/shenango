@@ -7,6 +7,7 @@ use std::io;
 use std::net::{SocketAddr, SocketAddrV4, UdpSocket};
 use std::os::unix::io::AsRawFd;
 use std::thread;
+use std::time::Duration;
 
 #[derive(Copy, Clone)]
 pub enum Backend {
@@ -44,6 +45,13 @@ impl Backend {
         match *self {
             Backend::Linux => JoinHandle::Linux(thread::spawn(f)),
             Backend::Runtime => JoinHandle::Runtime(shenango::thread::spawn(f)),
+        }
+    }
+
+    pub fn sleep(&self, duration: Duration) {
+        match *self {
+            Backend::Linux => thread::sleep(duration),
+            Backend::Runtime => shenango::sleep(duration),
         }
     }
 }

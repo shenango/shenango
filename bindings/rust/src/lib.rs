@@ -11,6 +11,7 @@ use std::cell::UnsafeCell;
 use std::ffi::CString;
 use std::os::raw::{c_int, c_void};
 use std::sync::atomic::{AtomicI32, Ordering};
+use std::time::Duration;
 use std::mem;
 
 pub mod ffi {
@@ -32,7 +33,7 @@ extern "C" {
 pub fn thread_yield() {
     unsafe { ffi::thread_yield() }
 }
-pub fn thread_self() -> *mut ffi:: thread_t {
+pub fn thread_self() -> *mut ffi::thread_t {
     unsafe { ffi::thread_self() }
 }
 
@@ -57,6 +58,10 @@ pub fn delay_us(microseconds: u64) {
 #[inline]
 pub fn microtime() -> u64 {
     unsafe { (rdtsc() - ffi::start_tsc as u64) / ffi::cycles_per_us as u64 }
+}
+
+pub fn sleep(duration: Duration) {
+    unsafe { ffi::timer_sleep(duration.as_secs() * 1000_000 + duration.subsec_nanos() as u64 / 1000) }
 }
 
 pub fn runtime_init<F>(cfgpath: String, f: F) -> Result<(), i32>
