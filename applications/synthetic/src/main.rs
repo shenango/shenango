@@ -94,11 +94,23 @@ fn run_client(
 
     let start = Instant::now();
 
-    let mut threads = Vec::new();
+    let mut send_threads = Vec::new();
+    let mut receive_threads = Vec::new();
     for mut packets in packet_schedules {
-        threads.push(backend.spawn_thread(move || {
-            let socket = backend.create_udp_connection("0.0.0.0:0".parse().unwrap(), Some(addr));
+        let socket = Arc::new(backend.create_udp_connection("0.0.0.0:0".parse().unwrap(), Some(addr)));
+        let socket2 = socket.clone();
+
+        let mut receive_times = vec![None; packets.len()];
+        receive_threads.push(backend.spawn_thread(move || {
             let mut recv_buf = vec![0; 4096];
+            for i in 0..receive_times.len() {
+                let len = socket.recv(&mut recv_buf[..]).unwrap();
+                let _payload = bincode::deserialize::<Payload>(&recv_buf[..len]).unwrap();
+                receive_times[i] = Some(start.elapsed());
+            }
+            receive_times
+        }));
+        send_threads.push(backend.spawn_thread(move || {
             for packet in packets.iter_mut() {
                 let payload = bincode::serialize(
                     &Payload {
@@ -111,20 +123,25 @@ fn run_client(
                     shenango::cpu_relax()
                 }
                 packet.actual_start = Some(start.elapsed());
-
-                socket.send(&payload[..]).unwrap();
-
-                let len = socket.recv(&mut recv_buf[..]).unwrap();
-                let _payload = bincode::deserialize::<Payload>(&recv_buf[..len]).unwrap();
-                packet.completion_time = Some(start.elapsed());
+                socket2.send(&payload[..]).unwrap();
             }
             packets
         }))
     }
 
-    let packets: Vec<_> = threads
+    let packets: Vec<_> = send_threads
         .into_iter()
-        .flat_map(|t| t.join().unwrap().into_iter())
+        .zip(receive_threads.into_iter())
+        .flat_map(|(s, r)| {
+            s.join()
+                .unwrap()
+                .into_iter()
+                .zip(r.join().unwrap().into_iter())
+        })
+        .map(|(p, r)| Packet {
+            completion_time: r,
+            ..p
+        })
         .collect();
     let mut latencies: Vec<_> = packets
         .iter()
