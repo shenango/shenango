@@ -26,6 +26,7 @@ use backend::*;
 #[derive(Serialize, Deserialize)]
 struct Payload {
     sleep_us: u64,
+    index: u64,
 }
 
 fn duration_to_ns(duration: Duration) -> u64 {
@@ -78,9 +79,9 @@ fn run_client(
 
     let exp = Exp::new(1.0 / ns_per_packet as f64);
     let mut rng = rand::thread_rng();
-    let packet_schedules: Vec<Vec<Packet>> = (0..nthreads)
+    let packet_schedules: Vec<(Vec<Packet>, Vec<Option<Duration>>)> = (0..nthreads)
         .map(|_| {
-            let mut last = 0;
+            let mut last = 100_000_000;
             let mut packets = Vec::with_capacity(packets_per_thread);
             for _ in 0..packets_per_thread {
                 last += exp.ind_sample(&mut rng) as u64;
@@ -89,7 +90,7 @@ fn run_client(
                     ..Default::default()
                 });
             }
-            packets
+            (packets, vec![None; packets_per_thread])
         })
         .collect();
 
@@ -97,19 +98,18 @@ fn run_client(
 
     let mut send_threads = Vec::new();
     let mut receive_threads = Vec::new();
-    for mut packets in packet_schedules {
+    for (mut packets, mut receive_times) in packet_schedules {
         let socket =
             Arc::new(backend.create_udp_connection("0.0.0.0:0".parse().unwrap(), Some(addr)));
         let socket2 = socket.clone();
 
-        let mut receive_times = vec![None; packets.len()];
         receive_threads.push(backend.spawn_thread(move || {
             let mut recv_buf = vec![0; 4096];
-            for i in 0..receive_times.len() {
+            for _ in 0..receive_times.len() {
                 match socket.recv(&mut recv_buf[..]) {
                     Ok(len) => {
-                        if let Ok(_payload) = bincode::deserialize::<Payload>(&recv_buf[..len]) {
-                            receive_times[i] = Some(start.elapsed());
+                        if let Ok(payload) = bincode::deserialize::<Payload>(&recv_buf[..len]) {
+                            receive_times[payload.index as usize] = Some(start.elapsed());
                         }
                     }
                     Err(_) => break,
@@ -118,10 +118,11 @@ fn run_client(
             receive_times
         }));
         send_threads.push(backend.spawn_thread(move || {
-            for packet in packets.iter_mut() {
+            for (i, packet) in packets.iter_mut().enumerate() {
                 let payload = bincode::serialize(
                     &Payload {
                         sleep_us: packet.sleep_us,
+                        index: i as u64,
                     },
                     Infinite,
                 ).unwrap();
@@ -181,7 +182,7 @@ fn run_client(
     };
     println!(
         "{}, {}, {}, {:.1}, {:.1}, {:.1}, {:.1}, {:.1}",
-        packets_per_second as u64 * 1000_000_000 / duration_to_ns(runtime),
+        packets_per_second,
         (packets.len() - dropped) as u64 * 1000_000_000 / duration_to_ns(last_send),
         dropped,
         percentile(50.0),
@@ -200,6 +201,13 @@ fn run_client(
                     duration_to_ns(actual_start),
                     duration_to_ns(actual_start - p.target_start),
                     duration_to_ns(completion_time - actual_start)
+                )
+            } else {
+                let actual_start = p.actual_start.unwrap();
+                println!(
+                    "{}, {}, -, 0",
+                    duration_to_ns(actual_start),
+                    duration_to_ns(actual_start - p.target_start),
                 )
             }
         }
@@ -287,7 +295,7 @@ fn main() {
                 runtime,
                 packets_per_second,
                 nthreads,
-                false
+                false,
             )
         },
         "runtime-server" => shenango::runtime_init(config.unwrap().to_owned(), move || {
