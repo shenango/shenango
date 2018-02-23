@@ -66,8 +66,10 @@ __jmp_thread:
 	jmpq    *%rsi
 	nop
 
-2:	/* cold-path, park the kthread */
+2:	/* cold-path, save RIP and park the kthread */
+	pushq	%rsi
 	call	thread_yield
+	popq	%rsi
 	jmp	1b
 
 /**

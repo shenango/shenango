@@ -11,45 +11,62 @@
 #include <runtime/thread.h>
 #include <runtime/sync.h>
 
-#define NTHREADS	10
+#define NTHREADS	6
+#define N		500000
+#define SPAWN_LIMIT	5
 
-atomic_t n_threads_run;
+atomic_t n_threads;
+atomic_t n_spawned;
+waitgroup_t wg;
 
 static void work_handler(void *arg)
 {
-	waitgroup_t *wg_parent = (waitgroup_t *)arg;
+	int i, ret, n_to_spawn;
+	waitgroup_t *wg_parent = &wg;
 
-	atomic_inc(&n_threads_run);
+	/* do some busy work */
+	delay_us(100);
+
+	if (atomic_read(&n_threads) < NTHREADS) {
+		/* we have too few threads, spawn more */
+		n_to_spawn = rand() % SPAWN_LIMIT;
+
+		if (atomic_dec_and_test(&n_threads) && n_to_spawn == 0)
+			n_to_spawn = 1;
+
+		for (i = 0; i < n_to_spawn; i++) {
+			if (atomic_add_and_fetch(&n_spawned, 1) <= N) {
+				atomic_inc(&n_threads);
+				ret = thread_spawn(work_handler, NULL);
+				BUG_ON(ret);
+			}
+		}
+	} else {
+		/* don't spawn any more */
+		atomic_dec(&n_threads);
+	}
 	waitgroup_done(wg_parent);
 }
 
 static void main_handler(void *arg)
 {
-	waitgroup_t wg;
 	int i, ret;
 
 	log_info("started main_handler() thread");
 
-	/* wait until all initialization threads have finished so that the
-	   runqueue is empty */
-	for (i = 0; i < 5; i++) {
-		thread_yield();
-		delay_ms(1000);
-	}
-
-	/* test that new kthreads are woken up to handle threads spawned by a
-	   long-running thread */
-	atomic_write(&n_threads_run, 0);
+	atomic_write(&n_threads, 0);
+	atomic_write(&n_spawned, 0);
 	waitgroup_init(&wg);
-	waitgroup_add(&wg, NTHREADS);
+	waitgroup_add(&wg, N);
 	for (i = 0; i < NTHREADS; i++) {
-		ret = thread_spawn(work_handler, &wg);
+		atomic_inc(&n_spawned);
+		atomic_inc(&n_threads);
+		ret = thread_spawn(work_handler, NULL);
 		BUG_ON(ret);
 	}
-	delay_ms(10 * 1000);
 
-	BUG_ON(atomic_read(&n_threads_run) == 0);
 	waitgroup_wait(&wg);
+	log_info("ran %d threads", N);
 }
 
 int main(int argc, char *argv[])

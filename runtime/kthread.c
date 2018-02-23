@@ -149,8 +149,7 @@ found:
 	timer_merge(r);
 
 	/* verify the kthread is correctly detached */
-	assert(r->rq_head == 0);
-	assert(r->rq_tail == 0);
+	assert(r->rq_head == r->rq_tail);
 	assert(list_empty(&r->rq_overflow));
 	assert(mbufq_empty(&r->txpktq_overflow));
 	assert(mbufq_empty(&r->txcmdq_overflow));
