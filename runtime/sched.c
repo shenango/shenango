@@ -125,49 +125,53 @@ static bool steal_work(struct kthread *l, struct kthread *r)
 		unreachable();
 	}
 
+	/* try to steal directly from the runqueue */
 	avail = load_acquire(&r->rq_head) - r->rq_tail;
-	if (!avail) {
-		/* check for overflow tasks */
-		th = list_pop(&r->rq_overflow, thread_t, link);
-
-		/* check for timeouts */
-		if (!th) {
-			th = timer_run(r);
-			if (th)
-				STAT(TIMERS_STOLEN)++;
-		}
-
-		/* check the network queues */
-		if (!th) {
-			th = net_run(r, RUNTIME_NET_BUDGET);
-			if (th)
-				STAT(NETS_STOLEN)++;
-		}
-
-		/* either enqueue the stolen work or detach the kthread */
-		if (th)
-			l->rq[l->rq_head++] = th;
-		else if (r->parked)
-			kthread_detach(r);
-
+	if (avail) {
+		/* steal half the tasks */
+		avail = div_up(avail, 2);
+		assert(avail <= div_up(RUNTIME_RQ_SIZE, 2));
+		rq_tail = r->rq_tail;
+		for (i = 0; i < avail; i++)
+			l->rq[i] = r->rq[rq_tail++ % RUNTIME_RQ_SIZE];
+		l->rq_head = avail;
+		store_release(&r->rq_tail, rq_tail);
 		spin_unlock(&r->lock);
-		STAT(THREADS_STOLEN) += th != NULL ? 1 : 0;
-		return th != NULL;
+
+		STAT(THREADS_STOLEN) += avail;
+		return true;
 	}
 
-	/* steal half the tasks */
-	avail = div_up(avail, 2);
-	assert(avail <= div_up(RUNTIME_RQ_SIZE, 2));
-	rq_tail = r->rq_tail;
-	for (i = 0; i < avail; i++)
-		l->rq[i] = r->rq[rq_tail++ % RUNTIME_RQ_SIZE];
-	l->rq_head = avail;
-	store_release(&r->rq_tail, rq_tail);
+	/* check for overflow tasks */
+	th = list_pop(&r->rq_overflow, thread_t, link);
+	if (th)
+		goto done;
+
+	/* check for timeouts */
+	th = timer_run(r);
+	if (th) {
+		STAT(TIMERS_STOLEN)++;
+		goto done;
+	}
+
+	/* check the network queues */
+	th = net_run(r, RUNTIME_NET_BUDGET);
+	if (th) {
+		STAT(NETS_STOLEN)++;
+		goto done;
+	}
+
+done:
+	/* either enqueue the stolen work or detach the kthread */
+	if (th) {
+		l->rq[l->rq_head++] = th;
+		STAT(THREADS_STOLEN)++;
+	} else if (r->parked) {
+		kthread_detach(r);
+	}
 
 	spin_unlock(&r->lock);
-
-	STAT(THREADS_STOLEN) += avail;
-	return true;
+	return th != NULL;
 }
 
 /* the main scheduler routine, decides what to run next */
@@ -240,6 +244,14 @@ again:
 			continue;
 		if (steal_work(l, ks[i]))
 			goto done;
+	}
+
+	/* last try, recheck network queues */
+	th = net_run(l, RUNTIME_NET_BUDGET);
+	if (th) {
+		STAT(NETS_LOCAL)++;
+		l->rq[l->rq_head++] = th;
+		goto done;
 	}
 
 	/* did not find anything to run, park this kthread */
