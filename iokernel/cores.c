@@ -245,6 +245,9 @@ void cores_adjust_assignments()
 		th = ts[i];
 		p = th->p;
 
+		if (th->parked)
+			continue;
+
 		/* check if runtime is already using max kthreads */
 		if (p->active_thread_count == p->thread_count)
 			continue;

@@ -43,113 +43,128 @@ static struct rx_net_hdr *rx_prepend_rx_preamble(struct rte_mbuf *buf)
 	return net_hdr;
 }
 
-/*
- * Send a packet up to a runtime. Return true if successful, false otherwise.
+/**
+ * rx_send_to_runtime - enqueues a command to an RXQ for a runtime
+ * @p: the runtime's proc structure
+ * @hash: the 5-tuple hash for the flow the command is related to
+ * @cmd: the command to send
+ * @payload: the command payload to send
+ *
+ * Returns true if the command was enqueued, otherwise a thread is not running
+ * and can't be woken or the queue was full.
  */
-static bool rx_enqueue_to_runtime(struct rx_net_hdr *net_hdr, struct proc *p)
+bool rx_send_to_runtime(struct proc *p, uint32_t hash, uint64_t cmd,
+			unsigned long payload)
 {
-	static int rr = 0;
-	int r;
-	struct thread *t;
-	shmptr_t shmptr;
+	struct thread *th;
 
+	/* if there are no threads running, wake one */
 	if (p->active_thread_count == 0) {
-		/* reserve a kthread and core to use */
-		t = cores_wake_kthread(p);
-		if (unlikely(!t))
+		th = cores_wake_kthread(p);
+		if (unlikely(!th))
 			return false;
 	} else {
-#if 0
-		/* round-robin through the active threads */
-		r = rr++ % p->active_thread_count;
-#else
-		r = net_hdr->rss_hash % p->active_thread_count;
-#endif
-		t = p->active_threads[r];
+		/* load balance between active threads */
+		th = p->active_threads[hash % p->active_thread_count];
 	}
 
-	shmptr = ptr_to_shmptr(&ingress_mbuf_region, net_hdr,
-			sizeof(struct rx_net_hdr));
+	return lrpc_send(&th->rxq, cmd, payload);
+}
 
-	return lrpc_send(&t->rxq, RX_NET_RECV, shmptr);
+
+static bool rx_send_pkt_to_runtime(struct proc *p, struct rx_net_hdr *hdr)
+{
+	shmptr_t shmptr;
+
+	shmptr = ptr_to_shmptr(&ingress_mbuf_region, hdr, sizeof(*hdr));
+	return rx_send_to_runtime(p, hdr->rss_hash, RX_NET_RECV, shmptr);
+}
+
+static void rx_one_pkt(struct rte_mbuf *buf)
+{
+	struct ether_hdr *ptr_mac_hdr;
+	struct ether_addr *ptr_dst_addr;
+	struct rx_net_hdr *net_hdr;
+	int i, ret;
+
+	ptr_mac_hdr = rte_pktmbuf_mtod(buf, struct ether_hdr *);
+	ptr_dst_addr = &ptr_mac_hdr->d_addr;
+	log_debug("rx: rx packet with MAC %02" PRIx8 " %02" PRIx8 " %02"
+		  PRIx8 " %02" PRIx8 " %02" PRIx8 " %02" PRIx8,
+		  ptr_dst_addr->addr_bytes[0], ptr_dst_addr->addr_bytes[1],
+		  ptr_dst_addr->addr_bytes[2], ptr_dst_addr->addr_bytes[3],
+		  ptr_dst_addr->addr_bytes[4], ptr_dst_addr->addr_bytes[5]);
+
+	/* handle unicast destinations (send to a single runtime) */
+	if (likely(is_unicast_ether_addr(ptr_dst_addr))) {
+		void *data;
+		struct proc *p;
+
+		/* lookup runtime by MAC in hash table */
+		ret = rte_hash_lookup_data(dp.mac_to_proc,
+				&ptr_dst_addr->addr_bytes[0], &data);
+		if (unlikely(ret < 0)) {
+			log_warn("rx: received packet for unregistered MAC");
+			rte_pktmbuf_free(buf);
+			return;
+		}
+
+		p = (struct proc *)data;
+		net_hdr = rx_prepend_rx_preamble(buf);
+		if (!rx_send_pkt_to_runtime(p, net_hdr)) {
+			log_warn("rx: failed to send unicast packet to runtime");
+			rte_pktmbuf_free(buf);
+		}
+		return;
+	}
+
+	/* handle broadcast destinations (send to all runtimes) */
+	if (is_broadcast_ether_addr(ptr_dst_addr) && dp.nr_clients > 0) {
+		bool success;
+		int n_sent = 0;
+
+		net_hdr = rx_prepend_rx_preamble(buf);
+		for (i = 0; i < dp.nr_clients; i++) {
+			success = rx_send_pkt_to_runtime(dp.clients[i], net_hdr);
+			if (success) {
+				n_sent++;
+			} else {
+				log_warn("rx: failed to enqueue broadcast "
+					 "packet to runtime");
+			}
+		}
+
+		if (n_sent == 0) {
+			rte_pktmbuf_free(buf);
+			return;
+		}
+		rte_mbuf_refcnt_update(buf, n_sent - 1);
+		return;
+	}
+
+	/* everything else */
+	log_warn("rx: unhandled packet with MAC %x %x %x %x %x %x",
+		 ptr_dst_addr->addr_bytes[0], ptr_dst_addr->addr_bytes[1],
+		 ptr_dst_addr->addr_bytes[2], ptr_dst_addr->addr_bytes[3],
+		 ptr_dst_addr->addr_bytes[4], ptr_dst_addr->addr_bytes[5]);
+	rte_pktmbuf_free(buf);
 }
 
 /*
  * Process a batch of incoming packets.
  */
-bool rx_burst()
+bool rx_burst(void)
 {
 	struct rte_mbuf *bufs[IOKERNEL_RX_BURST_SIZE];
-	uint16_t nb_rx, i, j, n_sent;
-	struct rte_mbuf *buf;
-	struct ether_hdr *ptr_mac_hdr;
-	struct ether_addr *ptr_dst_addr;
-	int ret;
-	void *data;
-	struct proc *p;
-	struct rx_net_hdr *net_hdr;
-	bool success;
+	uint16_t nb_rx, i;
 
 	/* retrieve packets from NIC queue */
 	nb_rx = rte_eth_rx_burst(dp.port, 0, bufs, IOKERNEL_RX_BURST_SIZE);
 	if (nb_rx > 0)
 		log_debug("rx: received %d packets on port %d", nb_rx, dp.port);
 
-	for (i = 0; i < nb_rx; i++) {
-		/* parse dst ether addr */
-		buf = bufs[i];
-
-		ptr_mac_hdr = rte_pktmbuf_mtod(buf, struct ether_hdr *);
-		ptr_dst_addr = &ptr_mac_hdr->d_addr;
-		log_debug("rx: rx packet with MAC %02" PRIx8 " %02" PRIx8 " %02"
-				PRIx8 " %02" PRIx8 " %02" PRIx8 " %02" PRIx8,
-				ptr_dst_addr->addr_bytes[0], ptr_dst_addr->addr_bytes[1],
-				ptr_dst_addr->addr_bytes[2], ptr_dst_addr->addr_bytes[3],
-				ptr_dst_addr->addr_bytes[4], ptr_dst_addr->addr_bytes[5]);
-
-		if (is_unicast_ether_addr(ptr_dst_addr)) {
-			/* lookup runtime by MAC in hash table */
-			ret = rte_hash_lookup_data(dp.mac_to_proc,
-					&ptr_dst_addr->addr_bytes[0], &data);
-			if (ret < 0) {
-				log_warn("rx: received packet for unregistered MAC");
-				rte_pktmbuf_free(buf);
-				continue;
-			}
-
-			p = (struct proc *) data;
-			net_hdr = rx_prepend_rx_preamble(buf);
-			if (!rx_enqueue_to_runtime(net_hdr, p)) {
-				log_warn("rx: failed to enqueue unicast packet to runtime");
-				rte_pktmbuf_free(buf);
-			}
-		} else if (is_broadcast_ether_addr(ptr_dst_addr)
-				&& dp.nr_clients > 0) {
-			/* forward to all registered runtimes */
-			net_hdr = rx_prepend_rx_preamble(buf);
-
-			n_sent = 0;
-			for (j = 0; j < dp.nr_clients; j++) {
-				success = rx_enqueue_to_runtime(net_hdr, dp.clients[j]);
-				if (success)
-					n_sent++;
-				else
-					log_warn("rx: failed to enqueue broadcast packet to "
-							"runtime");
-			}
-
-			if (n_sent == 0)
-				rte_pktmbuf_free(buf);
-			else
-				rte_mbuf_refcnt_update(buf, n_sent - 1);
-		} else {
-			log_warn("rx: unhandled packet with MAC %x %x %x %x %x %x",
-					ptr_dst_addr->addr_bytes[0], ptr_dst_addr->addr_bytes[1],
-					ptr_dst_addr->addr_bytes[2], ptr_dst_addr->addr_bytes[3],
-					ptr_dst_addr->addr_bytes[4], ptr_dst_addr->addr_bytes[5]);
-			rte_pktmbuf_free(buf);
-		}
-	}
+	for (i = 0; i < nb_rx; i++)
+		rx_one_pkt(bufs[i]);
 
 	return nb_rx > 0;
 }

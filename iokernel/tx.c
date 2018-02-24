@@ -105,9 +105,18 @@ bool tx_send_completion(void *obj)
 
 	/* send completion to runtime */
 	th = priv_data->th;
-	if (!lrpc_send(&th->rxq, RX_NET_COMPLETE, priv_data->completion_data)) {
-		log_warn("tx: failed to enqueue completion event to runtime");
-		return false;
+	if (!th->parked) {
+		if (!lrpc_send(&th->rxq, RX_NET_COMPLETE,
+			       priv_data->completion_data)) {
+			log_warn("tx: failed to send completion to runtime");
+			return false;
+		}
+	} else {
+		if (!rx_send_to_runtime(p, priv_data->th->tid, RX_NET_COMPLETE,
+					priv_data->completion_data)) {
+			log_warn("tx: failed to send completion to runtime");
+			return false;
+		}
 	}
 
 	proc_put(p);

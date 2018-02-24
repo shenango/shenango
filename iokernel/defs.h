@@ -188,6 +188,13 @@ struct core_assignments {
 extern struct core_assignments core_assign;
 
 /*
+ * RXQ command steering
+ */
+
+extern bool rx_send_to_runtime(struct proc *p, uint32_t hash, uint64_t cmd,
+			       unsigned long payload);
+
+/*
  * Initialization
  */
 
