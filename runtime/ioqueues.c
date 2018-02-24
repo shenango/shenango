@@ -23,8 +23,11 @@
 
 #include "defs.h"
 
-#define PACKET_QUEUE_MCOUNT 8192
-#define COMMAND_QUEUE_MCOUNT 8192
+#define PACKET_QUEUE_MCOUNT	1024
+#define COMMAND_QUEUE_MCOUNT	512
+/* the egress buffer pool must be large enough to fill all the TXQs entirely */
+#define EGRESS_POOL_SIZE(nks) \
+	(PACKET_QUEUE_MCOUNT * MBUF_DEFAULT_LEN * (nks) * 2)
 
 DEFINE_SPINLOCK(qlock);
 unsigned int nrqs = 0;
@@ -52,7 +55,6 @@ static int generate_random_mac(struct eth_addr *mac)
 // Could be a macro really, this is totally static :/
 static size_t calculate_shm_space(unsigned int thread_count)
 {
-
 	size_t ret = 0, q;
 
 	// Header + queue_spec information
@@ -81,7 +83,7 @@ static size_t calculate_shm_space(unsigned int thread_count)
 	BUILD_ASSERT(ETH_MAX_LEN + sizeof(struct tx_net_hdr) <=
 			MBUF_DEFAULT_LEN);
 	BUILD_ASSERT(PGSIZE_2MB % MBUF_DEFAULT_LEN == 0);
-	ret += MBUF_DEFAULT_LEN * PACKET_QUEUE_MCOUNT;
+	ret += EGRESS_POOL_SIZE(thread_count);
 	ret = align_up(ret, PGSIZE_2MB);
 
 	return ret;
@@ -160,7 +162,7 @@ static int ioqueues_shm_setup(unsigned int threads)
 
 	ptr = (char *)align_up((uintptr_t)ptr, PGSIZE_2MB);
 	iok.tx_buf = ptr;
-	iok.tx_len = MBUF_DEFAULT_LEN * PACKET_QUEUE_MCOUNT;
+	iok.tx_len = EGRESS_POOL_SIZE(threads);
 
 	ptr_to_shmptr(r, ptr, iok.tx_len);
 	ptr += iok.tx_len;
