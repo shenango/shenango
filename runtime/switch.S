@@ -60,17 +60,17 @@ __jmp_thread:
 
 	/* re-enable preemption */
 	decl	%fs:preempt_cnt@tpoff
-	jz	2f
+	jz	1f
 
-1:	/* jump into trap frame */
+	/* jump into trap frame */
 	jmpq    *%rsi
 	nop
 
-2:	/* cold-path, save RIP and park the kthread */
+1:	/* cold-path, save RIP and park the kthread */
 	pushq	%rsi
-	call	thread_yield
+	call	preempt
 	popq	%rsi
-	jmp	1b
+	jmpq	*%rsi
 
 /**
  * __jmp_runtime - saves the current trap frame and jumps to a function in the

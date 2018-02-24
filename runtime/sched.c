@@ -307,12 +307,12 @@ static void thread_finish_park_and_unlock(unsigned long data)
 
 /**
  * thread_park_and_unlock - puts a thread to sleep and unlocks when finished
- * @lock: this lock will be released when the thread state is fully saved
+ * @l: this lock will be released when the thread state is fully saved
  */
-void thread_park_and_unlock(spinlock_t *lock)
+void thread_park_and_unlock(spinlock_t *l)
 {
 	/* this will switch from the thread stack to the runtime stack */
-	jmp_runtime(thread_finish_park_and_unlock, (unsigned long)lock);
+	jmp_runtime(thread_finish_park_and_unlock, (unsigned long)l);
 }
 
 /**

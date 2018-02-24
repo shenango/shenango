@@ -168,13 +168,9 @@ static void kthread_yield_to_iokernel(void)
 	ssize_t s;
 	uint64_t val;
 
-	/* prevent us from yielding again immediately */
-	if (preempt_needed())
-		clear_preempt_needed();
-
 	/* yield to the iokernel */
 	s = read(k->park_efd, &val, sizeof(val));
-	if (s != sizeof(uint64_t) && errno == EINTR) {
+	if (unlikely(s != sizeof(uint64_t) && errno == EINTR)) {
 		/* preempted while yielding, yield again */
 		assert(preempt_needed());
 		clear_preempt_needed();

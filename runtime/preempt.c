@@ -52,6 +52,16 @@ static void handle_sigusr1(int s, siginfo_t *si, void *ctx)
 }
 
 /**
+ * preempt - entry point for preemption
+ */
+void preempt(void)
+{
+	assert(preempt_needed());
+	clear_preempt_needed();
+	thread_yield();
+}
+
+/**
  * preempt_reenter - jump back into a thread context that was preempted
  * @c: the ucontext of the thread
  */

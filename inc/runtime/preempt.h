@@ -5,9 +5,9 @@
 #pragma once
 
 #include <base/stddef.h>
-#include <runtime/thread.h>
 
 extern volatile __thread unsigned int preempt_cnt;
+extern void preempt(void);
 
 #define PREEMPT_NOT_PENDING	(1 << 31)
 
@@ -42,7 +42,7 @@ static inline void preempt_enable(void)
 {
 	preempt_enable_nocheck();
 	if (unlikely(preempt_cnt == 0))
-		thread_yield();
+		preempt();
 }
 
 /**
