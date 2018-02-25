@@ -19,8 +19,10 @@
 
 /* the currently running thread, or NULL if in runtime code */
 __thread thread_t *__self;
-/* a pointer to the top of the per-kernel-thread (TLS) runtime stack */
+/* a pointer to the top of the per-kthread (TLS) runtime stack */
 static __thread void *runtime_stack;
+/* a pointer to the bottom of the per-kthread (TLS) runtime stack */
+static __thread void *runtime_stack_base;
 
 /* fast allocation of struct thread */
 static struct slab thread_slab;
@@ -520,8 +522,10 @@ void sched_start(void)
  */
 void sched_make_uctx(ucontext_t *c)
 {
-	c->uc_stack.ss_sp = runtime_stack;
-	c->uc_stack.ss_size = RUNTIME_STACK_SIZE;
+	c->uc_stack.ss_sp = runtime_stack_base;
+	c->uc_stack.ss_size = (uintptr_t)runtime_stack -
+			      (uintptr_t)runtime_stack_base;
+	assert(c->uc_stack.ss_size <= RUNTIME_STACK_SIZE);
 	makecontext(c, schedule, 0);
 }
 
@@ -545,6 +549,7 @@ int sched_init_thread(void)
 	if (!s)
 		return -ENOMEM;
 
+	runtime_stack_base = (void *)s;
 	runtime_stack = (void *)stack_init_to_rsp(s, runtime_top_of_stack); 
 	return 0;
 }
