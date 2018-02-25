@@ -25,11 +25,7 @@ extern void thread_park_and_unlock(spinlock_t *l);
  * preemption
  * @l: the lock will be released when the thread state is fully saved
  */
-static inline void thread_park_and_unlock_np(spinlock_t *l)
-{
-	thread_park_and_unlock(l);
-	preempt_enable();
-}
+extern void thread_park_and_unlock_np(spinlock_t *l);
 
 extern void thread_ready(thread_t *thread);
 extern thread_t *thread_create(thread_fn_t fn, void *arg);
