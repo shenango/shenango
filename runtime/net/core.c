@@ -165,11 +165,6 @@ static void net_rx_one(struct rx_net_hdr *hdr)
 	STAT(RX_PACKETS)++;
 	STAT(RX_BYTES) += mbuf_length(m);
 
-	/* Did HW checksum verification pass? */
-	if (hdr->csum_type != CHECKSUM_TYPE_UNNECESSARY)
-		goto drop;
-
-
 	/*
 	 * Link Layer Processing (OSI L2)
 	 */
@@ -199,6 +194,10 @@ static void net_rx_one(struct rx_net_hdr *hdr)
 	mbuf_mark_network_offset(m);
 	iphdr = mbuf_pull_hdr_or_null(m, *iphdr);
 	if (unlikely(!iphdr))
+		goto drop;
+
+	/* Did HW checksum verification pass? */
+	if (hdr->csum_type != CHECKSUM_TYPE_UNNECESSARY)
 		goto drop;
 
 	/* The NIC has validated IP checksum for us. */
