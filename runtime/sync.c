@@ -22,13 +22,13 @@
  */
 bool mutex_try_lock(mutex_t *m)
 {
-	spin_lock(&m->waiter_lock);
+	spin_lock_np(&m->waiter_lock);
 	if (m->held) {
-		spin_unlock(&m->waiter_lock);
+		spin_unlock_np(&m->waiter_lock);
 		return false;
 	}
 	m->held = true;
-	spin_unlock(&m->waiter_lock);
+	spin_unlock_np(&m->waiter_lock);
 	return true;
 }
 
@@ -40,14 +40,14 @@ void mutex_lock(mutex_t *m)
 {
 	thread_t *myth = thread_self();
 
-	spin_lock(&m->waiter_lock);
+	spin_lock_np(&m->waiter_lock);
 	if (!m->held) {
 		m->held = true;
-		spin_unlock(&m->waiter_lock);
+		spin_unlock_np(&m->waiter_lock);
 		return;
 	}
 	list_add_tail(&m->waiters, &myth->link);
-	thread_park_and_unlock(&m->waiter_lock);
+	thread_park_and_unlock_np(&m->waiter_lock);
 }
 
 /**
@@ -58,14 +58,14 @@ void mutex_unlock(mutex_t *m)
 {
 	thread_t *waketh;
 
-	spin_lock(&m->waiter_lock);
+	spin_lock_np(&m->waiter_lock);
 	waketh = list_pop(&m->waiters, thread_t, link);
 	if (!waketh) {
 		m->held = false;
-		spin_unlock(&m->waiter_lock);
+		spin_unlock_np(&m->waiter_lock);
 		return;
 	}
-	spin_unlock(&m->waiter_lock);
+	spin_unlock_np(&m->waiter_lock);
 	thread_ready(waketh);
 }
 
@@ -95,10 +95,10 @@ void condvar_wait(condvar_t *cv, mutex_t *m)
 	thread_t *myth = thread_self();
 
 	assert_mutex_held(m);
-	spin_lock(&cv->waiter_lock);
+	spin_lock_np(&cv->waiter_lock);
 	mutex_unlock(m);
 	list_add_tail(&cv->waiters, &myth->link);
-	thread_park_and_unlock(&cv->waiter_lock);
+	thread_park_and_unlock_np(&cv->waiter_lock);
 
 	mutex_lock(m);
 }
@@ -111,9 +111,9 @@ void condvar_signal(condvar_t *cv)
 {
 	thread_t *waketh;
 
-	spin_lock(&cv->waiter_lock);
+	spin_lock_np(&cv->waiter_lock);
 	waketh = list_pop(&cv->waiters, thread_t, link);
-	spin_unlock(&cv->waiter_lock);
+	spin_unlock_np(&cv->waiter_lock);
 	if (waketh)
 		thread_ready(waketh);
 }
@@ -129,9 +129,9 @@ void condvar_broadcast(condvar_t *cv)
 
 	list_head_init(&tmp);
 
-	spin_lock(&cv->waiter_lock);
+	spin_lock_np(&cv->waiter_lock);
 	list_append_list(&tmp, &cv->waiters);
-	spin_unlock(&cv->waiter_lock);
+	spin_unlock_np(&cv->waiter_lock);
 
 	while (true) {
 		waketh = list_pop(&tmp, thread_t, link);
@@ -167,12 +167,12 @@ void condvar_init(condvar_t *cv)
  */
 void waitgroup_add(waitgroup_t *wg, int cnt)
 {
-	spin_lock(&wg->lock);
+	spin_lock_np(&wg->lock);
 	wg->cnt += cnt;
 	BUG_ON(wg->cnt < 0);
 	if (wg->cnt == 0 && wg->waiter != NULL)
 		thread_ready(wg->waiter);
-	spin_unlock(&wg->lock);
+	spin_unlock_np(&wg->lock);
 }
 
 /**
@@ -183,13 +183,13 @@ void waitgroup_wait(waitgroup_t *wg)
 {
 	thread_t *myth = thread_self();
 
-	spin_lock(&wg->lock);
+	spin_lock_np(&wg->lock);
 	if (wg->cnt == 0) {
-		spin_unlock(&wg->lock);
+		spin_unlock_np(&wg->lock);
 		return;
 	}
 	wg->waiter = myth;
-	thread_park_and_unlock(&wg->lock);
+	thread_park_and_unlock_np(&wg->lock);
 }
 
 /**

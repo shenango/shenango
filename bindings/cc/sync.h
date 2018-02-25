@@ -15,14 +15,14 @@ class Spin {
   ~Spin() { assert(!spin_lock_held(&lock_)); }
 
   // Locks the spin lock.
-  void Lock() { spin_lock(&lock_); }
+  void Lock() { spin_lock_np(&lock_); }
 
   // Unlocks the spin lock.
-  void Unlock() { spin_unlock(&lock_); }
+  void Unlock() { spin_unlock_np(&lock_); }
 
   // Locks the spin lock only if it is currently unlocked. Returns true if
   // successful.
-  bool TryLock() { return spin_try_lock(&lock_); }
+  bool TryLock() { return spin_try_lock_np(&lock_); }
 
  private:
   spinlock_t lock_;
