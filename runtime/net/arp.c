@@ -10,6 +10,7 @@
 #include <net/arp.h>
 #include <runtime/rculist.h>
 #include <runtime/timer.h>
+#include <runtime/sync.h>
 
 #include "defs.h"
 
@@ -169,15 +170,17 @@ static void arp_worker(void *arg)
 	while (true) {
 		now_us = microtime();
 
-		spin_lock(&arp_lock);
+		spin_lock_np(&arp_lock);
 		for (i = 0; i < ARP_TABLE_CAPACITY; i++) {
+			if (unlikely(preempt_needed()))
+				break;
 			rcu_hlist_for_each(&arp_tbl[i], node, true) {
 				e = rcu_hlist_entry(node,
 						    struct arp_entry, link);
 				arp_age_entry(now_us, e);
 			}
 		}
-		spin_unlock(&arp_lock);
+		spin_unlock_np(&arp_lock);
 
 		timer_sleep(ONE_SECOND);
 	}
@@ -191,12 +194,12 @@ static void arp_update(uint32_t daddr, struct eth_addr dhost)
 
 	mbufq_init(&q);
 
-	spin_lock(&arp_lock);
+	spin_lock_np(&arp_lock);
 	e = lookup_entry(idx, daddr);
 	if (!e) {
 		e = create_entry(daddr);
 		if (unlikely(!e)) {
-			spin_unlock(&arp_lock);
+			spin_unlock_np(&arp_lock);
 			return;
 		}
 
@@ -206,7 +209,7 @@ static void arp_update(uint32_t daddr, struct eth_addr dhost)
 	e->ts = microtime();
 	store_release(&e->state, ARP_STATE_VALID);
 	mbufq_merge_to_tail(&q, &e->q);
-	spin_unlock(&arp_lock);
+	spin_unlock_np(&arp_lock);
 
 	/* drain mbufs waiting for ARP response */
 	while (!mbufq_empty(&q)) {
@@ -302,14 +305,14 @@ int arp_lookup(uint32_t daddr, struct eth_addr *dhost_out, struct mbuf *m)
 	}
 
 	/* check again for @daddr in ARP cache; we own @m going forward */
-	spin_lock(&arp_lock);
+	spin_lock_np(&arp_lock);
 	e = lookup_entry(idx, daddr);
 	if (e) {
 		/* entry already exists */
 		free(newe);
 		if (e->state != ARP_STATE_PROBING) {
 			*dhost_out = e->eth;
-			spin_unlock(&arp_lock);
+			spin_unlock_np(&arp_lock);
 			return 0;
 		}
 	} else if (newe) {
@@ -321,7 +324,7 @@ int arp_lookup(uint32_t daddr, struct eth_addr *dhost_out, struct mbuf *m)
 	/* enqueue the mbuf for later transmission */
 	if (m && e)
 		mbufq_push_tail(&e->q, m);
-	spin_unlock(&arp_lock);
+	spin_unlock_np(&arp_lock);
 
 	/* if the entry was removed, assume unreachable and free */
 	if (m && !e)

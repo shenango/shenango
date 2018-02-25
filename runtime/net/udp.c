@@ -8,6 +8,7 @@
 #include <base/smalloc.h>
 #include <base/kref.h>
 #include <runtime/rculist.h>
+#include <runtime/sync.h>
 #include <runtime/thread.h>
 #include <runtime/udp.h>
 
@@ -88,7 +89,7 @@ static int udp_table_add(struct udp_entry *e)
 		idx = udp_hash_4tuple(e->laddr, e->raddr);
 	idx %= UDP_TABLE_SIZE;
 
-	spin_lock(&udp_lock);
+	spin_lock_np(&udp_lock);
 	rcu_hlist_for_each(&udp_table[idx], node, true) {
 		pos = rcu_hlist_entry(node, struct udp_entry, link);
 		if (pos->match != e->match)
@@ -96,18 +97,18 @@ static int udp_table_add(struct udp_entry *e)
 		if (e->match == UDP_MATCH_2TUPLE &&
 		    e->laddr.ip == pos->laddr.ip &&
 		    e->laddr.port == pos->laddr.port) {
-			spin_unlock(&udp_lock);
+			spin_unlock_np(&udp_lock);
 			return -EADDRINUSE;
 		} else if (e->laddr.ip == pos->laddr.ip &&
 			   e->laddr.port == pos->laddr.port &&
 			   e->raddr.ip == pos->raddr.ip &&
 			   e->raddr.port == pos->raddr.port) {
-			spin_unlock(&udp_lock);
+			spin_unlock_np(&udp_lock);
 			return -EADDRINUSE;
 		}
 	}
 	rcu_hlist_add_head(&udp_table[idx], &e->link);
-	spin_unlock(&udp_lock);
+	spin_unlock_np(&udp_lock);
 
 	return 0;
 }
@@ -152,9 +153,9 @@ static int udp_table_add_with_ephemeral_port(struct udp_entry *e)
  */
 static void udp_table_remove(struct udp_entry *e)
 {
-	spin_lock(&udp_lock);
+	spin_lock_np(&udp_lock);
 	rcu_hlist_del(&e->link);
-	spin_unlock(&udp_lock);
+	spin_unlock_np(&udp_lock);
 }
 
 /**
@@ -319,10 +320,10 @@ static void udp_conn_recv(struct udp_entry *e, struct mbuf *m)
 	udpconn_t *c = container_of(e, udpconn_t, e);
 	thread_t *th;
 
-	spin_lock(&c->inq_lock);
+	spin_lock_np(&c->inq_lock);
 	/* drop packet if the ingress queue is full */
 	if (c->inq_len >= c->inq_cap || c->shutdown) {
-		spin_unlock(&c->inq_lock);
+		spin_unlock_np(&c->inq_lock);
 		mbuf_drop(m);
 		return;
 	}
@@ -333,7 +334,7 @@ static void udp_conn_recv(struct udp_entry *e, struct mbuf *m)
 
 	/* wake up a waiter */
 	th = list_pop(&c->inq_waiters, thread_t, link);
-	spin_unlock(&c->inq_lock);
+	spin_unlock_np(&c->inq_lock);
 
 	if (th)
 		thread_ready(th);
@@ -348,10 +349,10 @@ static void udp_conn_err(struct udp_entry *e, int err)
 
 	list_head_init(&tmp);
 
-	spin_lock(&c->inq_lock);
+	spin_lock_np(&c->inq_lock);
 	c->inq_err = err;
 	list_append_list(&tmp, &c->inq_waiters);
-	spin_unlock(&c->inq_lock);
+	spin_unlock_np(&c->inq_lock);
 
 	while (true) {
 		th = list_pop(&tmp, thread_t, link);
@@ -537,31 +538,31 @@ ssize_t udp_read_from(udpconn_t *c, void *buf, size_t len,
 	ssize_t ret;
 	struct mbuf *m;
 
-	spin_lock(&c->inq_lock);
+	spin_lock_np(&c->inq_lock);
 
 	/* block until there is an actionable event */
 	while (mbufq_empty(&c->inq) && !c->inq_err && !c->shutdown) {
 		list_add_tail(&c->inq_waiters, &thread_self()->link);
-		thread_park_and_unlock(&c->inq_lock);
-		spin_lock(&c->inq_lock);
+		thread_park_and_unlock_np(&c->inq_lock);
+		spin_lock_np(&c->inq_lock);
 	}
 
 	/* is the socket shutdown? */
 	if (c->shutdown) {
-		spin_unlock(&c->inq_lock);
+		spin_unlock_np(&c->inq_lock);
 		return 0;
 	}
 
 	/* propagate error status code if an error was detected */
 	if (c->inq_err) {
-		spin_unlock(&c->inq_lock);
+		spin_unlock_np(&c->inq_lock);
 		return -c->inq_err;
 	}
 
 	/* pop an mbuf and deliver the payload */
 	m = mbufq_pop_head(&c->inq);
 	c->inq_len--;
-	spin_unlock(&c->inq_lock);
+	spin_unlock_np(&c->inq_lock);
 
 	ret = min(len, mbuf_length(m));
 	memcpy(buf, mbuf_data(m), ret);
@@ -585,11 +586,11 @@ static void udp_tx_release_mbuf(struct mbuf *m)
 	thread_t *th;
 	bool free_conn;
 
-	spin_lock(&c->outq_lock);
+	spin_lock_np(&c->outq_lock);
 	c->outq_len--;
 	th = list_pop(&c->outq_waiters, thread_t, link);
 	free_conn = (c->outq_free && c->outq_len == 0);
-	spin_unlock(&c->outq_lock);
+	spin_unlock_np(&c->outq_lock);
 	if (th)
 		thread_ready(th);
 
@@ -629,23 +630,23 @@ ssize_t udp_write_to(udpconn_t *c, const void *buf, size_t len,
 		addr = *raddr;
 	}
 
-	spin_lock(&c->outq_lock);
+	spin_lock_np(&c->outq_lock);
 
 	/* block until there is an actionable event */
 	while (c->outq_len >= c->outq_cap && !c->shutdown) {
 		list_add_tail(&c->outq_waiters, &thread_self()->link);
-		thread_park_and_unlock(&c->outq_lock);
-		spin_lock(&c->outq_lock);
+		thread_park_and_unlock_np(&c->outq_lock);
+		spin_lock_np(&c->outq_lock);
 	}
 
 	/* is the socket shutdown? */
 	if (c->shutdown) {
-		spin_unlock(&c->outq_lock);
+		spin_unlock_np(&c->outq_lock);
 		return -ESHUTDOWN;
 	}
 
 	c->outq_len++;
-	spin_unlock(&c->outq_lock);
+	spin_unlock_np(&c->outq_lock);
 
 	m = net_tx_alloc_mbuf();
 	if (unlikely(!m))
@@ -725,15 +726,15 @@ void udp_shutdown(udpconn_t *c)
 	udp_table_remove(&c->e);
 
 	/* drain ingress */
-	spin_lock(&c->inq_lock);
+	spin_lock_np(&c->inq_lock);
 	list_append_list(&tmp, &c->inq_waiters);
 	mbufq_merge_to_tail(&q, &c->inq);
-	spin_unlock(&c->inq_lock);
+	spin_unlock_np(&c->inq_lock);
 
 	/* drain egress */
-	spin_lock(&c->outq_lock);
+	spin_lock_np(&c->outq_lock);
 	list_append_list(&tmp, &c->outq_waiters);
-	spin_unlock(&c->outq_lock);
+	spin_unlock_np(&c->outq_lock);
 
 	/* wake all blocked threads */
 	while (true) {
@@ -767,9 +768,9 @@ void udp_close(udpconn_t *c)
 	if (!c->shutdown)
 		udp_shutdown(c);
 
-	spin_lock(&c->outq_lock);
+	spin_lock_np(&c->outq_lock);
 	free_conn = c->outq_len == 0;
-	spin_unlock(&c->outq_lock);
+	spin_unlock_np(&c->outq_lock);
 
 	if (free_conn)
 		udp_release_conn(c);
