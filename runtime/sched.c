@@ -184,6 +184,12 @@ done:
 		STAT(THREADS_STOLEN)++;
 	} else if (r->parked) {
 		kthread_detach(r);
+
+		if (l->rq_head != l->rq_tail) {
+			/* handle the case where kthread_detach -> rcu_detach leads to a
+			 * thread being added to the runqueue (but not returned above) */
+			th = l->rq[l->rq_head];
+		}
 	}
 
 	spin_unlock(&r->lock);
