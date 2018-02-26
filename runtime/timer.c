@@ -9,6 +9,7 @@
 #include <stdlib.h>
 
 #include <base/time.h>
+#include <runtime/sync.h>
 #include <runtime/thread.h>
 #include <runtime/timer.h>
 
@@ -53,9 +54,9 @@ static bool timer_heap_is_valid_unlocked(struct kthread *k)
 {
 	bool res;
 
-	spin_lock(&k->timer_lock);
+	spin_lock_np(&k->timer_lock);
 	res = is_valid_heap(k->timers, k->timern);
-	spin_unlock(&k->timer_lock);
+	spin_unlock_np(&k->timer_lock);
 
 	return res;
 }
@@ -195,9 +196,9 @@ void timer_start(struct timer_entry *e, uint64_t deadline_us)
 {
 	struct kthread *k = getk();
 
-	spin_lock(&k->timer_lock);
+	spin_lock_np(&k->timer_lock);
 	timer_start_locked(e, deadline_us);
-	spin_unlock(&k->timer_lock);
+	spin_unlock_np(&k->timer_lock);
 	putk();
 }
 
@@ -213,9 +214,9 @@ bool timer_cancel(struct timer_entry *e)
 	struct kthread *k = getk();
 	int last;
 
-	spin_lock(&k->timer_lock);
+	spin_lock_np(&k->timer_lock);
 	if (!e->armed) {
-		spin_unlock(&k->timer_lock);
+		spin_unlock_np(&k->timer_lock);
 		putk();
 		return false;
 	}
@@ -223,7 +224,7 @@ bool timer_cancel(struct timer_entry *e)
 
 	last = --k->timern;
 	if (e->idx == last) {
-		spin_unlock(&k->timer_lock);
+		spin_unlock_np(&k->timer_lock);
 		putk();
 		return true;
 	}
@@ -232,7 +233,7 @@ bool timer_cancel(struct timer_entry *e)
 	k->timers[e->idx].e->idx = e->idx;
 	sift_up(k->timers, e->idx);
 	sift_down(k->timers, e->idx, k->timern);
-	spin_unlock(&k->timer_lock);
+	spin_unlock_np(&k->timer_lock);
 
 	putk();
 	return true;
@@ -252,10 +253,10 @@ static void __timer_sleep(uint64_t deadline_us)
 	timer_init(&e, timer_finish_sleep, (unsigned long)thread_self());
 
 	k = getk();
-	spin_lock(&k->timer_lock);
+	spin_lock_np(&k->timer_lock);
 	putk();
 	timer_start_locked(&e, deadline_us);
-	thread_park_and_unlock(&k->timer_lock);
+	thread_park_and_unlock_np(&k->timer_lock);
 }
 
 /**
@@ -286,7 +287,7 @@ static void timer_worker(void *arg)
 	uint64_t now_us;
 	int i;
 
-	spin_lock(&k->timer_lock);
+	spin_lock_np(&k->timer_lock);
 
 	now_us = microtime();
 	while (k->timern > 0 && k->timers[0].deadline_us <= now_us) {
@@ -297,16 +298,16 @@ static void timer_worker(void *arg)
 			k->timers[0].e->idx = 0;
 			sift_down(k->timers, 0, i);
 		}
-		spin_unlock(&k->timer_lock);
+		spin_unlock_np(&k->timer_lock);
 
 		/* execute the timer handler */
 		e->fn(e->arg);
 
-		spin_lock(&k->timer_lock);
+		spin_lock_np(&k->timer_lock);
 		now_us = microtime();
 	}
 
-	spin_unlock(&k->timer_lock);
+	spin_unlock_np(&k->timer_lock);
 }
 
 /**

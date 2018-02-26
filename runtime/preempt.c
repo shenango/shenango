@@ -67,10 +67,19 @@ void preempt(void)
  */
 void preempt_reenter(ucontext_t *c)
 {
+	sigset_t set;
 	int ret;
 
+	/*
+	 * Temporarily mask SIGUSR1 to prevent preemption while loading
+	 * the ucontext. It will get unmasked by setcontext().
+	 */
+	sigemptyset(&set);
+	sigaddset(&set, SIGUSR1);
+	if (unlikely(pthread_sigmask(SIG_BLOCK, &set, NULL) < 0))
+		log_err_ratelimited("preempt: couldn't mask SIGUSR1");
+
 	preempt_enable();
-	/* FIXME: race condition here */
 	ret = setcontext(c);
 
 	BUG_ON(ret != 0);

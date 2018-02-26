@@ -10,6 +10,7 @@
 #include <base/lock.h>
 #include <base/thread.h>
 #include <runtime/rcu.h>
+#include <runtime/sync.h>
 #include <runtime/thread.h>
 
 #include "defs.h"
@@ -82,12 +83,12 @@ void rcu_free(struct rcu_head *head, rcu_callback_t func)
 {
 	head->func = func;
 
-	spin_lock(&rcu_lock);
+	spin_lock_np(&rcu_lock);
 	head->next = rcu_head;
 	rcu_head = head;
 	if (rcu_reclaim_in_progress == 0)
 		rcu_start_reclaim();
-	spin_unlock(&rcu_lock);
+	spin_unlock_np(&rcu_lock);
 }
 
 /* internal cold-path handler for reschedules */
