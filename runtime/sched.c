@@ -82,6 +82,20 @@ static __noreturn void jmp_runtime_nosave(runtime_fn_t fn, unsigned long arg)
 	__jmp_runtime_nosave(fn, runtime_stack, arg);
 }
 
+static bool rxq_spin_us(struct kthread *k, uint64_t us)
+{
+	uint64_t cycles = us * cycles_per_us;
+	unsigned long start = rdtsc();
+
+	while (rdtsc() - start < cycles) {
+		if (!lrpc_empty(&k->rxq))
+			return true;
+		cpu_relax();
+	}
+
+	return false;
+}
+
 static void drain_overflow(struct kthread *l)
 {
 	thread_t *th;
@@ -248,12 +262,17 @@ again:
 			goto done;
 	}
 
-	/* last try, recheck network queues */
-	th = net_run(l, RUNTIME_NET_BUDGET);
-	if (th) {
-		STAT(NETS_LOCAL)++;
-		l->rq[l->rq_head++] = th;
-		goto done;
+	/*
+	 * Last try, spin poll on the RXQ for a little while.
+	 * If we don't, completions may arrive just after parking.
+	 */
+	if (rxq_spin_us(l, RUNTIME_PARK_POLL_US)) {
+		th = net_run(l, RUNTIME_NET_BUDGET);
+		if (th) {
+			STAT(NETS_LOCAL)++;
+			l->rq[l->rq_head++] = th;
+			goto done;
+		}
 	}
 
 	/* did not find anything to run, park this kthread */
