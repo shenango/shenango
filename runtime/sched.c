@@ -199,6 +199,9 @@ static __noreturn void schedule(void)
 	unsigned int last_nrks;
 	int i;
 
+	/* detect misuse of preempt disable */
+	BUG_ON((preempt_cnt & ~PREEMPT_NOT_PENDING) != 1);
+
 	/* update entry stat counters */
 	STAT(RESCHEDULES)++;
 	start_tsc = rdtsc();

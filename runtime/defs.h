@@ -249,6 +249,7 @@ enum {
 	STAT_NETS_LOCAL,
 	STAT_TIMERS_LOCAL,
 	STAT_PARKS,
+	STAT_PREEMPTIONS,
 
 	/* network stack counters */
 	STAT_RX_BYTES,

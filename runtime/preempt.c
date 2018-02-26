@@ -25,6 +25,8 @@ static void handle_sigusr1(int s, siginfo_t *si, void *ctx)
 {
 	struct kthread *k = myk();
 
+	STAT(PREEMPTIONS)++;
+
 	/* resume execution if preemption is disabled */
 	if (!preempt_enabled()) {
 		set_preempt_needed();
