@@ -157,7 +157,7 @@ static int tx_drain_queue(struct thread *t, int n,
 bool tx_burst(void)
 {
 	const struct tx_net_hdr *hdrs[IOKERNEL_TX_BURST_SIZE];
-	struct rte_mbuf *bufs[IOKERNEL_TX_BURST_SIZE];
+	static struct rte_mbuf *bufs[IOKERNEL_TX_BURST_SIZE];
 	struct thread *threads[IOKERNEL_TX_BURST_SIZE];
 	int i, j, ret;
 	static unsigned int pos = 0, n_pkts = 0, n_bufs = 0;
