@@ -2,6 +2,7 @@
  * sched.c - a scheduler for user-level threads
  */
 
+#include <signal.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -596,7 +597,8 @@ static void runtime_top_of_stack(void)
  */
 int sched_init_thread(void)
 {
-	struct stack *s;
+	struct stack *s, *ss;
+	stack_t new_stack, old_stack;
 
 	tcache_init_perthread(thread_tcache, &perthread_get(thread_pt));
 
@@ -606,7 +608,16 @@ int sched_init_thread(void)
 
 	runtime_stack_base = (void *)s;
 	runtime_stack = (void *)stack_init_to_rsp(s, runtime_top_of_stack); 
-	return 0;
+
+	ss = stack_alloc();
+	if (!ss)
+		return -ENOMEM;
+
+	new_stack.ss_sp = (void *)ss;
+	new_stack.ss_size = sizeof(ss->usable);
+	new_stack.ss_flags =  0;
+
+	return sigaltstack(&new_stack, &old_stack);
 }
 
 /**
