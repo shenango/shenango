@@ -100,6 +100,16 @@ int preempt_init(void)
 	act.sa_sigaction = handle_sigusr1;
 	act.sa_flags = SA_SIGINFO;
 
+	if (sigemptyset(&act.sa_mask) != 0) {
+		log_err("couldn't empty the signal handler mask");
+		return -errno;
+	}
+
+	if (sigaddset(&act.sa_mask, SIGUSR1)) {
+		log_err("couldn't set signal handler mask");
+		return -errno;
+	}
+
 	if (sigaction(SIGUSR1, &act, NULL) == -1) {
 		log_err("couldn't register signal handler");
 		return -errno;

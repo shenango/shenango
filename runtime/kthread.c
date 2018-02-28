@@ -170,7 +170,7 @@ static void kthread_yield_to_iokernel(void)
 
 	/* yield to the iokernel */
 	s = read(k->park_efd, &val, sizeof(val));
-	if (unlikely(s != sizeof(uint64_t) && errno == EINTR)) {
+	while (unlikely(s != sizeof(uint64_t) && errno == EINTR)) {
 		/* preempted while yielding, yield again */
 		assert(preempt_needed());
 		clear_preempt_needed();

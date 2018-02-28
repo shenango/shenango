@@ -68,7 +68,9 @@ __jmp_thread:
 
 1:	/* cold-path, save RIP and park the kthread */
 	pushq	%rsi
+	pushq	%rdi
 	call	preempt
+	popq	%rdi
 	popq	%rsi
 	jmpq	*%rsi
 
@@ -81,14 +83,11 @@ __jmp_thread:
  * @arg: an argument to @fn (%rcx)
  *
  * This low-level variant isn't intended to be called directly.
- * Disables preemption.
+ * Must be called with preemption disabled.
  * No return value.
  */
 .globl __jmp_runtime
 __jmp_runtime:
-	/* disable preemption */
-	incl	%fs:preempt_cnt@tpoff
-
 	/* save callee regs */
 	movq    %rbx, RBX(%rdi)
 	movq    %rbp, RBP(%rdi)
@@ -118,13 +117,11 @@ __jmp_runtime:
  * @arg: an argument to @fn (%rdx)
  *
  * This low-level variant isn't intended to be called directly.
- * Disables preemption.
+ * Must be called with preemption disabled.
  * No return value.
  */
 .globl __jmp_runtime_nosave
 __jmp_runtime_nosave:
-	/* disable preemption */
-	incl	%fs:preempt_cnt@tpoff
 
 	/* jump into runtime function */
 	movq    %rsi, %rsp

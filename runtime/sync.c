@@ -38,9 +38,10 @@ bool mutex_try_lock(mutex_t *m)
  */
 void mutex_lock(mutex_t *m)
 {
-	thread_t *myth = thread_self();
+	thread_t *myth;
 
 	spin_lock_np(&m->waiter_lock);
+	myth = thread_self();
 	if (!m->held) {
 		m->held = true;
 		spin_unlock_np(&m->waiter_lock);
@@ -92,10 +93,11 @@ void mutex_init(mutex_t *m)
  */
 void condvar_wait(condvar_t *cv, mutex_t *m)
 {
-	thread_t *myth = thread_self();
+	thread_t *myth;
 
 	assert_mutex_held(m);
 	spin_lock_np(&cv->waiter_lock);
+	myth = thread_self();
 	mutex_unlock(m);
 	list_add_tail(&cv->waiters, &myth->link);
 	thread_park_and_unlock_np(&cv->waiter_lock);
@@ -181,9 +183,10 @@ void waitgroup_add(waitgroup_t *wg, int cnt)
  */
 void waitgroup_wait(waitgroup_t *wg)
 {
-	thread_t *myth = thread_self();
+	thread_t *myth;
 
 	spin_lock_np(&wg->lock);
+	myth = thread_self();
 	if (wg->cnt == 0) {
 		spin_unlock_np(&wg->lock);
 		return;

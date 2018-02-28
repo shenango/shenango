@@ -12,6 +12,7 @@
 #include <base/tcache.h>
 #include <base/gen.h>
 #include <base/lrpc.h>
+#include <base/thread.h>
 #include <net/ethernet.h>
 #include <net/ip.h>
 #include <iokernel/control.h>
@@ -124,7 +125,7 @@ struct stack {
 	uintptr_t	guard[GUARD_PTR_SIZE]; /* unreadable and unwritable */
 };
 
-extern __thread struct tcache_perthread stack_pt;
+DECLARE_PERTHREAD(struct tcache_perthread, stack_pt);
 
 /**
  * stack_alloc - allocates a stack
@@ -135,7 +136,7 @@ extern __thread struct tcache_perthread stack_pt;
  */
 static inline struct stack *stack_alloc(void)
 {
-	return tcache_alloc(&stack_pt);
+	return tcache_alloc(&perthread_get(stack_pt));
 }
 
 /**
@@ -144,7 +145,7 @@ static inline struct stack *stack_alloc(void)
  */
 static inline void stack_free(struct stack *s)
 {
-	return tcache_free(&stack_pt, (void *)s);
+	tcache_free(&perthread_get(stack_pt), (void *)s);
 }
 
 #define RSP_ALIGNMENT	16

@@ -27,7 +27,7 @@ static __thread void *runtime_stack_base;
 /* fast allocation of struct thread */
 static struct slab thread_slab;
 static struct tcache *thread_tcache;
-static __thread struct tcache_perthread thread_pt;
+static DEFINE_PERTHREAD(struct tcache_perthread, thread_pt);
 
 /* used to track cycle usage in scheduler */
 static __thread uint64_t last_tsc;
@@ -67,6 +67,7 @@ static __noreturn void jmp_thread(thread_t *th)
  */
 static void jmp_runtime(runtime_fn_t fn, unsigned long arg)
 {
+	preempt_disable();
 	assert(thread_self() != NULL);
 	__jmp_runtime(&thread_self()->tf, fn, runtime_stack, arg);
 }
@@ -79,6 +80,7 @@ static void jmp_runtime(runtime_fn_t fn, unsigned long arg)
  */
 static __noreturn void jmp_runtime_nosave(runtime_fn_t fn, unsigned long arg)
 {
+	preempt_disable();
 	__jmp_runtime_nosave(fn, runtime_stack, arg);
 }
 
@@ -129,7 +131,7 @@ static bool steal_work(struct kthread *l, struct kthread *r)
 	}
 
 	/* resume execution of a preempted thread */
-	if (r->preempted) {
+	if (r->preempted && false) {
 		__self = r->preempted_th;
 		r->preempted = false;
 		memcpy(&uctx, &r->preempted_uctx, sizeof(uctx));
@@ -431,7 +433,7 @@ static __always_inline thread_t *__thread_create(void)
 	struct stack *s;
 
 	preempt_disable();
-	th = tcache_alloc(&thread_pt);
+	th = tcache_alloc(&perthread_get(thread_pt));
 	if (unlikely(!th)) {
 		preempt_enable();
 		return NULL;
@@ -439,7 +441,7 @@ static __always_inline thread_t *__thread_create(void)
 
 	s = stack_alloc();
 	if (unlikely(!s)) {
-		tcache_free(&thread_pt, th);
+		tcache_free(&perthread_get(thread_pt), th);
 		preempt_enable();
 		return NULL;
 	}
@@ -545,7 +547,7 @@ static void thread_finish_exit(unsigned long data)
 	if (unlikely(th->main_thread))
 		init_shutdown(EXIT_SUCCESS);
 	stack_free(th->stack);
-	tcache_free(&thread_pt, th);
+	tcache_free(&perthread_get(thread_pt), th);
 
 	schedule();
 }
@@ -596,7 +598,7 @@ int sched_init_thread(void)
 {
 	struct stack *s;
 
-	tcache_init_perthread(thread_tcache, &thread_pt);
+	tcache_init_perthread(thread_tcache, &perthread_get(thread_pt));
 
 	s = stack_alloc();
 	if (!s)

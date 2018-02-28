@@ -6,6 +6,7 @@
 #include <base/mempool.h>
 #include <base/slab.h>
 #include <base/hash.h>
+#include <base/thread.h>
 #include <runtime/thread.h>
 
 #include "defs.h"
@@ -22,12 +23,12 @@ struct net_cfg netcfg __aligned(CACHE_LINE_SIZE);
 /* mbuf allocation */
 static struct slab net_mbuf_slab;
 static struct tcache *net_mbuf_tcache;
-static __thread struct tcache_perthread net_mbuf_pt;
+static DEFINE_PERTHREAD(struct tcache_perthread, net_mbuf_pt);
 
 /* TX buffer allocation */
 static struct mempool net_tx_buf_mp;
 static struct tcache *net_tx_buf_tcache;
-static __thread struct tcache_perthread net_tx_buf_pt;
+static DEFINE_PERTHREAD(struct tcache_perthread, net_tx_buf_pt);
 
 /* drains overflow queues */
 void __noinline __net_recurrent(void)
@@ -60,7 +61,7 @@ void __noinline __net_recurrent(void)
 			       rxhdr->completion_data))
 			break;
 		mbufq_pop_head(&k->txcmdq_overflow);
-		tcache_free(&net_mbuf_pt, m);
+		tcache_free(&perthread_get(net_mbuf_pt), m);
 		if (unlikely(preempt_needed()))
 			return;
 	}
@@ -83,7 +84,7 @@ static void net_rx_release_mbuf(struct mbuf *m)
 		putk();
 		return;
 	}
-	tcache_free(&net_mbuf_pt, m);
+	tcache_free(&perthread_get(net_mbuf_pt), m);
 	putk();
 }
 
@@ -92,7 +93,7 @@ static struct mbuf *net_rx_alloc_mbuf(struct rx_net_hdr *hdr)
 	struct mbuf *m;
 
 	preempt_disable();
-	m = tcache_alloc(&net_mbuf_pt);
+	m = tcache_alloc(&perthread_get(net_mbuf_pt));
 	if (unlikely(!m)) {
 		preempt_enable();
 		return NULL;
@@ -321,8 +322,10 @@ thread_t *net_run(struct kthread *k, unsigned int budget)
  */
 void net_tx_release_mbuf(struct mbuf *m)
 {
-	tcache_free(&net_tx_buf_pt, m->head);
-	tcache_free(&net_mbuf_pt, m);
+	preempt_disable();
+	tcache_free(&perthread_get(net_tx_buf_pt), m->head);
+	tcache_free(&perthread_get(net_mbuf_pt), m);
+	preempt_enable();
 }
 
 /**
@@ -336,15 +339,15 @@ struct mbuf *net_tx_alloc_mbuf(void)
 	unsigned char *buf;
 
 	preempt_disable();
-	m = tcache_alloc(&net_mbuf_pt);
+	m = tcache_alloc(&perthread_get(net_mbuf_pt));
 	if (unlikely(!m)) {
 		preempt_enable();
 		return NULL;
 	}
 
-	buf = tcache_alloc(&net_tx_buf_pt);
+	buf = tcache_alloc(&perthread_get(net_tx_buf_pt));
 	if (unlikely(!buf)) {
-		tcache_free(&net_mbuf_pt, m);
+		tcache_free(&perthread_get(net_mbuf_pt), m);
 		preempt_enable();
 		return NULL;
 	}
@@ -480,8 +483,8 @@ int net_tx_ip(struct mbuf *m, uint8_t proto, uint32_t daddr)
  */
 int net_init_thread(void)
 {
-	tcache_init_perthread(net_mbuf_tcache, &net_mbuf_pt);
-	tcache_init_perthread(net_tx_buf_tcache, &net_tx_buf_pt);
+	tcache_init_perthread(net_mbuf_tcache, &perthread_get(net_mbuf_pt));
+	tcache_init_perthread(net_tx_buf_tcache, &perthread_get(net_tx_buf_pt));
 	return 0;
 }
 
