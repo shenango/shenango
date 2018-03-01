@@ -21,6 +21,10 @@ static struct rte_mempool *tx_mbuf_pool;
  * Private data stored in egress mbufs, used to send completions to runtimes.
  */
 struct tx_pktmbuf_priv {
+#ifdef MLX
+	uintptr_t start_addr;
+	uintptr_t end_addr;
+#endif /* MLX */
 	struct proc	*p;
 	struct thread	*th;
 	unsigned long	completion_data;
@@ -74,6 +78,12 @@ static void tx_prepare_tx_mbuf(struct rte_mbuf *buf,
 	priv_data->p = p;
 	priv_data->th = th;
 	priv_data->completion_data = net_hdr->completion_data;
+
+#ifdef MLX
+	/* initialize private data used by Mellanox driver to register memory */
+	priv_data->start_addr = (uintptr_t) p->region.base;
+	priv_data->end_addr = (uintptr_t) p->region.base + p->region.len;
+#endif /* MLX */
 
 	/* reference count @p so it doesn't get freed before the completion */
 	proc_get(p);
@@ -185,11 +195,13 @@ bool tx_burst(void)
 
 full:
 	/* allocate mbufs */
-	ret = rte_mempool_get_bulk(tx_mbuf_pool, (void **)&bufs[n_bufs],
-				   n_pkts - n_bufs);
-	if (unlikely(ret)) {
-		log_warn("tx: error getting mbuf from mempool");
-		return true;
+	if (n_pkts - n_bufs > 0) {
+		ret = rte_mempool_get_bulk(tx_mbuf_pool, (void **)&bufs[n_bufs],
+					n_pkts - n_bufs);
+		if (unlikely(ret)) {
+			log_warn("tx: error getting %d mbufs from mempool", n_pkts - n_bufs);
+			return true;
+		}
 	}
 
 	/* fill in packet metadata */

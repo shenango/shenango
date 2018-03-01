@@ -16,6 +16,10 @@ else
 CFLAGS += -DNDEBUG -O3
 endif
 
+ifneq ($(MLX),)
+CFLAGS += -DMLX
+endif
+
 # handy for debugging
 print-%  : ; @echo $* = $($*)
 
