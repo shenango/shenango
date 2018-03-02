@@ -111,7 +111,8 @@ extern void __jmp_runtime(struct thread_tf *tf, runtime_fn_t fn,
 			  void *stack, unsigned long arg);
 extern void __jmp_runtime_nosave(runtime_fn_t fn, void *stack,
 				 unsigned long arg) __noreturn;
-
+extern void __jmp_restore_sigctx(ucontext_t *c,
+                                 size_t fpstate_offset) __noreturn;
 
 /*
  * Stack support
@@ -126,6 +127,8 @@ struct stack {
 };
 
 DECLARE_PERTHREAD(struct tcache_perthread, stack_pt);
+
+extern __thread struct stack *signal_stack;
 
 /**
  * stack_alloc - allocates a stack
@@ -305,6 +308,7 @@ struct kthread {
 	/* cold-data this point onward */
 	thread_t		*preempted_th;
 	ucontext_t		preempted_uctx;
+	size_t			fpstate_offset;
 };
 
 /* compile-time verification of cache-line alignment */
@@ -438,7 +442,7 @@ extern thread_t *timer_run(struct kthread *k);
  * Preemption support
  */
 
-extern void preempt_reenter(ucontext_t *c) __noreturn;
+extern void preempt_reenter(ucontext_t *c, size_t fpstate_offset) __noreturn;
 
 
 /*

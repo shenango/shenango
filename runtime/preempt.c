@@ -21,9 +21,12 @@ static void set_preempt_needed(void)
 }
 
 /* handles preemption signals from the iokernel */
-static void handle_sigusr1(int s, siginfo_t *si, void *ctx)
+static void handle_sigusr1(int s, siginfo_t *si, void *c)
 {
 	struct kthread *k = myk();
+	ucontext_t *ctx = c;
+
+	assert(ctx->uc_stack.ss_sp == (void*)signal_stack);
 
 	STAT(PREEMPTIONS)++;
 
@@ -36,8 +39,13 @@ static void handle_sigusr1(int s, siginfo_t *si, void *ctx)
 	/* save preempted state and park the kthread */
 	spin_lock(&k->lock);
 	k->preempted = true;
-	memcpy(&k->preempted_uctx, ctx, sizeof(k->preempted_uctx));
+	memcpy(&k->preempted_uctx, ctx, sizeof(*ctx));
 	k->preempted_th = thread_self();
+
+	assert((uintptr_t)ctx->uc_mcontext.fpregs >= (uintptr_t)ctx);
+	assert((uintptr_t)ctx->uc_mcontext.fpregs < (uintptr_t)ctx + sizeof(*ctx));
+	k->fpstate_offset = (uintptr_t)ctx->uc_mcontext.fpregs - (uintptr_t)ctx;
+
 	kthread_park(false);
 
 	/* check if no other kthread stole our preempted work */
@@ -49,7 +57,7 @@ static void handle_sigusr1(int s, siginfo_t *si, void *ctx)
 
 	/* otherwise our context is executing elsewhere, return to scheduler */
 	spin_unlock(&k->lock);
-	sched_make_uctx((ucontext_t *)ctx);
+	sched_make_uctx(ctx);
 	preempt_disable();
 }
 
@@ -67,24 +75,21 @@ void preempt(void)
  * preempt_reenter - jump back into a thread context that was preempted
  * @c: the ucontext of the thread
  */
-void preempt_reenter(ucontext_t *c)
+void preempt_reenter(ucontext_t *c, size_t fpstate_offset)
 {
-	sigset_t set;
-	int ret;
 
-	/*
-	 * Temporarily mask SIGUSR1 to prevent preemption while loading
-	 * the ucontext. It will get unmasked by setcontext().
-	 */
-	sigemptyset(&set);
-	sigaddset(&set, SIGUSR1);
-	if (unlikely(pthread_sigmask(SIG_BLOCK, &set, NULL) < 0))
-		log_err_ratelimited("preempt: couldn't mask SIGUSR1");
+	/* Re-arm with the correct local signal stack */
+	c->uc_stack.ss_sp = (void*)signal_stack;
+	c->uc_stack.ss_size =  sizeof(signal_stack->usable);
+	c->uc_stack.ss_flags = 0;
+
+	/* Verify a few assumptions made in __jmp_restore_sigctx */
+	BUILD_ASSERT(sizeof(ucontext_t) == 936);
+	BUILD_ASSERT(offsetof(ucontext_t, uc_mcontext) + offsetof(mcontext_t, fpregs) == 224);
 
 	preempt_enable();
-	ret = setcontext(c);
+	__jmp_restore_sigctx(c, fpstate_offset);
 
-	BUG_ON(ret != 0);
 	unreachable();
 }
 

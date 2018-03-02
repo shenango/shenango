@@ -24,6 +24,8 @@ __thread thread_t *__self;
 static __thread void *runtime_stack;
 /* a pointer to the bottom of the per-kthread (TLS) runtime stack */
 static __thread void *runtime_stack_base;
+/* a pointer to the per-kthread signal stack */
+__thread struct stack *signal_stack;
 
 /* fast allocation of struct thread */
 static struct slab thread_slab;
@@ -115,6 +117,7 @@ static void drain_overflow(struct kthread *l)
 
 static bool steal_work(struct kthread *l, struct kthread *r)
 {
+	size_t fpstate_offset;
 	ucontext_t uctx;
 	thread_t *th;
 	uint32_t i, avail, rq_tail;
@@ -132,13 +135,14 @@ static bool steal_work(struct kthread *l, struct kthread *r)
 	}
 
 	/* resume execution of a preempted thread */
-	if (r->preempted && false) {
+	if (r->preempted) {
 		__self = r->preempted_th;
 		r->preempted = false;
 		memcpy(&uctx, &r->preempted_uctx, sizeof(uctx));
+		fpstate_offset = r->fpstate_offset;
 		spin_unlock(&r->lock);
 		spin_unlock(&l->lock);
-		preempt_reenter(&uctx);
+		preempt_reenter(&uctx, fpstate_offset);
 
 		/* preempt_reenter() doesn't return */
 		unreachable();
@@ -578,11 +582,9 @@ void sched_start(void)
  */
 void sched_make_uctx(ucontext_t *c)
 {
-	c->uc_stack.ss_sp = runtime_stack_base;
-	c->uc_stack.ss_size = (uintptr_t)runtime_stack -
-			      (uintptr_t)runtime_stack_base;
-	assert(c->uc_stack.ss_size <= RUNTIME_STACK_SIZE);
-	makecontext(c, schedule, 0);
+	c->uc_mcontext.gregs[REG_RIP] = (uintptr_t)schedule;
+	c->uc_mcontext.gregs[REG_RSP] = (uintptr_t)runtime_stack;
+	c->uc_link = 0;
 }
 
 static void runtime_top_of_stack(void)
@@ -597,7 +599,7 @@ static void runtime_top_of_stack(void)
  */
 int sched_init_thread(void)
 {
-	struct stack *s, *ss;
+	struct stack *s;
 	stack_t new_stack, old_stack;
 
 	tcache_init_perthread(thread_tcache, &perthread_get(thread_pt));
@@ -609,12 +611,12 @@ int sched_init_thread(void)
 	runtime_stack_base = (void *)s;
 	runtime_stack = (void *)stack_init_to_rsp(s, runtime_top_of_stack); 
 
-	ss = stack_alloc();
-	if (!ss)
+	signal_stack = stack_alloc();
+	if (!signal_stack)
 		return -ENOMEM;
 
-	new_stack.ss_sp = (void *)ss;
-	new_stack.ss_size = sizeof(ss->usable);
+	new_stack.ss_sp = (void *)signal_stack;
+	new_stack.ss_size = sizeof(signal_stack->usable);
 	new_stack.ss_flags =  0;
 
 	return sigaltstack(&new_stack, &old_stack);
