@@ -230,6 +230,7 @@ int ioqueues_register_iokernel(void)
 
 	hdr->sched_cfg.priority = SCHED_PRIORITY_NORMAL;
 	hdr->sched_cfg.max_cores = iok.thread_count;
+	hdr->sched_cfg.guaranteed_cores = guaranteedks;
 	hdr->sched_cfg.congestion_latency_us = 0;
 	hdr->sched_cfg.scaleout_latency_us = 0;
 

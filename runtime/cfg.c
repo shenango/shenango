@@ -114,6 +114,25 @@ static int parse_runtime_spinning_kthreads(const char *name, const char *val)
 	return 0;
 }
 
+static int parse_runtime_guaranteed_kthreads(const char *name, const char *val)
+{
+	long tmp;
+	int ret;
+
+	ret = str_to_long(val, &tmp);
+	if (ret)
+		return ret;
+
+	if (tmp < 1 || tmp > cpu_count - 1) {
+		log_err("invalid number of guaranteed kthreads requested, '%ld'", tmp);
+		log_err("must be > 0 and < %d (number of CPUs)", cpu_count);
+		return -EINVAL;
+	}
+
+	guaranteedks = tmp;
+	return 0;
+}
+
 static int parse_mac_address(const char *name, const char *val)
 {
 	int i;
@@ -163,6 +182,8 @@ static const struct cfg_handler cfg_handlers[] = {
 	{ "host_mac", parse_mac_address, false },
 	{ "runtime_kthreads", parse_runtime_kthreads, true },
 	{ "runtime_spinning_kthreads", parse_runtime_spinning_kthreads, false },
+	{ "runtime_guaranteed_kthreads", parse_runtime_guaranteed_kthreads,
+			false },
 };
 
 /**
@@ -221,6 +242,14 @@ int cfg_load(const char *path)
 			ret = -EINVAL;
 			goto out;
 		}
+	}
+
+	if (guaranteedks > maxks) {
+		log_err("invalid number of guaranteed kthreads requested, '%ld'",
+				guaranteedks);
+		log_err("must be <= %d (number of kthreads)", maxks);
+		ret = -EINVAL;
+		goto out;
 	}
 
 out:

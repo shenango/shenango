@@ -34,6 +34,7 @@ enum {
 struct sched_spec {
 	unsigned int		priority;
 	unsigned int		max_cores;
+	unsigned int		guaranteed_cores;
 	unsigned int		congestion_latency_us;
 	unsigned int		scaleout_latency_us;
 };
