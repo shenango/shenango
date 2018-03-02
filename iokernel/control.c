@@ -81,6 +81,7 @@ static struct proc *control_create_proc(mem_key_t key, size_t len, pid_t pid,
 		goto fail_free_proc;
 	p->mac = hdr.mac;
 	p->pending_timer = false;
+	p->uniqid = rdtsc();
 
 	/* initialize the threads */
 	for (i = 0; i < hdr.thread_count; i++) {

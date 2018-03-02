@@ -73,6 +73,9 @@ struct proc {
 	uint64_t		deadline_us;
 	unsigned int		timer_idx;
 
+	/* Unique identifier -- never recycled across runtimes*/
+	uintptr_t			uniqid;
+
 	/* table of physical addresses for shared memory */
 	physaddr_t		page_paddrs[];
 };

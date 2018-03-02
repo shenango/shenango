@@ -1,27 +1,29 @@
-From 5a4ffe7ea28c2f7a383fbb41711a698c6ff2d702 Mon Sep 17 00:00:00 2001
+From cbc5e1d4d611dfb24ed1f444ed5a2acad1aaded2 Mon Sep 17 00:00:00 2001
 From: Amy Ousterhout <aousterh@mit.edu>
 Date: Wed, 28 Feb 2018 20:12:41 -0500
 Subject: [PATCH] enable mlx4 tx memory registration using explicit start and
  end addrs specified in mbufs, instead of inferring these from mempools
 
+Detect/handle reuse of shared memory virtual addresses
 ---
- drivers/net/mlx4/mlx4.h      |  9 ++++++-
- drivers/net/mlx4/mlx4_mr.c   | 64 +++++++++++++++++++++++++++++++++++++++++---
+ drivers/net/mlx4/mlx4.h      | 10 ++++++-
+ drivers/net/mlx4/mlx4_mr.c   | 70 ++++++++++++++++++++++++++++++++++++++++++--
  drivers/net/mlx4/mlx4_rxq.c  |  2 +-
  drivers/net/mlx4/mlx4_rxtx.c |  2 +-
- drivers/net/mlx4/mlx4_rxtx.h | 37 +++++++++++++++++++++++++
- 5 files changed, 108 insertions(+), 6 deletions(-)
+ drivers/net/mlx4/mlx4_rxtx.h | 46 +++++++++++++++++++++++++++++
+ 5 files changed, 124 insertions(+), 6 deletions(-)
 
 diff --git a/drivers/net/mlx4/mlx4.h b/drivers/net/mlx4/mlx4.h
-index 19c8a22..7410b85 100644
+index 19c8a223d..869610981 100644
 --- a/drivers/net/mlx4/mlx4.h
 +++ b/drivers/net/mlx4/mlx4.h
-@@ -156,9 +156,16 @@ int mlx4_rx_intr_enable(struct rte_eth_dev *dev, uint16_t idx);
+@@ -156,9 +156,17 @@ int mlx4_rx_intr_enable(struct rte_eth_dev *dev, uint16_t idx);
  
  /* mlx4_mr.c */
  
 -struct mlx4_mr *mlx4_mr_get(struct priv *priv, struct rte_mempool *mp);
 +struct mem_info {
++	uintptr_t uniqid;
 +	uintptr_t start_addr;
 +	uintptr_t end_addr;
 +};
@@ -35,7 +37,7 @@ index 19c8a22..7410b85 100644
  
  #endif /* RTE_PMD_MLX4_H_ */
 diff --git a/drivers/net/mlx4/mlx4_mr.c b/drivers/net/mlx4/mlx4_mr.c
-index 9a1e4de..d46622d 100644
+index 9a1e4de3d..d2e2462c6 100644
 --- a/drivers/net/mlx4/mlx4_mr.c
 +++ b/drivers/net/mlx4/mlx4_mr.c
 @@ -120,11 +120,14 @@ mlx4_check_mempool(struct rte_mempool *mp, uintptr_t *start, uintptr_t *end)
@@ -80,7 +82,7 @@ index 9a1e4de..d46622d 100644
  	if (unlikely(mr == NULL)) {
  		DEBUG("%p: unable to configure MR, mlx4_mr_get() failed",
  		      (void *)txq);
-@@ -264,3 +275,50 @@ mlx4_txq_add_mr(struct txq *txq, struct rte_mempool *mp, uint32_t i)
+@@ -264,3 +275,56 @@ mlx4_txq_add_mr(struct txq *txq, struct rte_mempool *mp, uint32_t i)
  	      (void *)txq, mp->name, (void *)mp, txq->mp2mr[i].lkey);
  	return txq->mp2mr[i].lkey;
  }
@@ -105,6 +107,12 @@ index 9a1e4de..d46622d 100644
 +{
 +	struct mlx4_mr *mr;
 +
++	if (i != RTE_DIM(txq->mp2mr) && txq->id2mr[i].id != 0) {
++		/* Need to replace an existing entry. */
++		DEBUG("%p: replacing possibly stale MR", (void *)txq);
++		mlx4_mr_put(txq->id2mr[i].mr); // Hopefully refcnt is 1
++	}
++
 +	/* Add a new entry, register MR first. */
 +	DEBUG("%p: discovered new mem info", (void *)txq);
 +	mr = mlx4_mr_get(txq->priv, NULL, m);
@@ -123,7 +131,7 @@ index 9a1e4de..d46622d 100644
 +			(sizeof(txq->id2mr) - sizeof(txq->id2mr[0])));
 +	}
 +	/* Store the new entry. */
-+	txq->id2mr[i].id = m->start_addr;
++	txq->id2mr[i].id = m->uniqid;
 +	txq->id2mr[i].mr = mr;
 +	txq->id2mr[i].lkey = mr->lkey;
 +	DEBUG("%p: new MR lkey for mem_info %p %p: 0x%08" PRIu32,
@@ -132,7 +140,7 @@ index 9a1e4de..d46622d 100644
 +	return txq->id2mr[i].lkey;
 +}
 diff --git a/drivers/net/mlx4/mlx4_rxq.c b/drivers/net/mlx4/mlx4_rxq.c
-index 7a036ed..f80c706 100644
+index 7a036ed83..f80c70616 100644
 --- a/drivers/net/mlx4/mlx4_rxq.c
 +++ b/drivers/net/mlx4/mlx4_rxq.c
 @@ -848,7 +848,7 @@ mlx4_rx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
@@ -145,7 +153,7 @@ index 7a036ed..f80c706 100644
  		ERROR("%p: MR creation failure: %s",
  		      (void *)dev, strerror(rte_errno));
 diff --git a/drivers/net/mlx4/mlx4_rxtx.c b/drivers/net/mlx4/mlx4_rxtx.c
-index 8ca8b77..ae86d5f 100644
+index 8ca8b77cc..ae86d5f90 100644
 --- a/drivers/net/mlx4/mlx4_rxtx.c
 +++ b/drivers/net/mlx4/mlx4_rxtx.c
 @@ -611,7 +611,7 @@ mlx4_tx_burst(void *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
@@ -158,7 +166,7 @@ index 8ca8b77..ae86d5f 100644
  				/* MR does not exist. */
  				DEBUG("%p: unable to get MP <-> MR association",
 diff --git a/drivers/net/mlx4/mlx4_rxtx.h b/drivers/net/mlx4/mlx4_rxtx.h
-index c12bd39..706f26e 100644
+index c12bd39a9..e7645e932 100644
 --- a/drivers/net/mlx4/mlx4_rxtx.h
 +++ b/drivers/net/mlx4/mlx4_rxtx.h
 @@ -113,6 +113,11 @@ struct txq {
@@ -166,17 +174,19 @@ index c12bd39..706f26e 100644
  		uint32_t lkey; /**< mr->lkey copy. */
  	} mp2mr[MLX4_PMD_TX_MP_CACHE]; /**< MP to MR translation table. */
 +	struct {
-+		uintptr_t id; /**< id of mem region (start addr for now). */
++		uintptr_t id; /**< id of mem region (proc->uniqid). */
 +		struct mlx4_mr *mr; /**< Memory region. */
 +		uint32_t lkey; /**< mr->lkey copy. */
 +	} id2mr[MLX4_PMD_TX_MP_CACHE]; /**< id to MR translation table. */
  	struct priv *priv; /**< Back pointer to private data. */
  	unsigned int socket; /**< CPU socket ID for allocations. */
  	struct ibv_cq *cq; /**< Completion queue. */
-@@ -190,4 +195,36 @@ mlx4_txq_mp2mr(struct txq *txq, struct rte_mempool *mp)
+@@ -190,4 +195,45 @@ mlx4_txq_mp2mr(struct txq *txq, struct rte_mempool *mp)
  	return mlx4_txq_add_mr(txq, mp, i);
  }
  
++#define __max(x,y) ((x) > (y) ? (x) : (y))
++#define __min(x,y) ((x) < (y) ? (x) : (y))
 +/**
 + * Get memory region (MR) <-> buffer association from txq->id2mr[].
 + * Call mlx4_txq_add_mr() if buffer's memory region is not registered yet.
@@ -201,15 +211,22 @@ index c12bd39..706f26e 100644
 +			/* Unknown region, add a new MR for it. */
 +			break;
 +		}
-+		if (txq->id2mr[i].id == m->start_addr) {
++		if (txq->id2mr[i].id == m->uniqid) {
 +			/* Found region. */
 +			return txq->id2mr[i].lkey;
++		}
++		if (__max(txq->id2mr[i].mr->start, m->start_addr) <=
++					__min(txq->id2mr[i].mr->end, m->end_addr)) {
++			/* Recreate lkey/mr for previously mapped regions */
++			return mlx4_txq_add_mr_from_mem_info(txq, m, i);
 +		}
 +	}
 +	return mlx4_txq_add_mr_from_mem_info(txq, m, i);
 +}
 +
++#undef __max
++#undef __min
  #endif /* MLX4_RXTX_H_ */
 -- 
-2.7.4
+2.14.1
 
