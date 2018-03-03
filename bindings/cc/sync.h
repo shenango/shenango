@@ -8,6 +8,8 @@ extern "C" {
 #include <runtime/sync.h>
 }
 
+namespace rt {
+
 // Spin lock support.
 class Spin {
  public:
@@ -123,3 +125,5 @@ class WaitGroup {
   WaitGroup(const WaitGroup&) = delete;
   WaitGroup& operator=(const WaitGroup&) = delete;
 };
+
+} // namespace rt

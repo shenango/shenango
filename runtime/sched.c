@@ -14,6 +14,7 @@
 #include <base/tcache.h>
 #include <base/slab.h>
 #include <base/log.h>
+#include <runtime/sync.h>
 #include <runtime/thread.h>
 
 #include "defs.h"
@@ -349,8 +350,7 @@ static void thread_finish_park_and_unlock_np(unsigned long data)
 
 	assert(myth->state == THREAD_STATE_RUNNING);
 	myth->state = THREAD_STATE_SLEEPING;
-	spin_unlock(lock);
-	preempt_enable();
+	spin_unlock_np(lock);
 
 	schedule();
 }

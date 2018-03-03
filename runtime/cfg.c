@@ -245,7 +245,7 @@ int cfg_load(const char *path)
 	}
 
 	if (guaranteedks > maxks) {
-		log_err("invalid number of guaranteed kthreads requested, '%ld'",
+		log_err("invalid number of guaranteed kthreads requested, '%d'",
 				guaranteedks);
 		log_err("must be <= %d (number of kthreads)", maxks);
 		ret = -EINVAL;

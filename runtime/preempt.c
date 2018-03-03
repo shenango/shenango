@@ -77,6 +77,16 @@ void preempt(void)
  */
 void preempt_reenter(ucontext_t *c, size_t fpstate_offset)
 {
+	sigset_t set;
+
+	/*
+	 * Temporarily mask SIGUSR1 to prevent preemption while loading
+	 * the ucontext. It will get unmasked by __jmp_restore_sigctx().
+	 */
+	sigemptyset(&set);
+	sigaddset(&set, SIGUSR1);
+	if (unlikely(pthread_sigmask(SIG_BLOCK, &set, NULL) < 0))
+		WARN();
 
 	/* Re-arm with the correct local signal stack */
 	c->uc_stack.ss_sp = (void*)signal_stack;
@@ -85,7 +95,8 @@ void preempt_reenter(ucontext_t *c, size_t fpstate_offset)
 
 	/* Verify a few assumptions made in __jmp_restore_sigctx */
 	BUILD_ASSERT(sizeof(ucontext_t) == 936);
-	BUILD_ASSERT(offsetof(ucontext_t, uc_mcontext) + offsetof(mcontext_t, fpregs) == 224);
+	BUILD_ASSERT(offsetof(ucontext_t, uc_mcontext) +
+		     offsetof(mcontext_t, fpregs) == 224);
 
 	preempt_enable();
 	__jmp_restore_sigctx(c, fpstate_offset);

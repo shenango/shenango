@@ -142,7 +142,7 @@ __jmp_runtime_nosave:
 __jmp_restore_sigctx:
 	/* Allocate stack space so fpstate ptr is 64 byte aligned */
 	subq $0x2c8, %rsp               # allocate last 712 bytes of ucontext_t
-	andq $0xffffffffffffff40,  %rsp # round down to multiple of 64
+	andq $0xffffffffffffffc0,  %rsp # round down to multiple of 64
 	subq $0xe0, %rsp                # allocate first 224 bytes of ucontext_t
 
 	/* Calculate address of actual fpstate buffer inside copied ucontext_t */
