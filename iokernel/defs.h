@@ -2,11 +2,13 @@
  * defs.h - shared definitions local to the iokernel
  */
 
+#include <base/stddef.h>
 #include <base/bitmap.h>
 #include <base/gen.h>
 #include <base/lrpc.h>
 #include <base/mem.h>
-#include <base/stddef.h>
+#undef LIST_HEAD /* hack to deal with DPDK being annoying */
+#include <base/list.h>
 #include <iokernel/control.h>
 #include <net/ethernet.h>
 
@@ -53,7 +55,13 @@ struct proc {
 	struct shm_region	region;
 	bool			removed;
 	struct ref		ref;
-	bool			kill; /* the proc is being torn down */
+	unsigned int		kill:1;       /* the proc is being torn down */
+	unsigned int		overloaded:1; /* the proc needs more cores */
+	unsigned int		bursting:1;   /* the proc is using past resv. */
+
+	/* instrusive list links */
+	struct list_node	overloaded_link;
+	struct list_node	bursting_link;
 
 	/* scheduler data */
 	struct sched_spec	sched_cfg;
@@ -74,7 +82,7 @@ struct proc {
 	unsigned int		timer_idx;
 
 	/* Unique identifier -- never recycled across runtimes*/
-	uintptr_t			uniqid;
+	uintptr_t		uniqid;
 
 	/* table of physical addresses for shared memory */
 	physaddr_t		page_paddrs[];

@@ -17,6 +17,97 @@ struct core_assignments core_assign;
 unsigned int nrts = 0;
 struct thread *ts[NCPU];
 
+/* maps each cpu number to the number of its hyperthread buddy */
+static int cpu_siblings[NCPU];
+
+/**
+ * cpu_to_sibling_cpu - gets the sibling (hyperthread pair) of a cpu
+ * @cpu: the number of the cpu
+ *
+ * Returns the number of the sibling cpu.
+ */
+static inline int cpu_to_sibling_cpu(int cpu)
+{
+	assert(cpu < cpu_count);
+	return cpu_siblings[cpu];
+}
+
+/* a list of procs that currently require more cores */
+static LIST_HEAD(overloaded_procs);
+
+/**
+ * proc_set_overloaded - marks a process as overloaded
+ * p: the process to mark as overloaded
+ */
+static inline void proc_set_overloaded(struct proc *p)
+{
+	if (p->overloaded)
+		return;
+
+	list_add(&overloaded_procs, &p->overloaded_link);
+	p->overloaded = true;
+}
+
+/**
+ * proc_clear_overloaded - unmarks a process as overloaded
+ * @p: the process to unmark as overloaded
+ */
+static inline void proc_clear_overloaded(struct proc *p)
+{
+	if (!p->overloaded)
+		return;
+
+	list_del_from(&overloaded_procs, &p->overloaded_link);
+	p->overloaded = false;
+}
+
+/**
+ * proc_is_overloaded - returns true if the process is overloaded
+ * @p: the process to test if overloaded
+ */
+static inline bool proc_is_overloaded(struct proc *p)
+{
+	return p->overloaded;
+}
+
+/* a list of procs that are using more cores than they have reserved */
+static LIST_HEAD(bursting_procs);
+
+/**
+ * proc_set_overloaded - marks a process as bursting
+ * p: the process to mark as bursting
+ */
+static inline void proc_set_bursting(struct proc *p)
+{
+	if (p->bursting)
+		return;
+
+	list_add(&bursting_procs, &p->bursting_link);
+	p->bursting = true;
+}
+
+/**
+ * proc_clear_bursting - unmarks a process as bursting
+ * @p: the process to unmark as bursting
+ */
+static inline void proc_clear_bursting(struct proc *p)
+{
+	if (!p->bursting)
+		return;
+
+	list_del_from(&bursting_procs, &p->bursting_link);
+	p->bursting = false;
+}
+
+/**
+ * proc_is_bursting - returns true if the process is bursting
+ * @p: the process to test if bursting
+ */
+static inline bool proc_is_bursting(struct proc *p)
+{
+	return p->bursting;
+}
+
 /*
  * Debugging function that logs how each core is currently being used.
  */
@@ -208,6 +299,9 @@ void cores_init_proc(struct proc *p)
 		}
 	}
 
+	p->bursting = false;
+	p->overloaded = false;
+
 	/* wake the first kthread so the runtime can run the main_fn */
 	cores_wake_kthread(p);
 }
@@ -218,6 +312,9 @@ void cores_init_proc(struct proc *p)
 void cores_free_proc(struct proc *p)
 {
 	int i;
+
+	proc_clear_bursting(p);
+	proc_clear_overloaded(p);
 
 	bitmap_for_each_cleared(p->available_threads, p->thread_count, i)
 		cores_park_kthread(&p->threads[i], true);
@@ -288,37 +385,59 @@ void cores_adjust_assignments()
  */
 int cores_init(void)
 {
-	int i;
-
-	/* assign core 0 to linux and the control thread */
-	core_assign.linux_core = 0;
-	core_assign.ctrl_core = 0;
+	int i, j;
 
 	/* assign first non-zero core on socket 0 to the dataplane thread */
 	for (i = 1; i < cpu_count; i++) {
 		if (cpu_info_tbl[i].package == 0)
 			break;
 	}
+	if (i == cpu_count)
+		panic("cores: couldn't find any cores on package 0");
 	core_assign.dp_core = i;
+
+	/* parse hyperthread information */
+	for (i = 0; i < cpu_count; i++) {
+		int siblings = 0;
+
+		bitmap_for_each_set(cpu_info_tbl[i].thread_siblings_mask,
+				    cpu_count, j) {
+			if (i == j)
+				continue;
+			if (siblings++) {
+				panic("cores: can't support more than two "
+				      "hyperthreads per core.");
+			}
+
+			cpu_siblings[i] = j;
+		}
+
+		if (siblings == 0)
+			panic("cores: must have hyperthreads enabled");
+	}
+
+	/* assign the dataplane's sibling to linux and the control thread */
+	core_assign.linux_core = cpu_to_sibling_cpu(core_assign.dp_core);
+	core_assign.ctrl_core = cpu_to_sibling_cpu(core_assign.dp_core);
 
 	/* mark all cores as unavailable */
 	bitmap_init(avail_cores, cpu_count, false);
 
 	/* find cores on socket 0 that are not already in use */
 	for (i = 0; i < cpu_count; i++) {
-		if (i == core_assign.linux_core || i == core_assign.ctrl_core
-				|| i == core_assign.dp_core)
+		if (i == core_assign.linux_core ||
+		    i == core_assign.ctrl_core ||
+		    i == core_assign.dp_core) {
 			continue;
+		}
 
 		if (cpu_info_tbl[i].package == 0)
 			bitmap_set(avail_cores, i);
 	}
 
-	log_debug("cores: linux on core %d, control on %d, dataplane on %d",
-			core_assign.linux_core, core_assign.ctrl_core,
-			core_assign.dp_core);
-	bitmap_for_each_set(avail_cores, cpu_count, i)
-		log_debug("cores: runtime core: %d", i);
+	log_info("cores: linux on core %d, control on %d, dataplane on %d",
+		 core_assign.linux_core, core_assign.ctrl_core,
+		 core_assign.dp_core);
 
 	return 0;
 }

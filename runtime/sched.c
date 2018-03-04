@@ -483,7 +483,8 @@ thread_t *thread_create(thread_fn_t fn, void *arg)
  * thread_create_with_buf - creates a new thread with space for a buffer on the
  * stack
  * @fn: a function pointer to the starting method of the thread
- * @arg: an argument passed to @fn
+ * @buf: a pointer to the stack allocated buffer (passed as arg too)
+ * @buf_len: the size of the stack allocated buffer
  *
  * Returns 0 if successful, otherwise -ENOMEM if out of memory.
  */
