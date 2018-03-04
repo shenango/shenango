@@ -16,22 +16,25 @@ void BenchSpawnJoin() {
   }
 }
 
-void BenchContendedMutex() {
+void BenchUncontendedMutex() {
   std::mutex m;
-  unsigned long foo = 0;
+  volatile unsigned long foo = 0;
 
-  auto th = std::thread([&](){
+  for (int i = 0; i < kMeasureRounds; ++i) {
+    std::unique_lock<std::mutex> l(m);
+    foo++;
+  }
+}
+
+void BenchYield() {
+  auto th = std::thread([](){
     for (int i = 0; i < kMeasureRounds; ++i) {
-      m.lock();
-      foo++;
-      m.unlock();
+      std::this_thread::yield();
     }
   });
 
   for (int i = 0; i < kMeasureRounds; ++i) {
-    m.lock();
-    foo++;
-    m.unlock();
+    std::this_thread::yield();
   }
 
   th.join();
@@ -77,9 +80,15 @@ void MainHandler(void *arg) {
 	std::chrono::duration_cast<us>(finish - start));
 
   start = std::chrono::steady_clock::now();
-  BenchContendedMutex();
+  BenchUncontendedMutex();
   finish = std::chrono::steady_clock::now();
-  PrintResult("ContendedMutex",
+  PrintResult("UncontendedMutex",
+    std::chrono::duration_cast<us>(finish - start));
+
+  start = std::chrono::steady_clock::now();
+  BenchYield();
+  finish = std::chrono::steady_clock::now();
+  PrintResult("Yield",
     std::chrono::duration_cast<us>(finish - start));
 
   start = std::chrono::steady_clock::now();
