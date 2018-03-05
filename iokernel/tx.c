@@ -173,6 +173,7 @@ bool tx_burst(void)
 	struct thread *threads[IOKERNEL_TX_BURST_SIZE];
 	int i, j, ret;
 	static unsigned int pos = 0, n_pkts = 0, n_bufs = 0;
+	struct thread *t;
 
 	/*
 	 * Poll each kthread in each runtime until all have been polled or we
@@ -180,13 +181,14 @@ bool tx_burst(void)
 	 */
 	for (i = 0; i < nrts; i++) {
 		unsigned int idx = (pos + i) % nrts;
+		t = ts[idx];
 
 		if (n_pkts >= IOKERNEL_TX_BURST_SIZE)
 			goto full;
-		ret = tx_drain_queue(ts[idx], IOKERNEL_TX_BURST_SIZE - n_pkts,
+		ret = tx_drain_queue(t, IOKERNEL_TX_BURST_SIZE - n_pkts,
 				     &hdrs[n_pkts]);
 		for (j = n_pkts; j < n_pkts + ret; j++)
-			threads[j] = ts[idx];
+			threads[j] = t;
 		n_pkts += ret;
 	}
 
@@ -222,10 +224,8 @@ full:
 	/* apply back pressure if the NIC TX ring was full */
 	if (unlikely(ret < n_pkts)) {
 		n_pkts -= ret;
-		for (i = 0; i < n_pkts; i++) {
+		for (i = 0; i < n_pkts; i++)
 			bufs[i] = bufs[ret + i];
-			threads[i] = threads[ret + i];
-		}
 	} else {
 		n_pkts = 0;
 	}

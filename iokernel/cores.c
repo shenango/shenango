@@ -323,60 +323,66 @@ void cores_free_proc(struct proc *p)
 /*
  * Rebalances the allocation of cores to runtimes. Grants more cores to
  * runtimes that would benefit from them.
- * TODO: if all cores are in use, revoke cores from runtimes that are of lower
- * priority.
  */
 void cores_adjust_assignments()
 {
+	struct proc *p, *next;
 	struct thread *th;
-	struct proc *p;
 	uint32_t send_tail, len;
-	int core, i;
+	int i, j;
 
-	/* check for available cores */
-	core = bitmap_find_next_set(avail_cores, cpu_count, 0);
-	if (core == cpu_count)
-		return; /* no cores available */
+	/* determine which procs need more cores to meet their guarantees, and
+	   which procs want more burstable cores */
+	for (i = 0; i < dp.nr_clients; i++) {
+		p = dp.clients[i];
 
-	for (i = 0; i < nrts; i++) {
-		th = ts[i];
-		p = th->p;
+		proc_clear_overloaded(p);
 
-		if (th->parked)
-			continue;
+		for (j = 0; j < p->active_thread_count; j++) {
+			th = p->active_threads[j];
 
-		/* check if runtime is already using max kthreads */
-		if (p->active_thread_count == p->thread_count)
-			continue;
+			/* check if runtime is already using max kthreads */
+			if (p->active_thread_count == p->thread_count)
+				continue;
 
-		/* check if runqueue remained non-empty */
-		if (gen_in_same_gen(&th->rq_gen))
-			goto wake_kthread;
+			/* check if runqueue remained non-empty */
+			if (gen_in_same_gen(&th->rq_gen))
+				goto request_kthread;
 
-		/* check if rx queue remained non-empty or overflow */
-		send_tail = lrpc_poll_send_tail(&th->rxq);
-		len = lrpc_get_cached_length(&th->rxq);
-		if (len > 0 && (len >= IOKERNEL_RX_WAKE_THRESH ||
-				send_tail == th->last_send_tail)) {
+			/* check if rx queue remained non-empty or overflow */
+			send_tail = lrpc_poll_send_tail(&th->rxq);
+			len = lrpc_get_cached_length(&th->rxq);
+			if (len > 0 && (len >= IOKERNEL_RX_WAKE_THRESH ||
+						send_tail == th->last_send_tail)) {
+				th->last_send_tail = send_tail;
+				goto request_kthread;
+			}
 			th->last_send_tail = send_tail;
-			goto wake_kthread;
-		}
-		th->last_send_tail = send_tail;
 
-		/* TODO: check on timers */
+			/* TODO: check on timers */
 
-		continue; /* no need to wake a kthread */
+			continue; /* no need to wake a kthread */
 
-	wake_kthread:
-		if (!cores_wake_kthread(p))
+		request_kthread:
+			if (p->active_thread_count <
+				p->sched_cfg.guaranteed_cores) {
+				if (!cores_wake_kthread(p)) {
+					/* we should always have enough cores to
+					 * meet guarantees */
+					BUG();
+				}
+			} else
+				proc_set_overloaded(p);
 			break;
+		}
+	}
 
-		/*
-		 * TODO: temporary hack. Wake just one thread. In reality, we
-		 * want to wake one thread per process but still waiting for
-		 * some infrastructure code first.
-		 */
-		break;
+	/* grant cores to procs that are bursting until we run out of cores */
+	list_for_each_safe(&overloaded_procs, p, next, overloaded_link) {
+		if (cores_wake_kthread(p))
+			proc_clear_overloaded(p);
+		else
+			break; /* no more idle cores */
 	}
 }
 
