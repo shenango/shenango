@@ -19,14 +19,20 @@ endif
 # handy for debugging
 print-%  : ; @echo $* = $($*)
 
+fake_worker_src = fake_worker.cc
+fake_worker_obj = $(fake_worker_src:.cc=.o)
+
 tbench_src = tbench.cc
 tbench_obj = $(tbench_src:.cc=.o)
 
 tbench_linux_src = tbench_linux.cc
 tbench_linux_obj = $(tbench_linux_src:.cc=.o)
 
+callibrate_src = callibrate.cc
+callibrate_obj = $(callibrate_src:.cc=.o)
+
 # must be first
-all: tbench tbench_linux
+all: tbench tbench_linux callibrate
 
 tbench: $(tbench_obj)
 	$(LD) -o $@ $(LDFLAGS) $(tbench_obj) $(CXXPATH)/librt++.a \
@@ -36,8 +42,11 @@ tbench: $(tbench_obj)
 tbench_linux: $(tbench_linux_obj)
 	$(LD) -o $@ $(LDFLAGS) $(tbench_linux_obj) -lpthread
 
+callibrate: $(fake_worker_obj) $(callibrate_obj)
+	$(LD) -o $@ $(LDFLAGS) $(fake_worker_obj) $(callibrate_obj) -lpthread
+
 # general build rules for all targets
-src = $(tbench_src) $(tbench_linux_src)
+src = $(fake_worker_src) $(tbench_src) $(tbench_linux_src) $(callibrate_src)
 obj = $(src:.cc=.o)
 dep = $(obj:.o=.d)
 
@@ -54,4 +63,4 @@ endif
 
 .PHONY: clean
 clean:
-	rm -f $(obj) $(dep) tbench tbench_linux
+	rm -f $(obj) $(dep) tbench tbench_linux callibrate
