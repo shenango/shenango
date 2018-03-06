@@ -175,6 +175,10 @@ static inline void thread_reserve(struct thread *th, unsigned int core)
 	p->threads[kthread].core = core;
 	p->active_threads[p->active_thread_count] = th;
 	th->at_idx = p->active_thread_count++;
+	list_del_from(&p->idle_threads, &th->idle_link);
+
+	if (p->active_thread_count > p->sched_cfg.guaranteed_cores)
+		proc_is_bursting(p);
 }
 
 /**
@@ -190,6 +194,10 @@ static inline void thread_cede(struct thread *th)
 	bitmap_set(p->available_threads, kthread);
 	p->active_threads[th->at_idx] = p->active_threads[--p->active_thread_count];
 	p->active_threads[th->at_idx]->at_idx = th->at_idx;
+	list_add(&p->idle_threads, &th->idle_link);
+
+	if (p->active_thread_count == p->sched_cfg.guaranteed_cores)
+		proc_clear_bursting(p);
 }
 
 /*
@@ -236,7 +244,8 @@ static inline int pick_core_for_proc(struct proc *p)
 {
 	int buddy_core, core;
 	int i;
-	struct thread *t, *buddy_t;
+	struct thread *t;
+	struct proc *buddy_proc, *core_proc;
 
 	/* try to allocate a hyperthread pair core */
 	for (i = 0; i < p->active_thread_count; i++) {
@@ -249,12 +258,19 @@ static inline int pick_core_for_proc(struct proc *p)
 		if (nr_avail_cores > 0)
 			continue;
 
-		buddy_t = core_history[buddy_core].current;
-		if (buddy_t != t
-				&& (buddy_t->p->active_thread_count
-						> buddy_t->p->sched_cfg.guaranteed_cores))
+		buddy_proc = core_history[buddy_core].current->p;
+		if (buddy_proc != p && proc_is_bursting(buddy_proc))
 			return buddy_core;
 	}
+
+	/* try the core that we most recently ran on */
+	t = list_top(&p->idle_threads, struct thread, idle_link);
+	core = t->core;
+	if (core_available(core))
+		return core;
+	core_proc = core_history[core].current->p;
+	if (core_proc != p && proc_is_bursting(core_proc))
+		return core;
 
 	/* pick the lowest available core */
 	core = bitmap_find_next_set(avail_cores, cpu_count, 0);
@@ -434,6 +450,7 @@ void cores_init_proc(struct proc *p)
 	 * themselves immediately */
 	p->active_thread_count = 0;
 	bitmap_init(p->available_threads, p->thread_count, true);
+	list_head_init(&p->idle_threads);
 	for (i = 0; i < p->thread_count; i++) {
 		ret = cores_pin_thread(p->threads[i].tid, core_assign.linux_core);
 		if (ret < 0) {
@@ -441,6 +458,12 @@ void cores_init_proc(struct proc *p)
 					p->threads[i].tid);
 			/* continue running but performance is unpredictable */
 		}
+
+		/* init core to 0 - this will result in incorrect cache locality
+		 * decisions at first but saves us from always checking if this thread
+		 * has run yet */
+		p->threads[i].core = 0;
+		list_add(&p->idle_threads, &p->threads[i].idle_link);
 	}
 
 	p->bursting = false;

@@ -42,12 +42,16 @@ struct thread {
 	int32_t			park_efd;
 	struct gen_num		rq_gen;
 	uint32_t		last_send_tail;
-	/* only valid if this thread's bit in available_threads is not set */
+	/* current or most recent core this thread ran on, depending on whether
+	 * this thread is parked or not */
 	unsigned int		core;
 	/* the @ts index (if active) */
 	unsigned int		ts_idx;
 	/* the proc->active_threads index (if active) */
 	unsigned int		at_idx;
+
+	/* list link for when idle */
+	struct list_node	idle_link;
 };
 
 struct proc {
@@ -59,7 +63,7 @@ struct proc {
 	unsigned int		overloaded:1; /* the proc needs more cores */
 	unsigned int		bursting:1;   /* the proc is using past resv. */
 
-	/* instrusive list links */
+	/* intrusive list links */
 	struct list_node	overloaded_link;
 	struct list_node	bursting_link;
 
@@ -72,6 +76,7 @@ struct proc {
 	struct thread		threads[NCPU];
 	struct thread		*active_threads[NCPU];
 	DEFINE_BITMAP(available_threads, NCPU);
+	struct list_head	idle_threads;
 
 	/* network data */
 	struct eth_addr		mac;
