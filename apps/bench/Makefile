@@ -31,8 +31,11 @@ tbench_linux_obj = $(tbench_linux_src:.cc=.o)
 callibrate_src = callibrate.cc
 callibrate_obj = $(callibrate_src:.cc=.o)
 
+stress_src = stress.cc
+stress_obj = $(stress_src:.cc=.o)
+
 # must be first
-all: tbench tbench_linux callibrate
+all: tbench tbench_linux callibrate stress
 
 tbench: $(tbench_obj)
 	$(LD) -o $@ $(LDFLAGS) $(tbench_obj) $(CXXPATH)/librt++.a \
@@ -45,8 +48,14 @@ tbench_linux: $(tbench_linux_obj)
 callibrate: $(fake_worker_obj) $(callibrate_obj)
 	$(LD) -o $@ $(LDFLAGS) $(fake_worker_obj) $(callibrate_obj) -lpthread
 
+stress: $(fake_worker_obj) $(stress_obj)
+	$(LD) -o $@ $(LDFLAGS) $(fake_worker_obj) $(stress_obj) \
+        $(CXXPATH)/librt++.a $(BASEPATH)/libruntime.a $(BASEPATH)/libnet.a \
+        $(BASEPATH)/libbase.a -lpthread
+
 # general build rules for all targets
 src = $(fake_worker_src) $(tbench_src) $(tbench_linux_src) $(callibrate_src)
+src += $(stress_src)
 obj = $(src:.cc=.o)
 dep = $(obj:.o=.d)
 
@@ -63,4 +72,4 @@ endif
 
 .PHONY: clean
 clean:
-	rm -f $(obj) $(dep) tbench tbench_linux callibrate
+	rm -f $(obj) $(dep) tbench tbench_linux callibrate stress

@@ -28,14 +28,12 @@ void BenchUncontendedMutex() {
 
 void BenchYield() {
   auto th = rt::Thread([](){
-    for (int i = 0; i < kMeasureRounds; ++i) {
+    for (int i = 0; i < kMeasureRounds; ++i)
       rt::ThreadYield();
-    }
   });
 
-  for (int i = 0; i < kMeasureRounds; ++i) {
+  for (int i = 0; i < kMeasureRounds; ++i)
     rt::ThreadYield();
-  }
 
   th.Join();
 }

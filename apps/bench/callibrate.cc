@@ -29,14 +29,15 @@ void Measure(FakeWorker *w, double target) {
     elapsed = std::chrono::duration_cast<us>(finish - start).count();
   }
 
-  std::cout << i << " iterations took " << elapsed / kMultiply << " us." << std::endl;
+  std::cout << i << " iterations took " << elapsed / kMultiply << " us."
+            << std::endl;
 }
 
 } // anonymous namespace
 
 int main(int argc, char *argv[]) {
   if (argc != 3) {
-    std::cerr << "Not enough arguments (need two)." << std::endl;
+    std::cerr << "usage: [microseconds (double)] [worker_spec]" << std::endl;
     return 1;
   }
 
