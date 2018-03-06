@@ -12,6 +12,7 @@
 
 #include "defs.h"
 
+unsigned int nr_avail_cores = 0;
 DEFINE_BITMAP(avail_cores, NCPU);
 struct core_assignments core_assign;
 unsigned int nrts = 0;
@@ -108,6 +109,37 @@ static inline bool proc_is_bursting(struct proc *p)
 	return p->bursting;
 }
 
+/**
+ * thread_reserve - record that thread th will now run on core.
+ * @th: the thread to reserve
+ * @core: the core this kthread will run on
+ */
+static inline void thread_reserve(struct thread *th, unsigned int core)
+{
+	struct proc *p = th->p;
+	unsigned int kthread = th - p->threads;
+
+	bitmap_clear(p->available_threads, kthread);
+	p->threads[kthread].core = core;
+	p->active_threads[p->active_thread_count] = th;
+	th->at_idx = p->active_thread_count++;
+}
+
+/**
+ * thread_cede - relinquish a kthread. It is no longer running on a dedicated
+ * core.
+ * @th: the thread to relinquish
+ */
+static inline void thread_cede(struct thread *th)
+{
+	struct proc *p = th->p;
+	unsigned int kthread = th - p->threads;
+
+	bitmap_set(p->available_threads, kthread);
+	p->active_threads[th->at_idx] = p->active_threads[--p->active_thread_count];
+	p->active_threads[th->at_idx]->at_idx = th->at_idx;
+}
+
 /*
  * Debugging function that logs how each core is currently being used.
  */
@@ -174,16 +206,16 @@ void cores_park_kthread(struct thread *th, bool force)
 	ret = cores_pin_thread(th->tid, core_assign.linux_core);
 	if (ret < 0 && ret != -ESRCH) {
 		/* pinning failed for reason other than tid doesn't exist */
-		log_err("cores: failed to pin tid %d to core %d",
+		log_err("cores: failed to pin tid %d to linux core %d",
 			th->tid, core_assign.linux_core);
 		/* continue running but performance is unpredictable */
 	}
 
 	/* mark core and kthread as available */
 	bitmap_set(avail_cores, core);
-	bitmap_set(p->available_threads, kthread);
-	p->active_threads[th->at_idx] = p->active_threads[--p->active_thread_count];
-	p->active_threads[th->at_idx]->at_idx = th->at_idx;
+	nr_avail_cores++;
+
+	thread_cede(th);
 
 	/* remove the thread from the polling array (if queues are empty) */
 	th->parked = true;
@@ -214,12 +246,11 @@ static struct thread *cores_reserve_core(struct proc *p)
 	}
 
 	/* mark core and kthread as reserved */
-	th = &p->threads[kthread];
 	bitmap_clear(avail_cores, core);
-	bitmap_clear(p->available_threads, kthread);
-	p->threads[kthread].core = core;
-	p->active_threads[p->active_thread_count] = th;
-	th->at_idx = p->active_thread_count++;
+	nr_avail_cores--;
+
+	th = &p->threads[kthread];
+	thread_reserve(th, core);
 
 	return th;
 }
@@ -379,10 +410,12 @@ void cores_adjust_assignments()
 
 	/* grant cores to procs that are bursting until we run out of cores */
 	list_for_each_safe(&overloaded_procs, p, next, overloaded_link) {
-		if (cores_wake_kthread(p))
-			proc_clear_overloaded(p);
-		else
-			break; /* no more idle cores */
+		if (nr_avail_cores == 0)
+			break;
+
+		if (!cores_wake_kthread(p))
+			BUG();
+		proc_clear_overloaded(p);
 	}
 }
 
@@ -437,8 +470,10 @@ int cores_init(void)
 			continue;
 		}
 
-		if (cpu_info_tbl[i].package == 0)
+		if (cpu_info_tbl[i].package == 0) {
+			nr_avail_cores++;
 			bitmap_set(avail_cores, i);
+		}
 	}
 
 	log_info("cores: linux on core %d, control on %d, dataplane on %d",
