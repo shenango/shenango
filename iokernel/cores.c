@@ -33,6 +33,58 @@ static inline int cpu_to_sibling_cpu(int cpu)
 	return cpu_siblings[cpu];
 }
 
+/* Stores information about a core. Current is only valid if the core is in
+ * use. */
+struct core {
+	struct thread	*current;
+	struct thread	*prev;
+};
+
+static struct core core_history[NCPU];
+
+/**
+ * core_reserve - record that core is now in use by thread
+ * @core: the core to reserve
+ * @th: the thread that will use core
+ */
+static inline void core_reserve(unsigned int core, struct thread *th)
+{
+	bitmap_clear(avail_cores, core);
+	nr_avail_cores--;
+	core_history[core].current = th;
+}
+
+/**
+ * core_cede - relinquish a core. It no longer has something running on it.
+ * @core: the core to relinquish
+ */
+static inline void core_cede(unsigned int core)
+{
+	bitmap_set(avail_cores, core);
+	nr_avail_cores++;
+	core_history[core].prev = core_history[core].current;
+}
+
+/**
+ * core_init - init a core.
+ * @core: the core to init
+ */
+static inline void core_init(unsigned int core)
+{
+	bitmap_set(avail_cores, core);
+	nr_avail_cores++;
+	core_history[core].current = NULL;
+	core_history[core].prev = NULL;
+}
+
+/**
+ * core_available - returns true if core is available, false otherwise.
+ */
+static inline bool core_available(unsigned int core)
+{
+	return bitmap_test(avail_cores, core);
+}
+
 /* a list of procs that currently require more cores */
 static LIST_HEAD(overloaded_procs);
 
@@ -167,7 +219,7 @@ static void cores_log_assignments()
 	}
 
 	for (i = 0; i < cpu_count; i++)
-		buf[i] = bitmap_test(avail_cores, i) ? '1' : '0';
+		buf[i] = core_available(i) ? '1' : '0';
 	buf[i] = '\0';
 	log_debug("cores: %s idle", &buf[0]);
 }
@@ -182,7 +234,27 @@ static void cores_log_assignments()
  */
 static inline int pick_core_for_proc(struct proc *p)
 {
-	int core;
+	int buddy_core, core;
+	int i;
+	struct thread *t, *buddy_t;
+
+	/* try to allocate a hyperthread pair core */
+	for (i = 0; i < p->active_thread_count; i++) {
+		t = p->active_threads[i];
+		buddy_core = cpu_to_sibling_cpu(t->core);
+
+		if (core_available(buddy_core))
+			return buddy_core;
+
+		if (nr_avail_cores > 0)
+			continue;
+
+		buddy_t = core_history[buddy_core].current;
+		if (buddy_t != t
+				&& (buddy_t->p->active_thread_count
+						> buddy_t->p->sched_cfg.guaranteed_cores))
+			return buddy_core;
+	}
 
 	/* pick the lowest available core */
 	core = bitmap_find_next_set(avail_cores, cpu_count, 0);
@@ -229,9 +301,7 @@ static struct thread *wake_kthread_on_core(struct proc *p, int core)
 	th = &p->threads[kthread];
 
 	/* mark core and kthread as reserved */
-	bitmap_clear(avail_cores, core);
-	nr_avail_cores--;
-
+	core_reserve(core, th);
 	thread_reserve(th, core);
 
 	/* assign the kthread to its core */
@@ -291,9 +361,7 @@ void cores_park_kthread(struct thread *th, bool force)
 	}
 
 	/* mark core and kthread as available */
-	bitmap_set(avail_cores, core);
-	nr_avail_cores++;
-
+	core_cede(core);
 	thread_cede(th);
 
 	/* remove the thread from the polling array (if queues are empty) */
@@ -317,12 +385,12 @@ struct thread *cores_add_core(struct proc *p)
 {
 	int core;
 
-	/* pick the lowest available core */
+	/* pick a core to add */
 	core = pick_core_for_proc(p);
 	if (core == -1)
 		return NULL; /* no cores available */
 
-	if (bitmap_test(avail_cores, core)) {
+	if (core_available(core)) {
 		/* core is idle, immediately wake a kthread on it */
 		return wake_kthread_on_core(p, core);
 	} else {
@@ -515,10 +583,8 @@ int cores_init(void)
 			continue;
 		}
 
-		if (cpu_info_tbl[i].package == 0) {
-			nr_avail_cores++;
-			bitmap_set(avail_cores, i);
-		}
+		if (cpu_info_tbl[i].package == 0)
+			core_init(i);
 	}
 
 	log_info("cores: linux on core %d, control on %d, dataplane on %d",
