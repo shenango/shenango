@@ -60,7 +60,7 @@ bool rx_send_to_runtime(struct proc *p, uint32_t hash, uint64_t cmd,
 
 	/* if there are no threads running, wake one */
 	if (p->active_thread_count == 0) {
-		th = cores_wake_kthread(p);
+		th = cores_add_core(p);
 		if (unlikely(!th))
 			return false;
 	} else {

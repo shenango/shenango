@@ -172,9 +172,88 @@ static void cores_log_assignments()
 	log_debug("cores: %s idle", &buf[0]);
 }
 
-/*
- * Parks the given kthread (if it exists) and frees its core.
+/**
+ * pick_core_for_proc - choose a core to allocate to proc p.
+ * @p: the process to allocate a core to
  *
+ * Returns an available core if one exists, or -1 if none are available.
+ * TODO: implement better policy, return a core to be preempted instead of -1
+ * if none are available.
+ */
+static inline int pick_core_for_proc(struct proc *p)
+{
+	int core;
+
+	/* pick the lowest available core */
+	core = bitmap_find_next_set(avail_cores, cpu_count, 0);
+	if (core == cpu_count)
+		return -1; /* no cores available */
+
+	return core;
+}
+
+/**
+ * pick_best_proc_for_core - choose a proc to grant this core to.
+ * @core: the core to find a process for
+ *
+ * Returns a process to grant this core to, or NULL if this core cannot be
+ * allocated to any process.
+ */
+static inline struct proc *pick_proc_for_core(int core)
+{
+	/* TODO: implement */
+	return NULL;
+}
+
+/**
+ * wake_kthread_on_core - choose a kthread for this proc and wake it on the
+ * specified core.
+ * @p: the process to choose a kthread from
+ * @core: the core to wake a kthread on
+ */
+static struct thread *wake_kthread_on_core(struct proc *p, int core)
+{
+	int kthread;
+	struct thread *th;
+	int ret;
+	ssize_t s;
+	uint64_t val = 1;
+
+	/* pick the lowest available kthread */
+	kthread = bitmap_find_next_set(p->available_threads, p->thread_count, 0);
+	if (kthread == p->thread_count) {
+		log_err("cores: proc already has max allowed kthreads (%d)",
+			p->thread_count);
+		BUG();
+	}
+	th = &p->threads[kthread];
+
+	/* mark core and kthread as reserved */
+	bitmap_clear(avail_cores, core);
+	nr_avail_cores--;
+
+	thread_reserve(th, core);
+
+	/* assign the kthread to its core */
+	ret = cores_pin_thread(th->tid, th->core);
+	if (unlikely(ret < 0)) {
+		log_err("cores: failed to pin tid %d to core %d",
+			th->tid, th->core);
+		/* continue running but performance is unpredictable */
+	}
+
+	/* wake up the kthread */
+	s = write(th->park_efd, &val, sizeof(val));
+	BUG_ON(s != sizeof(uint64_t));
+
+	/* add the thread to the polling array */
+	th->parked = false;
+	poll_thread(th);
+	return th;
+}
+
+/**
+ * cores_park_kthread - parks the given kthread and frees its core.
  * @th: thread to park
  * @force: true if this kthread should be parked regardless of pending tx pkts
  */
@@ -221,70 +300,36 @@ void cores_park_kthread(struct thread *th, bool force)
 	th->parked = true;
 	if (lrpc_empty(&th->txpktq))
 		unpoll_thread(th);
+
+	/* try to allocate this core to another proc */
+	p = pick_proc_for_core(core);
+	if (p)
+		wake_kthread_on_core(p, core);
 }
 
-/*
- * Reserves a core for a given proc, returns the index of the kthread assigned
- * to run on it or -1 on error.
+/**
+ * cores_add_core - allocate a core for this process. If the core is idle, this
+ * function immediately wakes a kthread on it. Otherwise, a kthread will be
+ * woken on the core once the preempted kthread parks.
+ * @p: the process to allocate a core to
  */
-static struct thread *cores_reserve_core(struct proc *p)
+struct thread *cores_add_core(struct proc *p)
 {
-	struct thread *th;
-	unsigned int kthread, core;
+	int core;
 
 	/* pick the lowest available core */
-	core = bitmap_find_next_set(avail_cores, cpu_count, 0);
-	if (core == cpu_count)
+	core = pick_core_for_proc(p);
+	if (core == -1)
 		return NULL; /* no cores available */
 
-	/* pick the lowest available kthread */
-	kthread = bitmap_find_next_set(p->available_threads, p->thread_count, 0);
-	if (kthread == p->thread_count) {
-		log_err("cores: proc already has max allowed kthreads (%d)",
-			p->thread_count);
+	if (bitmap_test(avail_cores, core)) {
+		/* core is idle, immediately wake a kthread on it */
+		return wake_kthread_on_core(p, core);
+	} else {
+		/* TODO: core is busy, preempt currently running task */
+		log_warn("cores: preempting kthreads not yet implemented");
 		return NULL;
 	}
-
-	/* mark core and kthread as reserved */
-	bitmap_clear(avail_cores, core);
-	nr_avail_cores--;
-
-	th = &p->threads[kthread];
-	thread_reserve(th, core);
-
-	return th;
-}
-
-/*
- * Wakes a kthread for this process (if one is available).
- */
-struct thread *cores_wake_kthread(struct proc *p)
-{
-	struct thread *th;
-	int ret;
-	ssize_t s;
-	uint64_t val = 1;
-
-	th = cores_reserve_core(p);
-	if (!th)
-		return NULL;
-
-	/* assign the kthread to its core */
-	ret = cores_pin_thread(th->tid, th->core);
-	if (unlikely(ret < 0)) {
-		log_err("cores: failed to pin tid %d to core %d",
-			th->tid, th->core);
-		/* continue running but performance is unpredictable */
-	}
-
-	/* wake up the kthread */
-	s = write(th->park_efd, &val, sizeof(val));
-	BUG_ON(s != sizeof(uint64_t));
-
-	/* add the thread to the polling array */
-	th->parked = false;
-	poll_thread(th);
-	return th;
 }
 
 /*
@@ -334,7 +379,7 @@ void cores_init_proc(struct proc *p)
 	p->overloaded = false;
 
 	/* wake the first kthread so the runtime can run the main_fn */
-	cores_wake_kthread(p);
+	cores_add_core(p);
 }
 
 /*
@@ -397,7 +442,7 @@ void cores_adjust_assignments()
 		request_kthread:
 			if (p->active_thread_count <
 				p->sched_cfg.guaranteed_cores) {
-				if (!cores_wake_kthread(p)) {
+				if (!cores_add_core(p)) {
 					/* we should always have enough cores to
 					 * meet guarantees */
 					BUG();
@@ -413,7 +458,7 @@ void cores_adjust_assignments()
 		if (nr_avail_cores == 0)
 			break;
 
-		if (!cores_wake_kthread(p))
+		if (!cores_add_core(p))
 			BUG();
 		proc_clear_overloaded(p);
 	}
