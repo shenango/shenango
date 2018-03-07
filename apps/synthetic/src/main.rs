@@ -1,17 +1,19 @@
-#![feature(nll)]
 #![feature(duration_extras)]
+#![feature(nll)]
+#![feature(test)]
 
 #[macro_use]
 extern crate clap;
-#[macro_use]
-extern crate serde_derive;
 
 extern crate bincode;
 extern crate libc;
 extern crate rand;
 extern crate shenango;
+extern crate test;
 
+use std::iter;
 use std::net::{SocketAddrV4, UdpSocket};
+use std::slice;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -19,14 +21,26 @@ use std::time::{Duration, Instant};
 use bincode::Infinite;
 use clap::{App, Arg};
 use rand::distributions::{Exp, IndependentSample};
+use shenango::udp::UdpSpawner;
 
 mod backend;
 use backend::*;
 
-#[derive(Serialize, Deserialize)]
-struct Payload {
-    sleep_us: u64,
-    index: u64,
+mod payload;
+use payload::Payload;
+
+enum Distribution {
+    Zero,
+    Constant,
+    Bimodal1,
+    Bimodal2,
+}
+
+fn work(iterations: u64) {
+    let k = 2350845.545;
+    for i in 0..iterations {
+        test::black_box(f64::sqrt(k * i as f64));
+    }
 }
 
 fn duration_to_ns(duration: Duration) -> u64 {
@@ -43,8 +57,8 @@ fn run_server(backend: Backend, socket: UdpConnection, nthreads: u32) {
                 loop {
                     let (len, remote_addr) = socket2.recv_from(&mut buf[..]).unwrap();
 
-                    let payload: Payload = bincode::deserialize(&buf[..len]).unwrap();
-                    shenango::delay_us(payload.sleep_us);
+                    let _payload: Payload = bincode::deserialize(&buf[..len]).unwrap();
+                    //                    backend.dummy_work(payload.sleep_us);
 
                     socket2.send_to(&buf[..len], remote_addr).unwrap();
                 }
@@ -54,6 +68,24 @@ fn run_server(backend: Backend, socket: UdpConnection, nthreads: u32) {
 
     for j in join_handles {
         j.join().unwrap();
+    }
+}
+
+fn run_spawner_server(addr: SocketAddrV4) {
+    extern "C" fn echo(d: *mut shenango::ffi::udp_spawn_data) {
+        unsafe {
+            let buf = slice::from_raw_parts((*d).buf as *mut u8, (*d).len);
+            let _payload: Payload = bincode::deserialize(buf).unwrap();
+            //            Backend::Runtime.dummy_work(payload.sleep_us);
+            let _ = UdpSpawner::reply(d, buf);
+            UdpSpawner::release_data(d);
+        }
+    }
+
+    let _s = unsafe { UdpSpawner::new(addr, echo).unwrap() };
+
+    loop {
+        shenango::sleep(Duration::from_secs(10));
     }
 }
 
@@ -75,7 +107,7 @@ fn run_client(
 
     let packets_per_thread =
         duration_to_ns(runtime) as usize * packets_per_second / (1000_000_000 * nthreads as usize);
-    let ns_per_packet = nthreads as usize * 1000_000_000 / (packets_per_second);
+    let ns_per_packet = nthreads as usize * 1000_000_000 / packets_per_second;
 
     let exp = Exp::new(1.0 / ns_per_packet as f64);
     let mut rng = rand::thread_rng();
@@ -118,6 +150,16 @@ fn run_client(
             receive_times
         }));
         send_threads.push(backend.spawn_thread(move || {
+            // // If the send or receive thread is still running 500 ms after it should have finished,
+            // // then stop it by triggering a shutdown on the socket.
+            // let socket = socket2.clone();
+            // backend.spawn_thread(move || {
+            //     backend.sleep(runtime + Duration::from_millis(500));
+            //     if Arc::strong_count(&socket) > 1 {
+            //         socket.shutdown();
+            //     }
+            // });
+
             for (i, packet) in packets.iter_mut().enumerate() {
                 let payload = bincode::serialize(
                     &Payload {
@@ -128,26 +170,19 @@ fn run_client(
                 ).unwrap();
 
                 while start.elapsed() < packet.target_start {
-                    shenango::cpu_relax()
+                    backend.thread_yield()
                 }
                 packet.actual_start = Some(start.elapsed());
-                socket2.send(&payload[..]).unwrap();
-            }
-
-            // If the receive thread is still running 500 ms from now, then stop it by triggering a
-            // shutdown on the socket.
-            backend.spawn_thread(move || {
-                backend.sleep(Duration::from_millis(500));
-                if Arc::strong_count(&socket2) > 1 {
-                    socket2.shutdown();
+                if socket2.send(&payload[..]).is_err() {
+                    break;
                 }
-            });
+            }
 
             packets
         }))
     }
 
-    let packets: Vec<_> = send_threads
+    let mut packets: Vec<_> = send_threads
         .into_iter()
         .zip(receive_threads.into_iter())
         .flat_map(|(s, r)| {
@@ -165,6 +200,7 @@ fn run_client(
         .iter()
         .filter(|p| p.completion_time.is_none())
         .count();
+    let first_send = packets.iter().filter_map(|p| p.actual_start).min().unwrap();
     let last_send = packets.iter().filter_map(|p| p.actual_start).max().unwrap();
     let mut latencies: Vec<_> = packets
         .iter()
@@ -183,7 +219,7 @@ fn run_client(
     println!(
         "{}, {}, {}, {:.1}, {:.1}, {:.1}, {:.1}, {:.1}",
         packets_per_second,
-        (packets.len() - dropped) as u64 * 1000_000_000 / duration_to_ns(last_send),
+        (packets.len() - dropped) as u64 * 1000_000_000 / duration_to_ns(last_send - first_send),
         dropped,
         percentile(50.0),
         percentile(90.0),
@@ -193,22 +229,25 @@ fn run_client(
     );
 
     if trace {
+        packets.sort_by_key(|p|p.actual_start.unwrap_or(p.target_start));
         for p in packets {
             if let Some(completion_time) = p.completion_time {
                 let actual_start = p.actual_start.unwrap();
                 println!(
-                    "{}, {}, {}",
+                    "{} {} {}",
                     duration_to_ns(actual_start),
                     duration_to_ns(actual_start - p.target_start),
                     duration_to_ns(completion_time - actual_start)
                 )
-            } else {
+            } else if p.actual_start.is_some() {
                 let actual_start = p.actual_start.unwrap();
                 println!(
-                    "{}, {}, -, 0",
+                    "{} {} -1",
                     duration_to_ns(actual_start),
                     duration_to_ns(actual_start - p.target_start),
                 )
+            } else {
+                println!("{} -1 -1", duration_to_ns(p.target_start))
             }
         }
     }
@@ -241,9 +280,14 @@ fn main() {
                     "linux-client",
                     "runtime-server",
                     "runtime-client",
+                    "spawner-server",
                 ])
                 .required(true)
-                .requires_ifs(&[("runtime-server", "config"), ("runtime-client", "config")])
+                .requires_ifs(&[
+                    ("runtime-server", "config"),
+                    ("runtime-client", "config"),
+                    ("spawner-server", "config"),
+                ])
                 .help("Which mode to run in"),
         )
         .arg(
@@ -306,6 +350,17 @@ fn main() {
         }).unwrap(),
         "runtime-client" => shenango::runtime_init(config.unwrap().to_owned(), move || {
             if trace {
+                for packets_per_second in (1..3).map(|i| i * 100000) {
+                    print!("# ");
+                    run_client(
+                        Backend::Runtime,
+                        FromStr::from_str(&addr).unwrap(),
+                        Duration::from_secs(1),
+                        packets_per_second,
+                        nthreads,
+                        false,
+                    );
+                }
                 run_client(
                     Backend::Runtime,
                     FromStr::from_str(&addr).unwrap(),
@@ -315,7 +370,7 @@ fn main() {
                     true,
                 );
             } else {
-                for packets_per_second in (1..500).map(|i| i * 20000) {
+                for packets_per_second in (iter::once(1).chain(1..500)).map(|i| i * 200000) {
                     run_client(
                         Backend::Runtime,
                         FromStr::from_str(&addr).unwrap(),
@@ -324,9 +379,12 @@ fn main() {
                         nthreads,
                         false,
                     );
-                    shenango::sleep(Duration::from_millis(1000));
+                    //                    shenango::sleep(Duration::from_millis(1000));
                 }
             }
+        }).unwrap(),
+        "spawner-server" => shenango::runtime_init(config.unwrap().to_owned(), move || {
+            run_spawner_server(FromStr::from_str(&addr).unwrap())
         }).unwrap(),
         _ => unreachable!(),
     };

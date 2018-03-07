@@ -82,11 +82,8 @@ impl UdpConnection {
     }
     /// Same as write, but doesn't take a &mut self.
     pub fn send(&self, buf: &[u8]) -> io::Result<usize> {
-        isize_to_result(unsafe {
-            ffi::udp_write(self.0, buf.as_ptr() as *const c_void, buf.len())
-        })
+        isize_to_result(unsafe { ffi::udp_write(self.0, buf.as_ptr() as *const c_void, buf.len()) })
     }
-
 
     pub fn local_addr(&self) -> SocketAddrV4 {
         let local_addr = unsafe { ffi::udp_local_addr(self.0) };
@@ -113,9 +110,7 @@ impl Read for UdpConnection {
 
 impl Write for UdpConnection {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        isize_to_result(unsafe {
-            ffi::udp_write(self.0, buf.as_ptr() as *const c_void, buf.len())
-        })
+        isize_to_result(unsafe { ffi::udp_write(self.0, buf.as_ptr() as *const c_void, buf.len()) })
     }
 
     fn flush(&mut self) -> io::Result<()> {
@@ -131,3 +126,45 @@ impl Drop for UdpConnection {
 
 unsafe impl Send for UdpConnection {}
 unsafe impl Sync for UdpConnection {}
+
+pub struct UdpSpawner(*mut ffi::udpspawner_t);
+impl UdpSpawner {
+    pub unsafe fn new(
+        local_addr: SocketAddrV4,
+        f: extern "C" fn(*mut ffi::udp_spawn_data),
+    ) -> io::Result<Self> {
+        println!("{:?}", local_addr);
+        let laddr = ffi::udpaddr {
+            ip: NetworkEndian::read_u32(&local_addr.ip().octets()),
+            port: local_addr.port(),
+        };
+
+        let mut spawner: *mut ffi::udpspawner_t = ptr::null_mut();
+        let ret = ffi::udp_create_spawner(laddr, Some(f), &mut spawner as *mut *mut _);
+
+        if ret < 0 {
+            Err(io::Error::from_raw_os_error(ret as i32))
+        } else {
+            Ok(UdpSpawner(spawner))
+        }
+    }
+
+    pub unsafe fn reply(d: *mut ffi::udp_spawn_data, buf: &[u8]) -> io::Result<usize> {
+        isize_to_result(ffi::udp_send(
+            buf.as_ptr() as *const c_void,
+            buf.len(),
+            (*d).laddr,
+            (*d).raddr,
+        ))
+    }
+
+    pub unsafe fn release_data(d: *mut ffi::udp_spawn_data) {
+        ffi::udp_spawn_data_release((*d).release_data)
+    }
+}
+impl Drop for UdpSpawner {
+    fn drop(&mut self) {
+        println!("!!!!!!!!!!!!");
+        unsafe { ffi::udp_destroy_spawner(self.0) }
+    }
+}
