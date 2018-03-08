@@ -11,6 +11,7 @@
 #include <sys/un.h>
 #include <unistd.h>
 
+#include <base/hash.h>
 #include <base/log.h>
 #include <base/lrpc.h>
 #include <base/mem.h>
@@ -123,6 +124,7 @@ static int ioqueues_shm_setup(unsigned int threads)
 
 	BUILD_ASSERT(sizeof(netcfg.mac) >= sizeof(mem_key_t));
 	iok.key = *(mem_key_t*)(&netcfg.mac);
+	iok.key = rand_crc32c(iok.key);
 
 	/* map shared memory for control header, command queues, and egress pkts */
 	shm_len = calculate_shm_space(threads);
