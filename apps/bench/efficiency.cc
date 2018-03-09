@@ -2,6 +2,8 @@ extern "C" {
 #include <base/log.h>
 #include <net/ip.h>
 }
+#undef min
+#undef max
 
 #include "thread.h"
 #include "sync.h"

@@ -3,6 +3,7 @@
 #include <numeric>
 #include <tuple>
 #include <limits>
+#include <random>
 
 #include "fake_worker.h"
 
