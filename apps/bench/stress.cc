@@ -14,7 +14,7 @@ void MainHandler(void *arg) {
   rt::WaitGroup wg(1);
 
   for (int i = 0; i < threads; ++i) {
-    rt::ThreadSpawn([](){
+    rt::Spawn([](){
       auto *w = FakeWorkerFactory(worker_spec);
       if (w == nullptr) {
         std::cerr << "Failed to create worker." << std::endl;
@@ -23,7 +23,7 @@ void MainHandler(void *arg) {
 
       while (true) {
         w->Work(n);
-        rt::ThreadYield();
+        rt::Yield();
       }
     });
   }

@@ -5,6 +5,7 @@ extern "C" {
 
 #include <string>
 #include "thread.h"
+#include "timer.h"
 
 namespace {
 
@@ -19,19 +20,21 @@ void MainHandler(void *arg) {
   int i = kTestValue;
   int j = kTestValue;
 
-  rt::ThreadSpawn([=]{
+  rt::Spawn([=]{
     log_info("hello from ThreadSpawn()! '%s'", str.c_str());
     foo(i);
   });
 
-  rt::ThreadSpawn([&]{
+  rt::Spawn([&]{
     log_info("hello from ThreadSpawn()! '%s'", str.c_str());
     foo(i);
     j *= 2;
   });
 
-  rt::ThreadYield();
+  rt::Yield();
   if (j != kTestValue * 2) BUG();
+
+  rt::Sleep(1 * rt::kMilliseconds);
 
   auto th = rt::Thread([&]{
     log_info("hello from rt::Thread! '%s'", str.c_str());

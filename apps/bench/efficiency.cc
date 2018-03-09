@@ -90,10 +90,10 @@ void MainHandler(void *arg) {
 
     // Launch a worker thread for each connection.
     for (auto& c: conns)
-      rt::ThreadSpawn([&](){c.second = Worker(c.first.get(), cur_us, &wg);});
+      rt::Spawn([&](){c.second = Worker(c.first.get(), cur_us, &wg);});
 
     // Sleep for the experiment measurement duration.
-    rt::TimerSleep(measure_sec * rt::kSeconds);
+    rt::Sleep(measure_sec * rt::kSeconds);
 
     // Shutdown all the connections.
     for (auto& c: conns)
@@ -116,8 +116,7 @@ void MainHandler(void *arg) {
   }
 }
 
-int StringToAddr(const char *str, uint32_t *addr)
-{
+int StringToAddr(const char *str, uint32_t *addr) {
   uint8_t a, b, c, d;
 
   if(sscanf(str, "%hhu.%hhu.%hhu.%hhu", &a, &b, &c, &d) != 4)

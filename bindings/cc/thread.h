@@ -38,7 +38,7 @@ extern void ThreadTrampolineWithJoin(void *arg);
 } // namespace thread_internal
 
 // Spawns a new thread by copying.
-static inline void ThreadSpawn(const std::function<void()>& func) {
+static inline void Spawn(const std::function<void()>& func) {
   void *buf;
   thread_t *th = thread_create_with_buf(thread_internal::ThreadTrampoline, &buf,
 					sizeof(std::function<void()>));
@@ -48,7 +48,7 @@ static inline void ThreadSpawn(const std::function<void()>& func) {
 }
 
 // Spawns a new thread by moving.
-static inline void ThreadSpawn(std::function<void()>&& func) {
+static inline void Spawn(std::function<void()>&& func) {
   void *buf;
   thread_t *th = thread_create_with_buf(thread_internal::ThreadTrampoline, &buf,
 					sizeof(std::function<void()>));
@@ -58,12 +58,12 @@ static inline void ThreadSpawn(std::function<void()>&& func) {
 }
 
 // Called from a running thread to exit.
-static inline void ThreadExit(void) {
+static inline void Exit(void) {
   thread_exit();
 }
 
 // Called from a running thread to yield.
-static inline void ThreadYield(void) {
+static inline void Yield(void) {
   thread_yield();
 }
 

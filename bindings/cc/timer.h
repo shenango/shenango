@@ -23,12 +23,12 @@ static inline void Delay(uint64_t us) {
 }
 
 // Sleeps until a microsecond deadline.
-static inline void TimerSleepUntil(uint64_t deadline_us) {
+static inline void SleepUntil(uint64_t deadline_us) {
   timer_sleep_until(deadline_us);
 }
 
 // Sleeps for a microsecond duration.
-static inline void TimerSleep(uint64_t duration_us) {
+static inline void Sleep(uint64_t duration_us) {
   timer_sleep(duration_us);
 }
 
