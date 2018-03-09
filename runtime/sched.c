@@ -233,8 +233,10 @@ static __noreturn void schedule(void)
 	assert(l->detached == false);
 
 	/* park if we have been preempted */
-	if (unlikely(preempt_needed()))
+	if (unlikely(preempt_needed())) {
+		clear_preempt_needed();
 		kthread_park(false);
+	}
 
 	/* move overflow tasks into the runqueue */
 	if (unlikely(!list_empty(&l->rq_overflow)))

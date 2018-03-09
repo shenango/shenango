@@ -3,6 +3,8 @@
  */
 
 #include <sched.h>
+#include <signal.h>
+#include <sys/syscall.h>
 #include <unistd.h>
 
 #include <base/bitmap.h>
@@ -39,6 +41,7 @@ static inline int cpu_to_sibling_cpu(int cpu)
 struct core {
 	struct thread	*current;
 	struct thread	*prev;
+	struct thread	*next; /* if non-NULL, thread that preempted this core */
 };
 
 static struct core core_history[NCPU];
@@ -50,10 +53,18 @@ static struct core core_history[NCPU];
  */
 static inline void core_reserve(unsigned int core, struct thread *th)
 {
+	assert(bitmap_test(avail_cores, core));
+
 	bitmap_clear(avail_cores, core);
 	nr_avail_cores--;
+
+	if (core_history[core].prev)
+		proc_put(core_history[core].prev->p);
+	proc_get(th->p);
+
 	core_history[core].prev = core_history[core].current;
 	core_history[core].current = th;
+	core_history[core].next = NULL;
 }
 
 /**
@@ -62,6 +73,8 @@ static inline void core_reserve(unsigned int core, struct thread *th)
  */
 static inline void core_cede(unsigned int core)
 {
+	assert(!bitmap_test(avail_cores, core));
+
 	bitmap_set(avail_cores, core);
 	nr_avail_cores++;
 }
@@ -124,6 +137,23 @@ static inline bool proc_is_overloaded(struct proc *p)
 	return p->overloaded;
 }
 
+/**
+ * no_overloaded_procs - returns true if there are no overloaded procs, false
+ * otherwise
+ */
+static inline bool no_overloaded_procs()
+{
+	return list_empty(&overloaded_procs);
+}
+
+/**
+ * get_overloaded_proc - returns an overloaded proc or NULL if none exists
+ */
+static inline struct proc *get_overloaded_proc()
+{
+	return list_top(&overloaded_procs, struct proc, overloaded_link);
+}
+
 /* a list of procs that are using more cores than they have reserved */
 static LIST_HEAD(bursting_procs);
 
@@ -180,16 +210,25 @@ static inline void thread_reserve(struct thread *th, unsigned int core)
 	struct proc *p = th->p;
 	unsigned int kthread = th - p->threads;
 
+	assert(th->parked == true);
+
 	bitmap_clear(p->available_threads, kthread);
-	p->threads[kthread].core = core;
+	th->core = core;
 	p->active_threads[p->active_thread_count] = th;
 	th->at_idx = p->active_thread_count++;
 	list_del_from(&p->idle_threads, &th->idle_link);
 
+	if (p->preempting && (p->preempting_thread == th))
+		p->preempting = false;
+
 	if (p->active_thread_count > p->sched_cfg.guaranteed_cores)
-		proc_is_bursting(p);
+		proc_set_bursting(p);
 
 	proc_clear_overloaded(p);
+
+	/* add the thread to the polling array */
+	th->parked = false;
+	poll_thread(th);
 }
 
 /**
@@ -202,6 +241,8 @@ static inline void thread_cede(struct thread *th)
 	struct proc *p = th->p;
 	unsigned int kthread = th - p->threads;
 
+	assert(!th->parked);
+
 	bitmap_set(p->available_threads, kthread);
 	p->active_threads[th->at_idx] = p->active_threads[--p->active_thread_count];
 	p->active_threads[th->at_idx]->at_idx = th->at_idx;
@@ -209,6 +250,11 @@ static inline void thread_cede(struct thread *th)
 
 	if (p->active_thread_count == p->sched_cfg.guaranteed_cores)
 		proc_clear_bursting(p);
+
+	/* remove the thread from the polling array (if queues are empty) */
+	th->parked = true;
+	if (lrpc_empty(&th->txpktq))
+		unpoll_thread(th);
 }
 
 /*
@@ -244,12 +290,25 @@ static void cores_log_assignments()
 }
 
 /**
+ *  pick_thread_for_proc - choose a thread to start up for this proc.
+ *  @p: the process to choose a thread for
+ *
+ *  Returns a struct thread *, or NULL if no thread is idle. This function must
+ *  return the 0th index kthread the first time it is called for a proc,
+ *  because the first runtime thread is added to the 0th kthread's runqueue and
+ *  no kthreads are attached yet, so that thread cannot be stolen.
+ */
+static inline struct thread *pick_thread_for_proc(struct proc *p)
+{
+	/* return the most recently parked kthread */
+	return list_top(&p->idle_threads, struct thread, idle_link);
+}
+
+/**
  * pick_core_for_proc - choose a core to allocate to proc p.
  * @p: the process to allocate a core to
  *
- * Returns an available core if one exists, or -1 if none are available.
- * TODO: implement better policy, return a core to be preempted instead of -1
- * if none are available.
+ * Returns an available core if one exists, or else a core to be preempted.
  */
 static inline int pick_core_for_proc(struct proc *p)
 {
@@ -266,7 +325,7 @@ static inline int pick_core_for_proc(struct proc *p)
 		if (core_available(buddy_core))
 			return buddy_core;
 
-		if (nr_avail_cores > 0)
+		if (nr_avail_cores > 0 || core_history[buddy_core].next != NULL)
 			continue;
 
 		buddy_proc = core_history[buddy_core].current->p;
@@ -279,7 +338,7 @@ static inline int pick_core_for_proc(struct proc *p)
 	core = t->core;
 	if (core_available(core))
 		return core;
-	if (nr_avail_cores == 0) {
+	if (nr_avail_cores == 0 && core_history[core].next == NULL) {
 		core_proc = core_history[core].current->p;
 		if (core_proc != p && proc_is_bursting(core_proc))
 			return core;
@@ -291,6 +350,14 @@ static inline int pick_core_for_proc(struct proc *p)
 	if (core == cpu_count) {
 		/* no cores available, take from any bursting proc */
 		core_proc = get_bursting_proc();
+
+		if (core_proc == NULL) {
+			/* this is possible because we only allow one in-flight preemption
+			 * per core at once. we need to handle this. */
+			log_err("pick_core_for_proc: no available cores!");
+			BUG();
+		}
+
 		core = core_proc->active_threads[rand_crc32c((uintptr_t) core_proc)
 				% core_proc->active_thread_count]->core;
 	}
@@ -299,55 +366,60 @@ static inline int pick_core_for_proc(struct proc *p)
 }
 
 /**
- * pick_best_proc_for_core - choose a proc to grant this core to.
+ * pick_thread_for_core - choose a thread to grant this core to.
  * @core: the core to find a process for
  *
- * Returns a process to grant this core to, or NULL if this core cannot be
- * allocated to any process.
+ * Returns a thread to grant this core to, or NULL if no process want another
+ * core.
  */
-static inline struct proc *pick_proc_for_core(int core)
+static inline struct thread *pick_thread_for_core(int core)
 {
-	/* TODO: implement */
-	return NULL;
+	struct thread *th_next;
+	int buddy_core;
+	struct proc *p;
+
+	/* if this core was preempted, grant it to the thread that is waiting for
+	 * it */
+	th_next = core_history[core].next;
+	if (th_next != NULL && !th_next->p->removed)
+		return th_next;
+
+	/* try to find an overloaded proc to grant this core to */
+	if (no_overloaded_procs())
+		return NULL;
+
+	/* try to allocate to the process running on the hyperthread pair core */
+	buddy_core = cpu_to_sibling_cpu(core);
+	p = core_history[buddy_core].current->p;
+	if (!p->removed && proc_is_overloaded(p))
+		goto chose_proc;
+
+	/* try to allocate to the process that used this core most recently */
+	if (core_history[core].prev) {
+		p = core_history[core].prev->p;
+		if (!p->removed && proc_is_overloaded(p))
+			goto chose_proc;
+	}
+
+	/* choose any overloaded proc */
+	p = get_overloaded_proc();
+
+chose_proc:
+	return pick_thread_for_proc(p);
 }
 
 /**
- *  pick_thread_for_proc - choose a thread to start up for this proc.
- *  @p: the process to choose a thread for
- *
- *  Returns a struct thread *, or NULL if no thread is idle. This function must
- *  return the 0th index kthread the first time it is called for a proc,
- *  because the first runtime thread is added to the 0th kthread's runqueue and
- *  no kthreads are attached yet, so that thread cannot be stolen.
- */
-static inline struct thread *pick_thread_for_proc(struct proc *p)
-{
-	/* return the most recently parked kthread */
-	return list_top(&p->idle_threads, struct thread, idle_link);
-}
-
-/**
- * wake_kthread_on_core - choose a kthread for this proc and wake it on the
- * specified core.
+ * wake_kthread_on_core - wake the kthread on the specified core.
  * @p: the process to choose a kthread from
  * @core: the core to wake a kthread on
  */
-static struct thread *wake_kthread_on_core(struct proc *p, int core)
+static void wake_kthread_on_core(struct thread *th, int core)
 {
-	struct thread *th;
 	int ret;
 	ssize_t s;
 	uint64_t val = 1;
 
 	BUG_ON(!core_available(core)); /* core should be idle now */
-
-	/* pick a kthread to run on this core */
-	th = pick_thread_for_proc(p);
-	if (!th) {
-		log_err("cores: proc already has max allowed kthreads (%d)",
-			p->thread_count);
-		BUG();
-	}
 
 	/* mark core and kthread as reserved */
 	core_reserve(core, th);
@@ -364,11 +436,6 @@ static struct thread *wake_kthread_on_core(struct proc *p, int core)
 	/* wake up the kthread */
 	s = write(th->park_efd, &val, sizeof(val));
 	BUG_ON(s != sizeof(uint64_t));
-
-	/* add the thread to the polling array */
-	th->parked = false;
-	poll_thread(th);
-	return th;
 }
 
 /**
@@ -384,6 +451,7 @@ void cores_park_kthread(struct thread *th, bool force)
 	ssize_t s;
 	uint64_t val = 1;
 	int ret;
+	struct thread *th_new;
 
 	assert(kthread < NCPU);
 
@@ -413,15 +481,10 @@ void cores_park_kthread(struct thread *th, bool force)
 	core_cede(core);
 	thread_cede(th);
 
-	/* remove the thread from the polling array (if queues are empty) */
-	th->parked = true;
-	if (lrpc_empty(&th->txpktq))
-		unpoll_thread(th);
-
-	/* try to allocate this core to another proc */
-	p = pick_proc_for_core(core);
-	if (p)
-		wake_kthread_on_core(p, core);
+	/* try to find another thread to run on this core */
+	th_new = pick_thread_for_core(core);
+	if (th_new)
+		wake_kthread_on_core(th_new, core);
 }
 
 /**
@@ -433,17 +496,36 @@ void cores_park_kthread(struct thread *th, bool force)
 struct thread *cores_add_core(struct proc *p)
 {
 	int core;
+	struct thread *th, *th_current;
 
-	/* pick a core to add */
+	/* only allow one in-flight preemption per process */
+	if (p->preempting)
+		return p->preempting_thread;
+
+	/* pick a core to add and a thread to run on it */
 	core = pick_core_for_proc(p);
+	th = pick_thread_for_proc(p);
 
 	if (core_available(core)) {
 		/* core is idle, immediately wake a kthread on it */
-		return wake_kthread_on_core(p, core);
+		if (!th) {
+			log_err("cores: proc already has max allowed kthreads (%d)",
+				p->thread_count);
+			BUG();
+		}
+		wake_kthread_on_core(th, core);
+
+		return th;
 	} else {
-		/* TODO: core is busy, preempt currently running task */
-		log_err("cores: preempting kthreads not yet implemented");
-		BUG();
+		/* core is busy, preempt the currently running thread */
+		p->preempting = true;
+		p->preempting_thread = th;
+
+		th_current = core_history[core].current;
+		core_history[core].next = th;
+		syscall(SYS_tgkill, th_current->p->pid, th_current->tid, SIGUSR1);
+
+		return th;
 	}
 }
 
@@ -562,13 +644,9 @@ void cores_adjust_assignments()
 			continue; /* no need to wake a kthread */
 
 		request_kthread:
-			if (!proc_is_bursting(p)) {
-				if (!cores_add_core(p)) {
-					/* we should always have enough cores to
-					 * meet guarantees */
-					BUG();
-				}
-			} else
+			if (p->active_thread_count < p->sched_cfg.guaranteed_cores)
+				cores_add_core(p);
+			else
 				proc_set_overloaded(p);
 			break;
 		}

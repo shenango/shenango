@@ -49,7 +49,6 @@ struct thread {
 	unsigned int		ts_idx;
 	/* the proc->active_threads index (if active) */
 	unsigned int		at_idx;
-
 	/* list link for when idle */
 	struct list_node	idle_link;
 };
@@ -62,6 +61,8 @@ struct proc {
 	unsigned int		kill:1;       /* the proc is being torn down */
 	unsigned int		overloaded:1; /* the proc needs more cores */
 	unsigned int		bursting:1;   /* the proc is using past resv. */
+	unsigned int		preempting:1;	/* a thread was preempted for this proc
+											but has not yet parked */
 
 	/* intrusive list links */
 	struct list_node	overloaded_link;
@@ -77,6 +78,8 @@ struct proc {
 	struct thread		*active_threads[NCPU];
 	DEFINE_BITMAP(available_threads, NCPU);
 	struct list_head	idle_threads;
+	struct thread		*preempting_thread; /* if preempting, this thread will
+											run when preemption completes */
 
 	/* network data */
 	struct eth_addr		mac;
