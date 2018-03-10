@@ -460,12 +460,14 @@ void cores_park_kthread(struct thread *th, bool force)
 	BUG_ON(bitmap_test(p->available_threads, kthread));
 
 	/* check for race conditions with the runtime */
-	lrpc_poll_send_tail(&th->rxq);
-	if (unlikely(!force && lrpc_get_cached_length(&th->rxq) > 0)) {
-		/* the runtime parked while packets were in flight */
-		s = write(th->park_efd, &val, sizeof(val));
-		BUG_ON(s != sizeof(uint64_t));
-		return;
+	if (core_history[core].next == NULL && !force) {
+		lrpc_poll_send_tail(&th->rxq);
+		if (unlikely(lrpc_get_cached_length(&th->rxq) > 0)) {
+			/* the runtime parked while packets were in flight */
+			s = write(th->park_efd, &val, sizeof(val));
+			BUG_ON(s != sizeof(uint64_t));
+			return;
+		}
 	}
 
 	/* move the kthread to the linux core */
@@ -502,6 +504,10 @@ struct thread *cores_add_core(struct proc *p)
 	if (p->preempting)
 		return p->preempting_thread;
 
+	/* can't add cores if we're already using all available kthreads */
+	if (p->active_thread_count == p->thread_count)
+		return NULL;
+
 	/* pick a core to add and a thread to run on it */
 	core = pick_core_for_proc(p);
 	th = pick_thread_for_proc(p);
@@ -522,6 +528,7 @@ struct thread *cores_add_core(struct proc *p)
 		p->preempting_thread = th;
 
 		th_current = core_history[core].current;
+		proc_set_overloaded(th_current->p);
 		core_history[core].next = th;
 		syscall(SYS_tgkill, th_current->p->pid, th_current->tid, SIGUSR1);
 
@@ -621,10 +628,6 @@ void cores_adjust_assignments()
 		for (j = 0; j < p->active_thread_count; j++) {
 			th = p->active_threads[j];
 
-			/* check if runtime is already using max kthreads */
-			if (p->active_thread_count == p->thread_count)
-				continue;
-
 			/* check if runqueue remained non-empty */
 			if (gen_in_same_gen(&th->rq_gen))
 				goto request_kthread;
@@ -657,8 +660,7 @@ void cores_adjust_assignments()
 		if (nr_avail_cores == 0)
 			break;
 
-		if (!cores_add_core(p))
-			BUG();
+		cores_add_core(p);
 	}
 }
 
