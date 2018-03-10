@@ -228,6 +228,7 @@ static inline void thread_reserve(struct thread *th, unsigned int core)
 
 	/* add the thread to the polling array */
 	th->parked = false;
+	th->waking = true;
 	poll_thread(th);
 }
 
@@ -310,7 +311,7 @@ static inline struct thread *pick_thread_for_proc(struct proc *p)
  *
  * Returns an available core if one exists, or else a core to be preempted.
  */
-static inline int pick_core_for_proc(struct proc *p)
+static int pick_core_for_proc(struct proc *p)
 {
 	int buddy_core, core;
 	int i;
@@ -338,6 +339,8 @@ static inline int pick_core_for_proc(struct proc *p)
 	core = t->core;
 	if (core_available(core))
 		return core;
+
+	/* core is busy, should we preempt it? */
 	if (nr_avail_cores == 0 && core_history[core].next == NULL) {
 		core_proc = core_history[core].current->p;
 		if (core_proc != p && proc_is_bursting(core_proc))
@@ -346,22 +349,20 @@ static inline int pick_core_for_proc(struct proc *p)
 
 	/* pick the lowest available core */
 	core = bitmap_find_next_set(avail_cores, cpu_count, 0);
+	if (core != cpu_count)
+		return core;
 
-	if (core == cpu_count) {
-		/* no cores available, take from any bursting proc */
-		core_proc = get_bursting_proc();
-
-		if (core_proc == NULL) {
-			/* this is possible because we only allow one in-flight preemption
-			 * per core at once. we need to handle this. */
-			log_err("pick_core_for_proc: no available cores!");
-			BUG();
-		}
-
-		core = core_proc->active_threads[rand_crc32c((uintptr_t) core_proc)
-				% core_proc->active_thread_count]->core;
+	/* no cores available, take from any bursting proc */
+	core_proc = get_bursting_proc();
+	if (core_proc == NULL) {
+		/* this is possible because we only allow one in-flight preemption
+		 * per core at once. we need to handle this. */
+		log_err("pick_core_for_proc: no available cores!");
+		BUG();
 	}
 
+	core = core_proc->active_threads[rand_crc32c((uintptr_t) core_proc) %
+	       core_proc->active_thread_count]->core;
 	return core;
 }
 
@@ -372,7 +373,7 @@ static inline int pick_core_for_proc(struct proc *p)
  * Returns a thread to grant this core to, or NULL if no process want another
  * core.
  */
-static inline struct thread *pick_thread_for_core(int core)
+static struct thread *pick_thread_for_core(int core)
 {
 	struct thread *th_next;
 	int buddy_core;
@@ -522,18 +523,21 @@ struct thread *cores_add_core(struct proc *p)
 		wake_kthread_on_core(th, core);
 
 		return th;
-	} else {
-		/* core is busy, preempt the currently running thread */
-		p->preempting = true;
-		p->preempting_thread = th;
-
-		th_current = core_history[core].current;
-		proc_set_overloaded(th_current->p);
-		core_history[core].next = th;
-		syscall(SYS_tgkill, th_current->p->pid, th_current->tid, SIGUSR1);
-
-		return th;
 	}
+
+	/* core is busy, preempt the currently running thread */
+	p->preempting = true;
+	p->preempting_thread = th;
+
+	th_current = core_history[core].current;
+	proc_set_overloaded(th_current->p);
+	core_history[core].next = th;
+	if (unlikely(syscall(SYS_tgkill, th_current->p->pid,
+		     th_current->tid, SIGUSR1) < 0)) {
+		WARN();
+	}
+
+	return th;
 }
 
 /*
@@ -628,6 +632,12 @@ void cores_adjust_assignments()
 		for (j = 0; j < p->active_thread_count; j++) {
 			th = p->active_threads[j];
 
+			/* if the thread just woke up, skip this round */
+			if (th->waking) {
+				th->waking = false;
+				continue;
+			}
+
 			/* check if runqueue remained non-empty */
 			if (gen_in_same_gen(&th->rq_gen))
 				goto request_kthread;
@@ -636,11 +646,10 @@ void cores_adjust_assignments()
 			send_tail = lrpc_poll_send_tail(&th->rxq);
 			len = lrpc_get_cached_length(&th->rxq);
 			if (len > 0 && (len >= IOKERNEL_RX_WAKE_THRESH ||
-						send_tail == th->last_send_tail)) {
+					send_tail == th->last_send_tail)) {
 				th->last_send_tail = send_tail;
 				goto request_kthread;
 			}
-			th->last_send_tail = send_tail;
 
 			/* TODO: check on timers */
 
