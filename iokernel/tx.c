@@ -203,7 +203,7 @@ full:
 		ret = rte_mempool_get_bulk(tx_mbuf_pool, (void **)&bufs[n_bufs],
 					n_pkts - n_bufs);
 		if (unlikely(ret)) {
-			log_warn("tx: error getting %d mbufs from mempool", n_pkts - n_bufs);
+			log_warn_ratelimited("tx: error getting %d mbufs from mempool", n_pkts - n_bufs);
 			return true;
 		}
 	}

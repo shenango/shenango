@@ -104,7 +104,7 @@ static void rx_one_pkt(struct rte_mbuf *buf)
 		ret = rte_hash_lookup_data(dp.mac_to_proc,
 				&ptr_dst_addr->addr_bytes[0], &data);
 		if (unlikely(ret < 0)) {
-			log_warn("rx: received packet for unregistered MAC");
+			log_debug("rx: received packet for unregistered MAC");
 			rte_pktmbuf_free(buf);
 			return;
 		}
@@ -143,7 +143,7 @@ static void rx_one_pkt(struct rte_mbuf *buf)
 	}
 
 	/* everything else */
-	log_warn("rx: unhandled packet with MAC %x %x %x %x %x %x",
+	log_debug("rx: unhandled packet with MAC %x %x %x %x %x %x",
 		 ptr_dst_addr->addr_bytes[0], ptr_dst_addr->addr_bytes[1],
 		 ptr_dst_addr->addr_bytes[2], ptr_dst_addr->addr_bytes[3],
 		 ptr_dst_addr->addr_bytes[4], ptr_dst_addr->addr_bytes[5]);

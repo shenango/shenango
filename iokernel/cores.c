@@ -650,7 +650,7 @@ void cores_adjust_assignments()
 				th->last_send_tail = send_tail;
 				goto request_kthread;
 			}
-
+			th->last_send_tail = send_tail;
 			/* TODO: check on timers */
 
 			continue; /* no need to wake a kthread */
