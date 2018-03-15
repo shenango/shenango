@@ -14,9 +14,8 @@ use Packet;
 
 pub const NVALUES : u32 = 2000000;
 
-pub fn create_request(i: usize, p: &mut Packet) -> Vec<u8> {
-    let mut vec: Vec<u8> = Vec::new();
-    let key = (p.randomness % NVALUES).to_string();
+pub fn create_request(i: usize, packet: &mut Packet, buf: &mut Vec<u8>) {
+    let key = (packet.randomness % NVALUES).to_string();
 
     let request_header = PacketHeader {
         magic: Magic::Request as u8,
@@ -26,16 +25,15 @@ pub fn create_request(i: usize, p: &mut Packet) -> Vec<u8> {
         opaque: i as u32,
         ..Default::default()
     };
-    request_header.write(&mut vec).unwrap();
-    vec.write_all(key.as_bytes()).unwrap();
-    return vec;
+    request_header.write(buf).unwrap();
+    buf.write_all(key.as_bytes()).unwrap();
 }
 
-pub fn parse_response(vec: & Vec<u8>, len: usize) -> Result<usize, ()> {
-    if len < 8 {
+pub fn parse_response(buf: &[u8]) -> Result<usize, ()> {
+    if buf.len() < 8 {
         return Err(());
     }
-    match PacketHeader::read(&mut Cursor::new(&vec[8..len])) {
+    match PacketHeader::read(&mut Cursor::new(buf)) {
         Ok(hdr) => {
             if hdr.vbucket_id_or_status != ResponseStatus::NoError as u16 {
                 return Err(());

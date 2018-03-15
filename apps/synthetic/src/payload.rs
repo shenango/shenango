@@ -8,21 +8,22 @@ pub struct Payload {
     pub index: u64,
 }
 
-pub fn parse_response(vec: & Vec<u8>, len: usize) -> Result<usize, ()> {
-    match bincode::deserialize::<Payload>(&vec[..len]) {
+pub fn parse_response(buf: &[u8]) -> Result<usize, ()> {
+    match bincode::deserialize::<Payload>(buf) {
         Ok(payload) => Ok(payload.index as usize),
         Err(_) => Err(()),
     }
 }
 
-pub fn create_request(i: usize, p: &mut Packet) -> Vec<u8> {
-    return bincode::serialize(
-                    &Payload {
-                        sleep_us: p.sleep_us,
-                        index: i as u64,
-                    },
-                    bincode::Infinite,
-                ).unwrap()
+pub fn create_request(i: usize, p: &mut Packet, buf: &mut Vec<u8>) {
+    return bincode::serialize_into(
+        buf,
+        &Payload {
+            sleep_us: p.sleep_us,
+            index: i as u64,
+        },
+        bincode::Infinite,
+    ).unwrap();
 }
 
 

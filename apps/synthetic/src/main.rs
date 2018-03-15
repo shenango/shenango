@@ -168,8 +168,8 @@ fn run_client(
                 match socket.recv(&mut recv_buf[..]) {
                     Ok(len) => {
                         let idx = match protocol {
-                            Protocol::Memcached => memcached::parse_response(&recv_buf, len),
-                            Protocol::Synthetic => payload::parse_response(&recv_buf, len),
+                            Protocol::Memcached => memcached::parse_response(&recv_buf[..len]),
+                            Protocol::Synthetic => payload::parse_response(&recv_buf[..len]),
                         };
                         if idx.is_err() {
                             break;
@@ -192,10 +192,12 @@ fn run_client(
                 }
             });
 
+            let mut payload = Vec::with_capacity(4096);
             for (i, packet) in packets.iter_mut().enumerate() {
-                let payload = match protocol {
-                    Protocol::Memcached => memcached::create_request(i, packet),
-                    Protocol::Synthetic => payload::create_request(i, packet),
+                payload.clear();
+                match protocol {
+                    Protocol::Memcached => memcached::create_request(i, packet, &mut payload),
+                    Protocol::Synthetic => payload::create_request(i, packet, &mut payload),
                 };
 
                 while start.elapsed() < packet.target_start {
