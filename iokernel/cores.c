@@ -391,9 +391,11 @@ static struct thread *pick_thread_for_core(int core)
 
 	/* try to allocate to the process running on the hyperthread pair core */
 	buddy_core = cpu_to_sibling_cpu(core);
-	p = core_history[buddy_core].current->p;
-	if (!p->removed && proc_is_overloaded(p))
-		goto chose_proc;
+	if (core_history[buddy_core].current) {
+		p = core_history[buddy_core].current->p;
+		if (!p->removed && proc_is_overloaded(p))
+			goto chose_proc;
+	}
 
 	/* try to allocate to the process that used this core most recently */
 	if (core_history[core].prev) {
