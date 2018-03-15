@@ -14,7 +14,6 @@
 
 #include "defs.h"
 
-#define UDP_SEED		0x48FA8BC1
 #define UDP_TABLE_SIZE		1024
 #define UDP_IN_DEFAULT_CAP	512
 #define UDP_OUT_DEFAULT_CAP	2048
@@ -30,16 +29,18 @@ enum {
 	UDP_MATCH_4TUPLE,
 };
 
+static uint32_t udp_seed;
+
 static inline uint32_t udp_hash_2tuple(struct udpaddr laddr)
 {
-	return hash_crc32c_one(UDP_SEED,
+	return hash_crc32c_one(udp_seed,
 		(uint64_t)laddr.ip | ((uint64_t)laddr.port << 32));
 }
 
 static inline uint32_t udp_hash_4tuple(struct udpaddr laddr,
 				       struct udpaddr raddr)
 {
-	return hash_crc32c_two(UDP_SEED,
+	return hash_crc32c_two(udp_seed,
 		(uint64_t)laddr.ip | ((uint64_t)laddr.port << 32),
 		(uint64_t)raddr.ip | ((uint64_t)raddr.port << 32));
 }
@@ -977,6 +978,8 @@ int udp_init(void)
 
 	for (i = 0; i < UDP_TABLE_SIZE; i++)
 		rcu_hlist_init_head(&udp_table[i]);
+
+	udp_seed = rand_crc32c(0x48FA8BC1 ^ iok.key);
 
 	return 0;
 }
