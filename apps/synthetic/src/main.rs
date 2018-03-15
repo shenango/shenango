@@ -10,6 +10,7 @@ extern crate libc;
 extern crate rand;
 extern crate shenango;
 extern crate test;
+extern crate byteorder;
 
 use std::iter;
 use std::net::{SocketAddrV4, UdpSocket};
@@ -18,9 +19,9 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use bincode::Infinite;
 use clap::{App, Arg};
 use rand::distributions::{Exp, IndependentSample};
+use rand::Rng;
 use shenango::udp::UdpSpawner;
 
 mod backend;
@@ -29,11 +30,30 @@ use backend::*;
 mod payload;
 use payload::Payload;
 
+#[derive(Default)]
+pub struct Packet {
+    sleep_us: u64,
+    randomness: u32,
+    target_start: Duration,
+    actual_start: Option<Duration>,
+    completion_time: Option<Duration>,
+}
+
+mod memcached;
+mod memcache_packet;
+mod memcache_error;
+
 enum Distribution {
     Zero,
     Constant,
     Bimodal1,
     Bimodal2,
+}
+
+#[derive(Copy, Clone)]
+enum Protocol {
+    Synthetic,
+    Memcached,
 }
 
 fn work(iterations: u64) {
@@ -89,6 +109,18 @@ fn run_spawner_server(addr: SocketAddrV4) {
     }
 }
 
+fn warmup(
+    backend: Backend,
+    addr: SocketAddrV4,
+    nthreads: u32,
+    protocol: Protocol,
+) {
+    match protocol {
+        Protocol::Synthetic => return,
+        Protocol::Memcached => memcached::warmup(backend, addr, nthreads),
+    }
+}
+
 fn run_client(
     backend: Backend,
     addr: SocketAddrV4,
@@ -96,14 +128,8 @@ fn run_client(
     packets_per_second: usize,
     nthreads: u32,
     trace: bool,
+    protocol: Protocol,
 ) {
-    #[derive(Default)]
-    struct Packet {
-        sleep_us: u64,
-        target_start: Duration,
-        actual_start: Option<Duration>,
-        completion_time: Option<Duration>,
-    }
 
     let packets_per_thread =
         duration_to_ns(runtime) as usize * packets_per_second / (1000_000_000 * nthreads as usize);
@@ -118,6 +144,7 @@ fn run_client(
             for _ in 0..packets_per_thread {
                 last += exp.ind_sample(&mut rng) as u64;
                 packets.push(Packet {
+                    randomness: rng.gen::<u32>(),
                     target_start: Duration::from_nanos(last),
                     ..Default::default()
                 });
@@ -140,9 +167,14 @@ fn run_client(
             for _ in 0..receive_times.len() {
                 match socket.recv(&mut recv_buf[..]) {
                     Ok(len) => {
-                        if let Ok(payload) = bincode::deserialize::<Payload>(&recv_buf[..len]) {
-                            receive_times[payload.index as usize] = Some(start.elapsed());
+                        let idx = match protocol {
+                            Protocol::Memcached => memcached::parse_response(&recv_buf, len),
+                            Protocol::Synthetic => payload::parse_response(&recv_buf, len),
+                        };
+                        if idx.is_err() {
+                            break;
                         }
+                        receive_times[idx.unwrap() as usize] = Some(start.elapsed());
                     }
                     Err(_) => break,
                 }
@@ -150,24 +182,21 @@ fn run_client(
             receive_times
         }));
         send_threads.push(backend.spawn_thread(move || {
-            // // If the send or receive thread is still running 500 ms after it should have finished,
-            // // then stop it by triggering a shutdown on the socket.
-            // let socket = socket2.clone();
-            // backend.spawn_thread(move || {
-            //     backend.sleep(runtime + Duration::from_millis(500));
-            //     if Arc::strong_count(&socket) > 1 {
-            //         socket.shutdown();
-            //     }
-            // });
+            // If the send or receive thread is still running 500 ms after it should have finished,
+            // then stop it by triggering a shutdown on the socket.
+            let socket = socket2.clone();
+            backend.spawn_thread(move || {
+                backend.sleep(runtime + Duration::from_millis(500));
+                if Arc::strong_count(&socket) > 1 {
+                    socket.shutdown();
+                }
+            });
 
             for (i, packet) in packets.iter_mut().enumerate() {
-                let payload = bincode::serialize(
-                    &Payload {
-                        sleep_us: packet.sleep_us,
-                        index: i as u64,
-                    },
-                    Infinite,
-                ).unwrap();
+                let payload = match protocol {
+                    Protocol::Memcached => memcached::create_request(i, packet),
+                    Protocol::Synthetic => payload::create_request(i, packet),
+                };
 
                 while start.elapsed() < packet.target_start {
                     backend.thread_yield()
@@ -317,6 +346,24 @@ fn main() {
                 .takes_value(false)
                 .help("Whether to output trace of all packet latencies."),
         )
+        .arg(
+            Arg::with_name("protocol")
+                .short("p")
+                .long("protocol")
+                .value_name("PROTOCOL")
+                .possible_values(&[
+                    "synthetic",
+                    "memcached",
+                ])
+                .default_value("synthetic")
+                .help("Which client protocol to speak"),
+        )
+        .arg(
+            Arg::with_name("warmup")
+                .long("warmup")
+                .takes_value(false)
+                .help("Run the warmup routine"),
+        )
         .get_matches();
 
     let addr = matches.value_of("ADDR").unwrap().to_owned();
@@ -325,6 +372,12 @@ fn main() {
     let packets_per_second = (1.0e6 * value_t_or_exit!(matches, "mpps", f32)) as usize;
     let config = matches.value_of("config");
     let trace = matches.is_present("trace");
+    let dowarmup = matches.is_present("warmup");
+    let proto = match matches.value_of("protocol").unwrap() {
+        "synthetic" => Protocol::Synthetic,
+        "memcached" => Protocol::Memcached,
+        _ => unreachable!(),
+    };
 
     match matches.value_of("mode").unwrap() {
         "linux-server" => {
@@ -332,15 +385,23 @@ fn main() {
             println!("Bound to address {}", socket.local_addr().unwrap());
             run_server(Backend::Linux, UdpConnection::Linux(socket), nthreads)
         }
-        "linux-client" => for packets_per_second in (1..100).map(|i| i * 10000) {
-            run_client(
-                Backend::Linux,
-                FromStr::from_str(&addr).unwrap(),
-                runtime,
-                packets_per_second,
-                nthreads,
-                false,
-            )
+        "linux-client" => {
+            if dowarmup {
+                warmup(Backend::Linux, FromStr::from_str(&addr).unwrap(), nthreads, proto);
+                println!("Warmup done");
+                return;
+            }
+            for packets_per_second in (1..100).map(|i| i * 10000) {
+                run_client(
+                    Backend::Linux,
+                    FromStr::from_str(&addr).unwrap(),
+                    runtime,
+                    packets_per_second,
+                    nthreads,
+                    false,
+                    proto,
+                )
+            }
         },
         "runtime-server" => shenango::runtime_init(config.unwrap().to_owned(), move || {
             let addr = FromStr::from_str(&addr).unwrap();
@@ -359,6 +420,7 @@ fn main() {
                         packets_per_second,
                         nthreads,
                         false,
+                        proto,
                     );
                 }
                 run_client(
@@ -368,8 +430,14 @@ fn main() {
                     packets_per_second,
                     nthreads,
                     true,
+                    proto,
                 );
             } else {
+                if dowarmup {
+                    warmup(Backend::Runtime, FromStr::from_str(&addr).unwrap(), nthreads, proto);
+                    println!("Warmup done");
+                    return;
+                }
                 for packets_per_second in (iter::once(1).chain(1..500)).map(|i| i * 200000) {
                     run_client(
                         Backend::Runtime,
@@ -378,6 +446,7 @@ fn main() {
                         packets_per_second,
                         nthreads,
                         false,
+                        proto,
                     );
                     //                    shenango::sleep(Duration::from_millis(1000));
                 }

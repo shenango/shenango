@@ -34,7 +34,7 @@ pub fn thread_yield() {
     unsafe { ffi::thread_yield() }
 }
 pub fn thread_self() -> *mut ffi::thread_t {
-    unsafe { ffi::thread_self() }
+    unsafe { __self }
 }
 
 fn convert_error(ret: c_int) -> Result<(), i32> {

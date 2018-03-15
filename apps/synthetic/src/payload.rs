@@ -1,9 +1,30 @@
 use std::convert::From;
 
+use bincode;
+use Packet;
+
 pub struct Payload {
     pub sleep_us: u64,
     pub index: u64,
 }
+
+pub fn parse_response(vec: & Vec<u8>, len: usize) -> Result<usize, ()> {
+    match bincode::deserialize::<Payload>(&vec[..len]) {
+        Ok(payload) => Ok(payload.index as usize),
+        Err(_) => Err(()),
+    }
+}
+
+pub fn create_request(i: usize, p: &mut Packet) -> Vec<u8> {
+    return bincode::serialize(
+                    &Payload {
+                        sleep_us: p.sleep_us,
+                        index: i as u64,
+                    },
+                    bincode::Infinite,
+                ).unwrap()
+}
+
 
 #[allow(non_upper_case_globals, unused_attributes, unused_qualifications)]
 const _IMPL_SERIALIZE_FOR_Payload: () =
