@@ -9,6 +9,7 @@
 #include <base/stddef.h>
 #include <base/log.h>
 #include <base/time.h>
+#include <net/ip.h>
 #include <runtime/thread.h>
 #include <runtime/sync.h>
 #include <runtime/udp.h>

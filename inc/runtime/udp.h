@@ -5,14 +5,10 @@
 #pragma once
 
 #include <base/types.h>
-#include <net/ethernet.h>
-#include <net/ip.h>
-#include <net/udp.h>
 #include <sys/uio.h>
 
 /* the maximum size of a UDP payload */
-#define UDP_MAX_PAYLOAD \
-	(ETH_MTU - sizeof(struct ip_hdr) - sizeof(struct udp_hdr))
+#define UDP_MAX_PAYLOAD 1472
 
 struct udpaddr {
 	uint32_t ip;

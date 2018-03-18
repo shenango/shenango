@@ -629,8 +629,6 @@ void cores_adjust_assignments()
 	for (i = 0; i < dp.nr_clients; i++) {
 		p = dp.clients[i];
 
-		proc_clear_overloaded(p);
-
 		for (j = 0; j < p->active_thread_count; j++) {
 			th = p->active_threads[j];
 

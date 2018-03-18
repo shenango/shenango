@@ -28,11 +28,11 @@ void BenchUncontendedMutex() {
 
 void BenchYield() {
   auto th = std::thread([](){
-    for (int i = 0; i < kMeasureRounds; ++i)
+    for (int i = 0; i < kMeasureRounds / 2; ++i)
       std::this_thread::yield();
   });
 
-  for (int i = 0; i < kMeasureRounds; ++i)
+  for (int i = 0; i < kMeasureRounds / 2; ++i)
     std::this_thread::yield();
 
   th.join();
@@ -44,7 +44,7 @@ void BenchCondvarPingPong() {
   bool dir = false; // shared and protected by @m.
 
   auto th = std::thread([&](){
-    for (int i = 0; i < kMeasureRounds; ++i) {
+    for (int i = 0; i < kMeasureRounds / 2; ++i) {
       std::unique_lock<std::mutex> l(m);
       while (dir)
         cv.wait(l);
@@ -53,7 +53,7 @@ void BenchCondvarPingPong() {
     }
   });
 
-  for (int i = 0; i < kMeasureRounds; ++i) {
+  for (int i = 0; i < kMeasureRounds / 2; ++i) {
     std::unique_lock<std::mutex> l(m);
     while (!dir)
       cv.wait(l);

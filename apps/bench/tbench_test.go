@@ -30,13 +30,13 @@ func BenchmarkYield(b *testing.B) {
 	c := make(chan int, 1)
 
 	go func() {
-		for i := 0; i < b.N; i++ {
+		for i := 0; i < b.N / 2; i++ {
 			runtime.Gosched()
 		}
 		c <- 1
 	}()
 
-	for i := 0; i < b.N; i++ {
+	for i := 0; i < b.N / 2; i++ {
 		runtime.Gosched()
 	}
 
@@ -50,7 +50,7 @@ func BenchmarkCondvarPingPong(b *testing.B) {
 	dir := bool(false)
 
 	go func() {
-		for i := 0; i < b.N; i++ {
+		for i := 0; i < b.N / 2; i++ {
 			m.Lock()
 			for dir {
 				cv.Wait()
@@ -62,7 +62,7 @@ func BenchmarkCondvarPingPong(b *testing.B) {
 		c <- 1
 	}()
 
-	for i := 0; i < b.N; i++ {
+	for i := 0; i < b.N / 2; i++ {
 		m.Lock()
 		for !dir {
 			cv.Wait()

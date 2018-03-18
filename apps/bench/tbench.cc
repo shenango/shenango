@@ -28,11 +28,11 @@ void BenchUncontendedMutex() {
 
 void BenchYield() {
   auto th = rt::Thread([](){
-    for (int i = 0; i < kMeasureRounds; ++i)
+    for (int i = 0; i < kMeasureRounds / 2; ++i)
       rt::Yield();
   });
 
-  for (int i = 0; i < kMeasureRounds; ++i)
+  for (int i = 0; i < kMeasureRounds / 2; ++i)
     rt::Yield();
 
   th.Join();
@@ -44,7 +44,7 @@ void BenchCondvarPingPong() {
   bool dir = false; // shared and protected by @m.
 
   auto th = rt::Thread([&](){
-    for (int i = 0; i < kMeasureRounds; ++i) {
+    for (int i = 0; i < kMeasureRounds / 2; ++i) {
       rt::ScopedLock<rt::Mutex> l(&m);
       while (dir)
         cv.Wait(&m);
@@ -53,7 +53,7 @@ void BenchCondvarPingPong() {
     }
   });
 
-  for (int i = 0; i < kMeasureRounds; ++i) {
+  for (int i = 0; i < kMeasureRounds / 2; ++i) {
     rt::ScopedLock<rt::Mutex> l(&m);
     while (!dir)
       cv.Wait(&m);
