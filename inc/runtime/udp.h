@@ -5,6 +5,7 @@
 #pragma once
 
 #include <base/types.h>
+#include <net/udp.h>
 #include <sys/uio.h>
 
 /* the maximum size of a UDP payload */
