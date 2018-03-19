@@ -289,7 +289,7 @@ int tx_init()
 {
 	/* create a mempool to hold struct rte_mbufs and handle completions */
 	tx_mbuf_pool = tx_pktmbuf_completion_pool_create("TX_MBUF_POOL",
-			IOKERNEL_NUM_MBUFS, sizeof(struct tx_pktmbuf_priv),
+			IOKERNEL_NUM_COMPLETIONS, sizeof(struct tx_pktmbuf_priv),
 			rte_socket_id());
 
 	if (tx_mbuf_pool == NULL) {
