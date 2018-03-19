@@ -7,11 +7,11 @@
 extern crate clap;
 
 extern crate bincode;
+extern crate byteorder;
 extern crate libc;
 extern crate rand;
 extern crate shenango;
 extern crate test;
-extern crate byteorder;
 
 use std::iter;
 use std::net::{SocketAddrV4, UdpSocket};
@@ -33,7 +33,7 @@ use payload::Payload;
 
 #[derive(Default)]
 pub struct Packet {
-    sleep_us: u64,
+    work_iterations: u64,
     randomness: u32,
     target_start: Duration,
     actual_start: Option<Duration>,
@@ -44,11 +44,36 @@ mod memcached;
 mod memcache_packet;
 mod memcache_error;
 
+#[derive(Copy, Clone)]
 enum Distribution {
     Zero,
-    Constant,
-    Bimodal1,
-    Bimodal2,
+    Constant(u64),
+    Exponential(f64),
+    Bimodal1(f64),
+    Bimodal2(f64),
+}
+impl Distribution {
+    fn sample<R: Rng>(&self, rng: &mut R) -> u64 {
+        match *self {
+            Distribution::Zero => 0,
+            Distribution::Constant(m) => m,
+            Distribution::Exponential(m) => Exp::new(m).ind_sample(rng) as u64,
+            Distribution::Bimodal1(m) => {
+                if rng.gen_weighted_bool(10) {
+                    (m * 5.5) as u64
+                } else {
+                    (m * 0.5) as u64
+                }
+            }
+            Distribution::Bimodal2(m) => {
+                if rng.gen_weighted_bool(1000) {
+                    (m * 500.5) as u64
+                } else {
+                    (m * 0.5) as u64
+                }
+            }
+        }
+    }
 }
 
 #[derive(Copy, Clone)]
@@ -57,6 +82,7 @@ enum Protocol {
     Memcached,
 }
 
+#[inline(always)]
 fn work(iterations: u64) {
     let k = 2350845.545;
     for i in 0..iterations {
@@ -78,9 +104,8 @@ fn run_server(backend: Backend, socket: UdpConnection, nthreads: u32) {
                 loop {
                     let (len, remote_addr) = socket2.recv_from(&mut buf[..]).unwrap();
 
-                    let _payload: Payload = bincode::deserialize(&buf[..len]).unwrap();
-                    //                    backend.dummy_work(payload.sleep_us);
-
+                    let payload: Payload = bincode::deserialize(&buf[..len]).unwrap();
+                    work(payload.work_iterations);
                     socket2.send_to(&buf[..len], remote_addr).unwrap();
                 }
             })
@@ -96,8 +121,8 @@ fn run_spawner_server(addr: SocketAddrV4) {
     extern "C" fn echo(d: *mut shenango::ffi::udp_spawn_data) {
         unsafe {
             let buf = slice::from_raw_parts((*d).buf as *mut u8, (*d).len);
-            let _payload: Payload = bincode::deserialize(buf).unwrap();
-            //            Backend::Runtime.dummy_work(payload.sleep_us);
+            let payload: Payload = bincode::deserialize(buf).unwrap();
+            work(payload.work_iterations);
             let _ = UdpSpawner::reply(d, buf);
             UdpSpawner::release_data(d);
         }
@@ -110,12 +135,7 @@ fn run_spawner_server(addr: SocketAddrV4) {
     }
 }
 
-fn warmup(
-    backend: Backend,
-    addr: SocketAddrV4,
-    nthreads: u32,
-    protocol: Protocol,
-) {
+fn warmup(backend: Backend, addr: SocketAddrV4, nthreads: u32, protocol: Protocol) {
     match protocol {
         Protocol::Synthetic => return,
         Protocol::Memcached => memcached::warmup(backend, addr, nthreads),
@@ -130,8 +150,8 @@ fn run_client(
     nthreads: u32,
     trace: bool,
     protocol: Protocol,
+    distribution: Distribution,
 ) {
-
     let packets_per_thread =
         duration_to_ns(runtime) as usize * packets_per_second / (1000_000_000 * nthreads as usize);
     let ns_per_packet = nthreads as usize * 1000_000_000 / packets_per_second;
@@ -147,6 +167,7 @@ fn run_client(
                 packets.push(Packet {
                     randomness: rng.gen::<u32>(),
                     target_start: Duration::from_nanos(last),
+                    work_iterations: distribution.sample(&mut rng),
                     ..Default::default()
                 });
             }
@@ -268,7 +289,7 @@ fn run_client(
     );
 
     if trace {
-        packets.sort_by_key(|p|p.actual_start.unwrap_or(p.target_start));
+        packets.sort_by_key(|p| p.actual_start.unwrap_or(p.target_start));
         for p in packets {
             if let Some(completion_time) = p.completion_time {
                 let actual_start = p.actual_start.unwrap();
@@ -320,6 +341,7 @@ fn main() {
                     "runtime-server",
                     "runtime-client",
                     "spawner-server",
+                    "work-bench",
                 ])
                 .required(true)
                 .requires_ifs(&[
@@ -361,10 +383,7 @@ fn main() {
                 .short("p")
                 .long("protocol")
                 .value_name("PROTOCOL")
-                .possible_values(&[
-                    "synthetic",
-                    "memcached",
-                ])
+                .possible_values(&["synthetic", "memcached"])
                 .default_value("synthetic")
                 .help("Which client protocol to speak"),
         )
@@ -373,6 +392,22 @@ fn main() {
                 .long("warmup")
                 .takes_value(false)
                 .help("Run the warmup routine"),
+        )
+        .arg(
+            Arg::with_name("distribution")
+                .long("distribution")
+                .short("d")
+                .takes_value(true)
+                .possible_values(&["zero", "constant", "exponential", "bimodal1", "bimodal2"])
+                .default_value("zero")
+                .help("Distribution of request lengths to use"),
+        )
+        .arg(
+            Arg::with_name("mean")
+                .long("mean")
+                .takes_value(true)
+                .default_value("167")
+                .help("Mean number of work iterations per request"),
         )
         .get_matches();
 
@@ -388,6 +423,15 @@ fn main() {
         "memcached" => Protocol::Memcached,
         _ => unreachable!(),
     };
+    let mean = value_t_or_exit!(matches, "mean", f64);
+    let distribution = match matches.value_of("distribution").unwrap() {
+        "zero" => Distribution::Zero,
+        "fixed" => Distribution::Constant(mean as u64),
+        "exponential" => Distribution::Exponential(mean),
+        "bimodal1" => Distribution::Bimodal1(mean),
+        "bimodal2" => Distribution::Bimodal2(mean),
+        _ => unreachable!(),
+    };
 
     match matches.value_of("mode").unwrap() {
         "linux-server" => {
@@ -397,7 +441,12 @@ fn main() {
         }
         "linux-client" => {
             if dowarmup {
-                warmup(Backend::Linux, FromStr::from_str(&addr).unwrap(), nthreads, proto);
+                warmup(
+                    Backend::Linux,
+                    FromStr::from_str(&addr).unwrap(),
+                    nthreads,
+                    proto,
+                );
                 println!("Warmup done");
                 return;
             }
@@ -410,9 +459,10 @@ fn main() {
                     nthreads,
                     false,
                     proto,
+                    distribution,
                 )
             }
-        },
+        }
         "runtime-server" => shenango::runtime_init(config.unwrap().to_owned(), move || {
             let addr = FromStr::from_str(&addr).unwrap();
             let socket = shenango::udp::UdpConnection::listen(addr);
@@ -431,6 +481,7 @@ fn main() {
                         nthreads,
                         false,
                         proto,
+                        distribution,
                     );
                 }
                 run_client(
@@ -441,17 +492,22 @@ fn main() {
                     nthreads,
                     true,
                     proto,
+                    distribution,
                 );
             } else {
                 if dowarmup {
-                    warmup(Backend::Runtime, FromStr::from_str(&addr).unwrap(), nthreads, proto);
+                    warmup(
+                        Backend::Runtime,
+                        FromStr::from_str(&addr).unwrap(),
+                        nthreads,
+                        proto,
+                    );
                     println!("Warmup done");
                     return;
                 }
                 let start = Instant::now();
-                for (i, packets_per_second) in (iter::once(1).chain(1..500))
-                    .map(|i| i * 50000)
-                    .enumerate()
+                for (i, packets_per_second) in
+                    (iter::once(1).chain(1..500)).map(|i| i * 50000).enumerate()
                 {
                     while start.elapsed() < (runtime + Duration::from_secs(1)) * i as u32 {
                         shenango::cpu_relax();
@@ -464,6 +520,7 @@ fn main() {
                         nthreads,
                         false,
                         proto,
+                        distribution,
                     );
                 }
             }
@@ -471,6 +528,14 @@ fn main() {
         "spawner-server" => shenango::runtime_init(config.unwrap().to_owned(), move || {
             run_spawner_server(FromStr::from_str(&addr).unwrap())
         }).unwrap(),
+        "work-bench" => {
+            let iterations = 1000_000;
+            println!("Timing {} iterations of work()", iterations);
+            let start = Instant::now();
+            work(iterations);
+            let elapsed = duration_to_ns(start.elapsed());
+            println!("Rate = {} ns/iteration", elapsed as f64 / iterations as f64);
+        }
         _ => unreachable!(),
     };
 }
