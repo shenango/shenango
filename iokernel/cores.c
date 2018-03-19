@@ -420,7 +420,7 @@ static void wake_kthread_on_core(struct thread *th, int core)
 {
 	int ret;
 	ssize_t s;
-	uint64_t val;
+	uint64_t val = 1;
 
 	BUG_ON(!core_available(core)); /* core should be idle now */
 
@@ -436,8 +436,6 @@ static void wake_kthread_on_core(struct thread *th, int core)
 		/* continue running but performance is unpredictable */
 	}
 
-
-	val = th->core;
 	/* wake up the kthread */
 	s = write(th->park_efd, &val, sizeof(val));
 	BUG_ON(s != sizeof(uint64_t));
@@ -454,7 +452,7 @@ void cores_park_kthread(struct thread *th, bool force)
 	unsigned int core = th->core;
 	unsigned int kthread = th - p->threads;
 	ssize_t s;
-	uint64_t val;
+	uint64_t val = 1;
 	int ret;
 	struct thread *th_new;
 
@@ -469,7 +467,6 @@ void cores_park_kthread(struct thread *th, bool force)
 		lrpc_poll_send_tail(&th->rxq);
 		if (unlikely(lrpc_get_cached_length(&th->rxq) > 0)) {
 			/* the runtime parked while packets were in flight */
-			val = th->core;
 			s = write(th->park_efd, &val, sizeof(val));
 			BUG_ON(s != sizeof(uint64_t));
 			return;

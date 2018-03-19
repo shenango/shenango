@@ -33,8 +33,6 @@ static atomic_t runningks;
 struct kthread *ks[NCPU];
 /* kernel thread-local data */
 __thread struct kthread *mykthread;
-/* Map of cpu to kthread */
-struct cpu_to_kthr_record kthrmap[NCPU] __attribute__((aligned(CACHE_LINE_SIZE)));
 
 static struct kthread *allock(void)
 {
@@ -171,19 +169,18 @@ static void kthread_yield_to_iokernel(void)
 {
 	struct kthread *k = myk();
 	ssize_t s;
-	uint64_t assigned_core;
+	uint64_t val;
 
 	/* yield to the iokernel */
-	s = read(k->park_efd, &assigned_core, sizeof(assigned_core));
+	s = read(k->park_efd, &val, sizeof(val));
 	while (unlikely(s != sizeof(uint64_t) && errno == EINTR)) {
 		/* preempted while yielding, yield again */
 		assert(preempt_needed());
 		clear_preempt_needed();
-		s = read(k->park_efd, &assigned_core, sizeof(assigned_core));
+		s = read(k->park_efd, &val, sizeof(val));
 	}
-	k->curr_cpu = assigned_core;
-	store_release(&kthrmap[assigned_core].p, k);
 	BUG_ON(s != sizeof(uint64_t));
+	BUG_ON(val != 1);
 }
 
 /*

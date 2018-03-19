@@ -207,11 +207,11 @@ done:
 /* the main scheduler routine, decides what to run next */
 static __noreturn void schedule(void)
 {
-	struct kthread *r = NULL, *l = myk();
+	struct kthread *r, *l = myk();
 	uint64_t start_tsc, end_tsc;
 	thread_t *th;
 	unsigned int last_nrks;
-	int i, j;
+	int i;
 
 	/* detect misuse of preempt disable */
 	BUG_ON((preempt_cnt & ~PREEMPT_NOT_PENDING) != 1);
@@ -268,16 +268,8 @@ again:
 
 	last_nrks = load_acquire(&nrks);
 
-	/* then attempt to steal tasks or packets from a sibling kthread */
-	bitmap_for_each_set(cpu_info_tbl[l->curr_cpu].thread_siblings_mask,
-				    cpu_count, j) {
-		if (j != l->curr_cpu)
-			r = load_acquire(&kthrmap[j].p);
-	}
-
-	/* or a random kthread, if there is no sibling */
-	if (!r)
-		r = ks[rand_crc32c((uintptr_t)l) % last_nrks];
+	/* then attempt to steal tasks or packets from a random kthread */
+	r = ks[rand_crc32c((uintptr_t)l) % last_nrks];
 	if (r != l && steal_work(l, r))
 		goto done;
 
