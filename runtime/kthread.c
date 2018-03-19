@@ -121,8 +121,8 @@ void kthread_detach(struct kthread *r)
 	/* make sure the park rxcmd was processed */
 	lrpc_poll_send_tail(&r->txcmdq);
 	if (unlikely(lrpc_get_cached_length(&r->txcmdq) > 0)) {
-		log_err_ratelimited("iokernel hasn't processed park request "
-				    "quicky enough!");
+				log_debug_ratelimited("iokernel hasn't processed park request "
+				    "quickly enough!");
 		return;
 	}
 

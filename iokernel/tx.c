@@ -120,13 +120,13 @@ bool tx_send_completion(void *obj)
 	if (!th->parked) {
 		if (!lrpc_send(&th->rxq, RX_NET_COMPLETE,
 			       priv_data->completion_data)) {
-			log_warn_ratelimited("tx: failed to send completion to runtime");
+			log_debug_ratelimited("tx: failed to send completion to runtime");
 			return false;
 		}
 	} else {
 		if (!rx_send_to_runtime(p, priv_data->th->tid, RX_NET_COMPLETE,
 					priv_data->completion_data)) {
-			log_warn_ratelimited("tx: failed to send completion to runtime");
+			log_debug_ratelimited("tx: failed to send completion to runtime");
 			return false;
 		}
 	}
