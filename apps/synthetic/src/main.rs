@@ -1,4 +1,5 @@
 #![feature(duration_extras)]
+#![feature(duration_from_micros)]
 #![feature(nll)]
 #![feature(test)]
 
@@ -203,6 +204,10 @@ fn run_client(
                 while start.elapsed() < packet.target_start {
                     backend.thread_yield()
                 }
+                if start.elapsed() > packet.target_start + Duration::from_micros(5) {
+                    continue;
+                }
+
                 packet.actual_start = Some(start.elapsed());
                 if socket2.send(&payload[..]).is_err() {
                     break;
@@ -227,15 +232,17 @@ fn run_client(
             ..p
         })
         .collect();
+    let never_sent = packets.iter().filter(|p| p.actual_start.is_none()).count();
     let dropped = packets
         .iter()
         .filter(|p| p.completion_time.is_none())
-        .count();
+        .count() - never_sent;
     let first_send = packets.iter().filter_map(|p| p.actual_start).min().unwrap();
     let last_send = packets.iter().filter_map(|p| p.actual_start).max().unwrap();
     let mut latencies: Vec<_> = packets
         .iter()
         .filter_map(|p| match (p.actual_start, p.completion_time) {
+            (Some(ref start), _) if *start < runtime / 10 => None,
             (Some(ref start), Some(ref end)) => Some(*end - *start),
             _ => None,
         })
@@ -248,10 +255,11 @@ fn run_client(
         duration_to_ns(latencies[(latencies.len() as f32 * p / 100.0) as usize]) as f32 / 1000.0
     };
     println!(
-        "{}, {}, {}, {:.1}, {:.1}, {:.1}, {:.1}, {:.1}",
+        "{}, {}, {}, {}, {:.1}, {:.1}, {:.1}, {:.1}, {:.1}",
         packets_per_second,
-        (packets.len() - dropped) as u64 * 1000_000_000 / duration_to_ns(last_send - first_send),
+        latencies.len() as u64 * 1000_000_000 / duration_to_ns(last_send - first_send),
         dropped,
+        never_sent,
         percentile(50.0),
         percentile(90.0),
         percentile(99.0),
@@ -440,7 +448,14 @@ fn main() {
                     println!("Warmup done");
                     return;
                 }
-                for packets_per_second in (iter::once(1).chain(1..500)).map(|i| i * 200000) {
+                let start = Instant::now();
+                for (i, packets_per_second) in (iter::once(1).chain(1..500))
+                    .map(|i| i * 50000)
+                    .enumerate()
+                {
+                    while start.elapsed() < (runtime + Duration::from_secs(1)) * i as u32 {
+                        shenango::cpu_relax();
+                    }
                     run_client(
                         Backend::Runtime,
                         FromStr::from_str(&addr).unwrap(),
@@ -450,7 +465,6 @@ fn main() {
                         false,
                         proto,
                     );
-                    //                    shenango::sleep(Duration::from_millis(1000));
                 }
             }
         }).unwrap(),
