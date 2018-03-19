@@ -286,7 +286,7 @@ struct kthread {
 	struct mbufq		txpktq_overflow;
 	struct mbufq		txcmdq_overflow;
 	unsigned int		rcu_gen;
-	unsigned int		pad[1];
+	unsigned int		curr_cpu;
 	uint64_t		park_us;
 
 	/* 3rd cache-line */
@@ -359,6 +359,16 @@ extern struct kthread *ks[NCPU];
 extern void kthread_detach(struct kthread *r);
 extern void kthread_park(bool voluntary);
 extern void kthread_wait_to_attach(void);
+
+struct cpu_record {
+	struct kthread *recent_kthread;
+	unsigned long sibling_core;
+	unsigned long pad[6];
+};
+
+BUILD_ASSERT(sizeof(struct cpu_record) == CACHE_LINE_SIZE);
+
+extern struct cpu_record cpu_map[NCPU];
 
 /**
  * STAT - gets a stat counter
