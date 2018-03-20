@@ -71,7 +71,7 @@ extern void condvar_init(condvar_t *cv);
 struct waitgroup {
 	spinlock_t		lock;
 	int			cnt;
-	thread_t		*waiter;
+	struct list_head	waiters;
 };
 
 typedef struct waitgroup waitgroup_t;

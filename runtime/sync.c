@@ -169,12 +169,24 @@ void condvar_init(condvar_t *cv)
  */
 void waitgroup_add(waitgroup_t *wg, int cnt)
 {
+	thread_t *waketh;
+	struct list_head tmp;
+
+	list_head_init(&tmp);
+
 	spin_lock_np(&wg->lock);
 	wg->cnt += cnt;
 	BUG_ON(wg->cnt < 0);
-	if (wg->cnt == 0 && wg->waiter != NULL)
-		thread_ready(wg->waiter);
+	if (wg->cnt == 0)
+		list_append_list(&tmp, &wg->waiters);
 	spin_unlock_np(&wg->lock);
+
+	while (true) {
+		waketh = list_pop(&tmp, thread_t, link);
+		if (!waketh)
+			break;
+		thread_ready(waketh);
+	}
 }
 
 /**
@@ -191,7 +203,7 @@ void waitgroup_wait(waitgroup_t *wg)
 		spin_unlock_np(&wg->lock);
 		return;
 	}
-	wg->waiter = myth;
+	list_add_tail(&wg->waiters, &myth->link);
 	thread_park_and_unlock_np(&wg->lock);
 }
 
@@ -202,6 +214,6 @@ void waitgroup_wait(waitgroup_t *wg)
 void waitgroup_init(waitgroup_t *wg)
 {
 	spin_lock_init(&wg->lock);
+	list_head_init(&wg->waiters);
 	wg->cnt = 0;
-	wg->waiter = NULL;
 }
