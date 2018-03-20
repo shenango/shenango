@@ -194,7 +194,7 @@ fn run_client(
                             Protocol::Synthetic => payload::parse_response(&recv_buf[..len]),
                         };
                         if idx.is_err() {
-                            break;
+                            continue;
                         }
                         receive_times[idx.unwrap() as usize] = Some(start.elapsed());
                     }
@@ -258,7 +258,10 @@ fn run_client(
         .iter()
         .filter(|p| p.completion_time.is_none())
         .count() - never_sent;
-    let first_send = packets.iter().filter_map(|p| p.actual_start).min().unwrap();
+    let first_send = packets.iter().filter_map(|p| match p.actual_start {
+        Some(ref start) if *start < runtime / 10 => None,
+        _ => p.actual_start,
+    }).min().unwrap();
     let last_send = packets.iter().filter_map(|p| p.actual_start).max().unwrap();
     let mut latencies: Vec<_> = packets
         .iter()
