@@ -94,6 +94,9 @@ void dataplane_loop()
 		/* process a batch of commands from runtimes */
 		work_done |= commands_rx();
 
+		/* drain overflow completion queues */
+		work_done |= tx_drain_completions();
+
 		/* handle control messages */
 		if (!work_done)
 			dp_clients_rx_control_lrpcs();

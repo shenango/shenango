@@ -98,6 +98,8 @@ static struct proc *control_create_proc(mem_key_t key, size_t len, pid_t pid,
 		if (ret)
 			goto fail_free_proc;
 
+		p->max_overflows += s->txpktq.msg_count;
+
 		/* attach the TX command queue */
 		ret = shm_init_lrpc_in(&reg, &s->txcmdq, &th->txcmdq);
 		if (ret)
@@ -125,6 +127,12 @@ static struct proc *control_create_proc(mem_key_t key, size_t len, pid_t pid,
 	if (ret)
 		goto fail_free_just_proc;
 
+	p->max_overflows *= 2;
+	p->nr_overflows = 0;
+	p->overflow_queue = malloc(sizeof(unsigned long) * p->max_overflows);
+	if (p->overflow_queue == NULL)
+		goto fail_free_just_proc;
+
 	return p;
 
 fail_free_proc:
@@ -147,6 +155,7 @@ static void control_destroy_proc(struct proc *p)
 		close(p->threads[i].park_efd);
 
 	mem_unmap_shm(p->region.base);
+	free(p->overflow_queue);
 	free(p);
 }
 

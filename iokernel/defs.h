@@ -20,6 +20,7 @@
 #define IOKERNEL_MAX_PROC		1024
 #define IOKERNEL_NUM_MBUFS		8191
 #define IOKERNEL_NUM_COMPLETIONS		32767
+#define IOKERNEL_OVERFLOW_BATCH_DRAIN		64
 #define IOKERNEL_TX_BURST_SIZE		64
 #define IOKERNEL_CMD_BURST_SIZE		64
 #define IOKERNEL_RX_BURST_SIZE		64
@@ -93,6 +94,11 @@ struct proc {
 
 	/* Unique identifier -- never recycled across runtimes*/
 	uintptr_t		uniqid;
+
+	/* Overfloq queue for completion data */
+	size_t max_overflows;
+	size_t nr_overflows;
+	unsigned long *overflow_queue;
 
 	/* table of physical addresses for shared memory */
 	physaddr_t		page_paddrs[];
@@ -233,6 +239,7 @@ extern int dpdk_late_init();
 extern bool rx_burst();
 extern bool tx_burst();
 extern bool tx_send_completion(void *obj);
+extern bool tx_drain_completions();
 
 /*
  * other dataplane functions

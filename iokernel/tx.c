@@ -118,21 +118,57 @@ bool tx_send_completion(void *obj)
 	/* send completion to runtime */
 	th = priv_data->th;
 	if (!th->parked) {
-		if (!lrpc_send(&th->rxq, RX_NET_COMPLETE,
-			       priv_data->completion_data)) {
-			log_debug_ratelimited("tx: failed to send completion to runtime");
-			return false;
+		if (likely(lrpc_send(&th->rxq, RX_NET_COMPLETE,
+			       priv_data->completion_data))) {
+			goto success;
 		}
 	} else {
-		if (!rx_send_to_runtime(p, priv_data->th->tid, RX_NET_COMPLETE,
-					priv_data->completion_data)) {
-			log_debug_ratelimited("tx: failed to send completion to runtime");
-			return false;
+		if (likely(rx_send_to_runtime(p, priv_data->th->tid, RX_NET_COMPLETE,
+					priv_data->completion_data))) {
+			goto success;
 		}
 	}
 
+	if (unlikely(p->nr_overflows == p->max_overflows)) {
+		log_warn("tx: Completion overflow queue is full");
+		return false;
+	}
+	p->overflow_queue[p->nr_overflows++] = priv_data->completion_data;
+	log_debug_ratelimited("tx: failed to send completion to runtime");
+
+success:
 	proc_put(p);
 	return true;
+}
+
+static int drain_overflow_queue(struct proc *p, int n)
+{
+	int i = 0;
+	while (p->nr_overflows > 0 && i < n) {
+		if (!rx_send_to_runtime(p, i, RX_NET_COMPLETE,
+				p->overflow_queue[--p->nr_overflows])) {
+			break;
+		}
+		i++;
+	}
+	return i;
+}
+
+bool tx_drain_completions()
+{
+	static unsigned long pos = 0;
+	unsigned long i;
+	size_t drained = 0;
+	struct proc *p;
+
+	for (i = 0; i < dp.nr_clients && drained < IOKERNEL_OVERFLOW_BATCH_DRAIN; i++) {
+		p = dp.clients[(pos + i) % dp.nr_clients];
+		drained += drain_overflow_queue(p, IOKERNEL_OVERFLOW_BATCH_DRAIN - drained);
+		pos++;
+	}
+
+	return drained > 0;
+
 }
 
 static int tx_drain_queue(struct thread *t, int n,
