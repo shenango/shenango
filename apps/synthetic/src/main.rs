@@ -12,6 +12,7 @@ extern crate libc;
 extern crate rand;
 extern crate shenango;
 extern crate test;
+extern crate dns_parser;
 
 use std::iter;
 use std::net::{SocketAddrV4, UdpSocket};
@@ -43,6 +44,8 @@ pub struct Packet {
 mod memcached;
 mod memcache_packet;
 mod memcache_error;
+
+mod dns;
 
 #[derive(Copy, Clone)]
 enum Distribution {
@@ -80,6 +83,7 @@ impl Distribution {
 enum Protocol {
     Synthetic,
     Memcached,
+    Dns
 }
 
 #[inline(always)]
@@ -137,6 +141,7 @@ fn run_spawner_server(addr: SocketAddrV4) {
 
 fn warmup(backend: Backend, addr: SocketAddrV4, nthreads: u32, protocol: Protocol) {
     match protocol {
+        Protocol::Dns => return,
         Protocol::Synthetic => return,
         Protocol::Memcached => memcached::warmup(backend, addr, nthreads),
     }
@@ -192,6 +197,7 @@ fn run_client(
                         let idx = match protocol {
                             Protocol::Memcached => memcached::parse_response(&recv_buf[..len]),
                             Protocol::Synthetic => payload::parse_response(&recv_buf[..len]),
+                            Protocol::Dns => dns::parse_response(&recv_buf[..len]),
                         };
                         if idx.is_err() {
                             continue;
@@ -220,6 +226,7 @@ fn run_client(
                 match protocol {
                     Protocol::Memcached => memcached::create_request(i, packet, &mut payload),
                     Protocol::Synthetic => payload::create_request(i, packet, &mut payload),
+                    Protocol::Dns => dns::create_request(i, packet, &mut payload),
                 };
 
                 while start.elapsed() < packet.target_start {
@@ -386,7 +393,7 @@ fn main() {
                 .short("p")
                 .long("protocol")
                 .value_name("PROTOCOL")
-                .possible_values(&["synthetic", "memcached"])
+                .possible_values(&["synthetic", "memcached", "dns"])
                 .default_value("synthetic")
                 .help("Which client protocol to speak"),
         )
@@ -424,6 +431,7 @@ fn main() {
     let proto = match matches.value_of("protocol").unwrap() {
         "synthetic" => Protocol::Synthetic,
         "memcached" => Protocol::Memcached,
+        "dns" => Protocol::Dns,
         _ => unreachable!(),
     };
     let mean = value_t_or_exit!(matches, "mean", f64);
