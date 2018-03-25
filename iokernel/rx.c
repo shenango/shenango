@@ -15,6 +15,7 @@
 #include "defs.h"
 
 #define MBUF_CACHE_SIZE 250
+#define RX_PREFETCH_STRIDE 2
 
 static struct shm_region ingress_mbuf_region;
 
@@ -163,8 +164,13 @@ bool rx_burst(void)
 	if (nb_rx > 0)
 		log_debug("rx: received %d packets on port %d", nb_rx, dp.port);
 
-	for (i = 0; i < nb_rx; i++)
+	for (i = 0; i < nb_rx; i++) {
+		if (i + RX_PREFETCH_STRIDE < nb_rx) {
+			prefetch(rte_pktmbuf_mtod(bufs[i + RX_PREFETCH_STRIDE],
+				 char *));
+		}
 		rx_one_pkt(bufs[i]);
+	}
 
 	return nb_rx > 0;
 }
