@@ -89,15 +89,6 @@ void dataplane_loop()
 		/* handle a burst of ingress packets */
 		work_done |= rx_burst();
 
-		/* send a burst of egress packets */
-		work_done |= tx_burst();
-
-		/* process a batch of commands from runtimes */
-		work_done |= commands_rx();
-
-		/* drain overflow completion queues */
-		work_done |= tx_drain_completions();
-
 		/* handle control messages */
 		if (!work_done)
 			dp_clients_rx_control_lrpcs();
@@ -109,6 +100,15 @@ void dataplane_loop()
 			cores_adjust_assignments();
 			last_time = now;
 		}
+
+		/* process a batch of commands from runtimes */
+		work_done |= commands_rx();
+
+		/* drain overflow completion queues */
+		work_done |= tx_drain_completions();
+
+		/* send a burst of egress packets */
+		work_done |= tx_burst();
 
 		if (false && microtime() > next_log_time) {
 			dpdk_print_eth_stats();
