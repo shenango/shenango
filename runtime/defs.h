@@ -111,8 +111,7 @@ extern void __jmp_runtime(struct thread_tf *tf, runtime_fn_t fn,
 			  void *stack, unsigned long arg);
 extern void __jmp_runtime_nosave(runtime_fn_t fn, void *stack,
 				 unsigned long arg) __noreturn;
-extern void __jmp_restore_sigctx(ucontext_t *c,
-                                 size_t fpstate_offset) __noreturn;
+extern void __jmp_restore_sigctx(ucontext_t *c) __noreturn;
 
 /*
  * Stack support
@@ -127,8 +126,6 @@ struct stack {
 };
 
 DECLARE_PERTHREAD(struct tcache_perthread, stack_pt);
-
-extern __thread struct stack *signal_stack;
 
 /**
  * stack_alloc - allocates a stack
@@ -254,6 +251,7 @@ enum {
 	STAT_TIMERS_LOCAL,
 	STAT_PARKS,
 	STAT_PREEMPTIONS,
+	STAT_PREEMPTIONS_STOLEN,
 
 	/* network stack counters */
 	STAT_RX_BYTES,
@@ -307,8 +305,8 @@ struct kthread {
 
 	/* cold-data this point onward */
 	thread_t		*preempted_th;
-	ucontext_t		preempted_uctx;
-	size_t			fpstate_offset;
+	ucontext_t		*preempted_ctx;
+	void			*stack_end;
 };
 
 /* compile-time verification of cache-line alignment */
@@ -453,7 +451,7 @@ extern thread_t *timer_run(struct kthread *k);
  * Preemption support
  */
 
-extern void preempt_reenter(ucontext_t *c, size_t fpstate_offset) __noreturn;
+extern void preempt_reenter(struct kthread *l, struct kthread *r) __noreturn;
 
 
 /*
@@ -466,6 +464,7 @@ extern int ioqueues_init_thread(void);
 extern int stack_init_thread(void);
 extern int timer_init_thread(void);
 extern int sched_init_thread(void);
+extern int preempt_init_thread(void);
 extern int stat_init_thread(void);
 extern int net_init_thread(void);
 

@@ -14,6 +14,10 @@
 /* the current preemption count */
 volatile __thread unsigned int preempt_cnt = PREEMPT_NOT_PENDING;
 
+static __thread struct stack *signal_stack;
+static __thread struct stack *bounce_stack;
+
+
 /* set a flag to indicate a preemption request is pending */
 static void set_preempt_needed(void)
 {
@@ -39,12 +43,9 @@ static void handle_sigusr1(int s, siginfo_t *si, void *c)
 	/* save preempted state and park the kthread */
 	spin_lock(&k->lock);
 	k->preempted = true;
-	memcpy(&k->preempted_uctx, ctx, sizeof(*ctx));
+	k->preempted_ctx = c;
 	k->preempted_th = thread_self();
-
-	assert((uintptr_t)ctx->uc_mcontext.fpregs >= (uintptr_t)ctx);
-	assert((uintptr_t)ctx->uc_mcontext.fpregs < (uintptr_t)ctx + sizeof(*ctx));
-	k->fpstate_offset = (uintptr_t)ctx->uc_mcontext.fpregs - (uintptr_t)ctx;
+	k->stack_end = &signal_stack->guard;
 
 	kthread_park(false);
 
@@ -72,11 +73,25 @@ void preempt(void)
 
 /**
  * preempt_reenter - jump back into a thread context that was preempted
- * @c: the ucontext of the thread
+ * @l: the local kthread stealing the trap frame
+ * @r: the remote kthread being stolen from
  */
-void preempt_reenter(ucontext_t *c, size_t fpstate_offset)
+void preempt_reenter(struct kthread *l, struct kthread *r)
 {
 	sigset_t set;
+	size_t frame_size, fpstate_offset;
+	ucontext_t *ctx;
+
+	frame_size = (uintptr_t)r->stack_end - (uintptr_t)r->preempted_ctx;
+	ctx = (ucontext_t *)((uintptr_t)bounce_stack->guard - frame_size);
+	memcpy(ctx, r->preempted_ctx, frame_size);
+	fpstate_offset = (uintptr_t)r->preempted_ctx->uc_mcontext.fpregs - (uintptr_t)r->preempted_ctx;
+	ctx->uc_mcontext.fpregs = (void *)((uintptr_t)ctx + fpstate_offset);
+
+	r->preempted = false;
+	spin_unlock(&r->lock);
+	spin_unlock(&l->lock);
+
 
 	/*
 	 * Temporarily mask SIGUSR1 to prevent preemption while loading
@@ -88,19 +103,40 @@ void preempt_reenter(ucontext_t *c, size_t fpstate_offset)
 		WARN();
 
 	/* Re-arm with the correct local signal stack */
-	c->uc_stack.ss_sp = (void*)signal_stack;
-	c->uc_stack.ss_size =  sizeof(signal_stack->usable);
-	c->uc_stack.ss_flags = 0;
-
-	/* Verify a few assumptions made in __jmp_restore_sigctx */
-	BUILD_ASSERT(sizeof(ucontext_t) == 936);
-	BUILD_ASSERT(offsetof(ucontext_t, uc_mcontext) +
-		     offsetof(mcontext_t, fpregs) == 224);
+	ctx->uc_stack.ss_sp = (void*)signal_stack;
+	ctx->uc_stack.ss_size =  sizeof(signal_stack->usable);
+	ctx->uc_stack.ss_flags = 0;
 
 	preempt_enable();
-	__jmp_restore_sigctx(c, fpstate_offset);
+	__jmp_restore_sigctx(ctx);
 
 	unreachable();
+}
+
+/**
+ * preempt_init_thread - per-thread initializer for preemption support
+ *
+ * Returns 0 if successful. otherwise fail.
+ */
+int preempt_init_thread(void)
+{
+	stack_t new_stack, old_stack;
+
+	signal_stack = stack_alloc();
+	if (!signal_stack)
+		return -ENOMEM;
+
+	bounce_stack = stack_alloc();
+	if (!bounce_stack) {
+		stack_free(signal_stack);
+		return -ENOMEM;
+	}
+
+	new_stack.ss_sp = (void *)signal_stack;
+	new_stack.ss_size = sizeof(signal_stack->usable);
+	new_stack.ss_flags =  0;
+
+	return sigaltstack(&new_stack, &old_stack);
 }
 
 /**
