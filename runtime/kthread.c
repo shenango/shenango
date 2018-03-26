@@ -114,17 +114,10 @@ void kthread_detach(struct kthread *r)
 	assert(r->detached == false);
 	assert(r->preempted == false);
 
-	/* should we detach this kthread? */
-	if (microtime() - r->park_us < RUNTIME_DETACH_US)
-		return;
-
 	/* make sure the park rxcmd was processed */
 	lrpc_poll_send_tail(&r->txcmdq);
-	if (unlikely(lrpc_get_cached_length(&r->txcmdq) > 0)) {
-				log_debug_ratelimited("iokernel hasn't processed park request "
-				    "quickly enough!");
+	if (unlikely(lrpc_get_cached_length(&r->txcmdq) > 0))
 		return;
-	}
 
 	/* one last check, an RX cmd could have squeaked in */
 	if (unlikely(!lrpc_empty(&r->rxq)))
