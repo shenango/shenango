@@ -268,13 +268,14 @@ again:
 
 	last_nrks = load_acquire(&nrks);
 
-	/* then attempt to steal tasks or packets from a sibling kthread */
+	/* then try to steal from a sibling kthread */
 	sibling = cpu_map[l->curr_cpu].sibling_core;
 	r = cpu_map[sibling].recent_kthread;
+	if (r && r != l && steal_work(l, r))
+		goto done;
 
-	/* or a random kthread, if there is no sibling */
-	if (!r)
-		r = ks[rand_crc32c((uintptr_t)l) % last_nrks];
+	/* then try to steal from a random kthread */
+	r = ks[rand_crc32c((uintptr_t)l) % last_nrks];
 	if (r != l && steal_work(l, r))
 		goto done;
 
