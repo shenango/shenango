@@ -118,8 +118,6 @@ static void drain_overflow(struct kthread *l)
 
 static bool steal_work(struct kthread *l, struct kthread *r)
 {
-	size_t fpstate_offset;
-	ucontext_t uctx;
 	thread_t *th;
 	uint32_t i, avail, rq_tail;
 
@@ -137,16 +135,11 @@ static bool steal_work(struct kthread *l, struct kthread *r)
 
 	/* resume execution of a preempted thread */
 	if (r->preempted) {
-		__self = r->preempted_th;
 		r->preempted = false;
-		memcpy(&uctx, &r->preempted_uctx, sizeof(uctx));
-		fpstate_offset = r->fpstate_offset;
-		spin_unlock(&r->lock);
-		spin_unlock(&l->lock);
-		preempt_reenter(&uctx, fpstate_offset);
-
-		/* preempt_reenter() doesn't return */
-		unreachable();
+		th = r->preempted_th;
+		preempt_redirect_tf(th, &r->preempted_uctx,
+				    &r->preempted_fpstate);
+		goto done;
 	}
 
 	/* try to steal directly from the runqueue */

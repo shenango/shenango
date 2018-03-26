@@ -132,32 +132,13 @@ __jmp_runtime_nosave:
 	jmpq    *%rsi
 
 /**
- * __jmp_restore_sigctx - restores a ucontext frame recovered in a signal handler
- * @c: a pointer to the ucontext_t (%rdi)
- * @fpstate_offset: the observed offset for the pointer to the fpstate (%rsi)
+ * __rt_sigreturn - executes the rt_sigreturn system call
  *
- * No return value.
+ * %rsp must point to the ucontext_t to restore.
+ * No args, no return value.
  */
-.globl __jmp_restore_sigctx
-__jmp_restore_sigctx:
-	/* Allocate stack space so fpstate ptr is 64 byte aligned */
-	subq $0x2c8, %rsp               # allocate last 712 bytes of ucontext_t
-	andq $0xffffffffffffffc0,  %rsp # round down to multiple of 64
-	subq $0xe0, %rsp                # allocate first 224 bytes of ucontext_t
-
-	/* Calculate address of actual fpstate buffer inside copied ucontext_t */
-	movq    %rsp, %rax
-	addq    %rsi, %rax   # %rax := pointer + offset_to_fpstate
-
-	/* Copy full ucontext_t to stack */
-	movq    %rdi,  %rsi
-	movq    %rsp,  %rdi
-	movq    $0x75, %rcx
-	rep movsq %ds:(%rsi),%es:(%rdi)
-
-	/* Set 64-byte aligned pointer to point to fpstate buf */
-	movq    %rax,0xe0(%rsp)
-
+.globl __rt_sigreturn
+__rt_sigreturn:
 	/* syscall(SYS_rt_sigreturn) */
-	movq    $0xf,%rax
+	movq    $0xf, %rax
 	syscall

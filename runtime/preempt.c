@@ -40,12 +40,12 @@ static void handle_sigusr1(int s, siginfo_t *si, void *c)
 	spin_lock(&k->lock);
 	k->preempted = true;
 	memcpy(&k->preempted_uctx, ctx, sizeof(*ctx));
+	memcpy(&k->preempted_fpstate, ctx->uc_mcontext.fpregs,
+	       sizeof(k->preempted_fpstate));
+	BUG_ON(!thread_self());
 	k->preempted_th = thread_self();
 
-	assert((uintptr_t)ctx->uc_mcontext.fpregs >= (uintptr_t)ctx);
-	assert((uintptr_t)ctx->uc_mcontext.fpregs < (uintptr_t)ctx + sizeof(*ctx));
-	k->fpstate_offset = (uintptr_t)ctx->uc_mcontext.fpregs - (uintptr_t)ctx;
-
+	/* park the kthread */
 	kthread_park(false);
 
 	/* check if no other kthread stole our preempted work */
@@ -70,37 +70,43 @@ void preempt(void)
 	thread_yield();
 }
 
+#define REDZONE_SIZE	128
+
 /**
- * preempt_reenter - jump back into a thread context that was preempted
- * @c: the ucontext of the thread
+ * preempt_redirect_tf - reconfigures a thread's trap frame to reenter after
+ *                       it was preempted
+ * @th: the preempted thread
+ * @uctx: the thread's ucontext_t to restore
  */
-void preempt_reenter(ucontext_t *c, size_t fpstate_offset)
+void preempt_redirect_tf(thread_t *th, ucontext_t *uctx,
+			 struct _libc_fpstate *fpstate)
 {
-	sigset_t set;
+	struct thread_tf *tf = &th->tf;
+	struct _libc_fpstate *frame_fpstate;
+	ucontext_t *frame_uctx;
 
 	/*
-	 * Temporarily mask SIGUSR1 to prevent preemption while loading
-	 * the ucontext. It will get unmasked by __jmp_restore_sigctx().
+	 * Reserve space for a signal return frame on the preempted thread's
+	 * stack. Note that the compiler can store data below the current stack
+	 * pointer in a 128-byte region called the redzone, so leave enough
+	 * space to make sure we don't overwrite it.
 	 */
-	sigemptyset(&set);
-	sigaddset(&set, SIGUSR1);
-	if (unlikely(pthread_sigmask(SIG_BLOCK, &set, NULL) < 0))
-		WARN();
+	tf->rsp = align_down(tf->rsp - sizeof(*frame_fpstate) - REDZONE_SIZE,
+			     __WORD_SIZE);
+	frame_fpstate = (struct _libc_fpstate *)tf->rsp;
+	tf->rsp = align_down(tf->rsp - sizeof(*uctx), __WORD_SIZE);
+	frame_uctx = (ucontext_t *)tf->rsp;
+	BUG_ON(tf->rsp < (uintptr_t)th->stack ||
+	       tf->rsp >= (uintptr_t)th->stack + sizeof(*th->stack));
+	memcpy(frame_fpstate, fpstate, sizeof(*fpstate));
+	memcpy(frame_uctx, uctx, sizeof(*uctx));
 
-	/* Re-arm with the correct local signal stack */
-	c->uc_stack.ss_sp = (void*)signal_stack;
-	c->uc_stack.ss_size =  sizeof(signal_stack->usable);
-	c->uc_stack.ss_flags = 0;
+	/* ucontext_t contains a pointer, fix it to reflect the new location */
+	frame_uctx->uc_mcontext.fpregs = frame_fpstate;
 
-	/* Verify a few assumptions made in __jmp_restore_sigctx */
-	BUILD_ASSERT(sizeof(ucontext_t) == 936);
-	BUILD_ASSERT(offsetof(ucontext_t, uc_mcontext) +
-		     offsetof(mcontext_t, fpregs) == 224);
-
-	preempt_enable();
-	__jmp_restore_sigctx(c, fpstate_offset);
-
-	unreachable();
+	/* point the instruction pointer to the reentry handler */
+	tf->rip = (uintptr_t)&__rt_sigreturn;
+	th->state = THREAD_STATE_RUNNABLE;
 }
 
 /**
