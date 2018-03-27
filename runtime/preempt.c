@@ -88,6 +88,9 @@ void preempt_redirect_tf(thread_t *th, ucontext_t *ctx,
 	struct _libc_fpstate *frame_fpstate;
 	ucontext_t *frame_ctx;
 
+	/* reload the rsp from the signal's ucontext, it's stale */
+	tf->rsp = ctx->uc_mcontext.gregs[REG_RSP];
+
 	/*
 	 * Reserve space for a signal return frame on the preempted thread's
 	 * stack. Note that the compiler can store data below the current stack
