@@ -25,8 +25,6 @@ __thread thread_t *__self;
 static __thread void *runtime_stack;
 /* a pointer to the bottom of the per-kthread (TLS) runtime stack */
 static __thread void *runtime_stack_base;
-/* a pointer to the per-kthread signal stack */
-__thread struct stack *signal_stack;
 
 /* fast allocation of struct thread */
 static struct slab thread_slab;
@@ -139,8 +137,9 @@ static bool steal_work(struct kthread *l, struct kthread *r)
 	if (r->preempted) {
 		r->preempted = false;
 		th = r->preempted_th;
-		preempt_redirect_tf(th, &r->preempted_uctx,
-				    &r->preempted_fpstate);
+		preempt_redirect_tf(th, r->preempted_ctx,
+				    r->preempted_fpstate);
+		STAT(PREEMPTIONS_STOLEN)++;
 		goto done;
 	}
 
@@ -385,8 +384,8 @@ void join_kthread(struct kthread *k)
 	if (k->preempted) {
 		k->preempted = false;
 		list_add_tail(&tmp, &k->preempted_th->link);
-		preempt_redirect_tf(k->preempted_th, &k->preempted_uctx,
-				    &k->preempted_fpstate);
+		preempt_redirect_tf(k->preempted_th, k->preempted_ctx,
+				    k->preempted_fpstate);
 	}
 
 	/* drain the runqueue */
@@ -695,7 +694,6 @@ static void runtime_top_of_stack(void)
 int sched_init_thread(void)
 {
 	struct stack *s;
-	stack_t new_stack, old_stack;
 
 	tcache_init_perthread(thread_tcache, &perthread_get(thread_pt));
 
@@ -706,15 +704,7 @@ int sched_init_thread(void)
 	runtime_stack_base = (void *)s;
 	runtime_stack = (void *)stack_init_to_rsp(s, runtime_top_of_stack); 
 
-	signal_stack = stack_alloc();
-	if (!signal_stack)
-		return -ENOMEM;
-
-	new_stack.ss_sp = (void *)signal_stack;
-	new_stack.ss_size = sizeof(signal_stack->usable);
-	new_stack.ss_flags = 0;
-
-	return sigaltstack(&new_stack, &old_stack);
+	return 0;
 }
 
 /**

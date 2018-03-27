@@ -128,8 +128,6 @@ struct stack {
 
 DECLARE_PERTHREAD(struct tcache_perthread, stack_pt);
 
-extern __thread struct stack *signal_stack;
-
 /**
  * stack_alloc - allocates a stack
  *
@@ -254,6 +252,7 @@ enum {
 	STAT_TIMERS_LOCAL,
 	STAT_PARKS,
 	STAT_PREEMPTIONS,
+	STAT_PREEMPTIONS_STOLEN,
 
 	/* network stack counters */
 	STAT_RX_BYTES,
@@ -307,8 +306,8 @@ struct kthread {
 
 	/* cold-data this point onward */
 	thread_t		*preempted_th;
-	ucontext_t		preempted_uctx;
-	struct _libc_fpstate	preempted_fpstate;
+	ucontext_t		*preempted_ctx;
+	struct _libc_fpstate	*preempted_fpstate;
 };
 
 /* compile-time verification of cache-line alignment */
@@ -467,6 +466,7 @@ extern int ioqueues_init_thread(void);
 extern int stack_init_thread(void);
 extern int timer_init_thread(void);
 extern int sched_init_thread(void);
+extern int preempt_init_thread(void);
 extern int stat_init_thread(void);
 extern int net_init_thread(void);
 

@@ -14,6 +14,9 @@
 /* the current preemption count */
 volatile __thread unsigned int preempt_cnt = PREEMPT_NOT_PENDING;
 
+/* per kthread signal handling stack, configured with sigalstack(). */
+static __thread struct stack *signal_stack;
+
 /* set a flag to indicate a preemption request is pending */
 static void set_preempt_needed(void)
 {
@@ -39,9 +42,8 @@ static void handle_sigusr1(int s, siginfo_t *si, void *c)
 	/* save preempted state and park the kthread */
 	spin_lock(&k->lock);
 	k->preempted = true;
-	memcpy(&k->preempted_uctx, ctx, sizeof(*ctx));
-	memcpy(&k->preempted_fpstate, ctx->uc_mcontext.fpregs,
-	       sizeof(k->preempted_fpstate));
+	k->preempted_ctx = ctx;
+	k->preempted_fpstate = ctx->uc_mcontext.fpregs;
 	BUG_ON(!thread_self());
 	k->preempted_th = thread_self();
 
@@ -76,14 +78,15 @@ void preempt(void)
  * preempt_redirect_tf - reconfigures a thread's trap frame to reenter after
  *                       it was preempted
  * @th: the preempted thread
- * @uctx: the thread's ucontext_t to restore
+ * @ctx: the thread's ucontext_t to restore
+ * @fpstate: the thread's floating point state to restore
  */
-void preempt_redirect_tf(thread_t *th, ucontext_t *uctx,
+void preempt_redirect_tf(thread_t *th, ucontext_t *ctx,
 			 struct _libc_fpstate *fpstate)
 {
 	struct thread_tf *tf = &th->tf;
 	struct _libc_fpstate *frame_fpstate;
-	ucontext_t *frame_uctx;
+	ucontext_t *frame_ctx;
 
 	/*
 	 * Reserve space for a signal return frame on the preempted thread's
@@ -94,22 +97,42 @@ void preempt_redirect_tf(thread_t *th, ucontext_t *uctx,
 	tf->rsp = align_down(tf->rsp - sizeof(*frame_fpstate) - REDZONE_SIZE,
 			     __WORD_SIZE);
 	frame_fpstate = (struct _libc_fpstate *)tf->rsp;
-	tf->rsp = align_down(tf->rsp - sizeof(*uctx), __WORD_SIZE);
-	frame_uctx = (ucontext_t *)tf->rsp;
+	tf->rsp = align_down(tf->rsp - sizeof(*ctx), __WORD_SIZE);
+	frame_ctx = (ucontext_t *)tf->rsp;
 	BUG_ON(tf->rsp < (uintptr_t)th->stack ||
 	       tf->rsp >= (uintptr_t)th->stack + sizeof(th->stack->usable));
 	memcpy(frame_fpstate, fpstate, sizeof(*fpstate));
-	memcpy(frame_uctx, uctx, sizeof(*uctx));
+	memcpy(frame_ctx, ctx, sizeof(*ctx));
 
 	/* ucontext_t contains a pointer, fix to reflect the stack location */
-	frame_uctx->uc_mcontext.fpregs = frame_fpstate;
+	frame_ctx->uc_mcontext.fpregs = frame_fpstate;
 
 	/* disable do_sigalstack() in __rt_sigreturn() */
-	frame_uctx->uc_stack.ss_flags = 3; /* invalid flags on purpose */
+	frame_ctx->uc_stack.ss_flags = 3; /* invalid flags on purpose */
 
 	/* point the instruction pointer to the reentry handler */
 	tf->rip = (uintptr_t)&__rt_sigreturn;
 	th->state = THREAD_STATE_RUNNABLE;
+}
+
+/**
+ * preempt_init_thread - per-thread initializer for preemption support
+ *
+ * Returns 0 if successful. otherwise fail.
+ */
+int preempt_init_thread(void)
+{
+	stack_t new_stack, old_stack;
+
+	signal_stack = stack_alloc();
+	if (!signal_stack)
+		return -ENOMEM;
+
+	new_stack.ss_sp = (void *)signal_stack;
+	new_stack.ss_size = sizeof(signal_stack->usable);
+	new_stack.ss_flags =  0;
+
+	return sigaltstack(&new_stack, &old_stack);
 }
 
 /**

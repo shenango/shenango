@@ -11,6 +11,7 @@ serde = "1.0"
 bincode = "0.9"
 rand = "0.4"
 byteorder = "1"
+dns-parser = "0.7.1"
 
 [profile.release]
 debug=true
