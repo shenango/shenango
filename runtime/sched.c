@@ -35,6 +35,8 @@ static DEFINE_PERTHREAD(struct tcache_perthread, thread_pt);
 
 /* used to track cycle usage in scheduler */
 static __thread uint64_t last_tsc;
+/* used to force timer and network processing after a timeout */
+static __thread uint64_t last_watchdog_tsc;
 
 /**
  * In inc/runtime/thread.h, this function is declared inline (rather than static
@@ -198,6 +200,33 @@ done:
 	return th != NULL;
 }
 
+static __noinline void do_watchdog(struct kthread *l)
+{
+	thread_t *th;
+
+	assert_spin_lock_held(&l->lock);
+
+	/* check for timeouts */
+	th = timer_run(l);
+	if (th) {
+		STAT(TIMERS_LOCAL)++;
+		if (unlikely(l->rq_head - l->rq_tail >= RUNTIME_RQ_SIZE))
+			list_add_tail(&l->rq_overflow, &th->link);
+		else
+			l->rq[l->rq_head++ % RUNTIME_RQ_SIZE] = th;
+	}
+
+	/* then check the network queues */
+	th = net_run(l, RUNTIME_NET_BUDGET);
+	if (th) {
+		STAT(NETS_LOCAL)++;
+		if (unlikely(l->rq_head - l->rq_tail >= RUNTIME_RQ_SIZE))
+			list_add_tail(&l->rq_overflow, &th->link);
+		else
+			l->rq[l->rq_head++ % RUNTIME_RQ_SIZE] = th;
+	}
+}
+
 /* the main scheduler routine, decides what to run next */
 static __noreturn void schedule(void)
 {
@@ -235,6 +264,13 @@ static __noreturn void schedule(void)
 	/* move overflow tasks into the runqueue */
 	if (unlikely(!list_empty(&l->rq_overflow)))
 		drain_overflow(l);
+
+	/* if it's been too long, add timer and net handlers to runqueue */
+	if (unlikely(start_tsc - last_watchdog_tsc >
+	             cycles_per_us * RUNTIME_WATCHDOG_US)) {
+		do_watchdog(l);
+		last_watchdog_tsc = start_tsc;
+	}
 
 again:
 	/* first try the local runqueue */
@@ -318,6 +354,61 @@ done:
 	last_tsc = end_tsc;
 
 	jmp_thread(th);
+}
+
+/**
+ * join_kthread - detaches a kthread immediately (rather than through stealing)
+ * @k: the kthread to detach
+ *
+ * Can and must be called from thread context.
+ */
+void join_kthread(struct kthread *k)
+{
+	thread_t *waketh;
+	struct list_head tmp;
+
+	//log_info_ratelimited("join_kthread() %p", k);
+
+	list_head_init(&tmp);
+
+	/* if the lock can't be acquired, the kthread is unparking */
+	if (!spin_try_lock_np(&k->lock))
+		return;
+
+	/* harmless race conditions */
+	if (k->detached || !k->parked || k == myk()) {
+		spin_unlock_np(&k->lock);
+		return;
+	}
+
+	/* run the preempted thread if one exists */
+	if (k->preempted) {
+		k->preempted = false;
+		list_add_tail(&tmp, &k->preempted_th->link);
+		preempt_redirect_tf(k->preempted_th, &k->preempted_uctx,
+				    &k->preempted_fpstate);
+	}
+
+	/* drain the runqueue */
+	for (; k->rq_tail < k->rq_head; k->rq_tail++)
+		list_add_tail(&tmp, &k->rq[k->rq_tail % RUNTIME_RQ_SIZE]->link);
+	k->rq_head = k->rq_tail = 0;
+
+	/* drain the overflow runqueue */
+	list_append_list(&tmp, &k->rq_overflow);
+
+	/* detach the kthread */
+	kthread_detach(k);
+	spin_unlock_np(&k->lock);
+
+	/* re-wake all the runnable threads belonging to the detached kthread */
+	while (true) {
+		waketh = list_pop(&tmp, thread_t, link);
+		if (!waketh)
+			break;
+		waketh->state = THREAD_STATE_SLEEPING;
+		thread_ready(waketh);
+	}
 }
 
 /**
@@ -503,6 +594,7 @@ thread_t *thread_create_with_buf(thread_fn_t fn, void **buf, size_t buf_len)
 	th->tf.rbp = (uint64_t)0; /* just in case base pointers are enabled */
 	th->tf.rip = (uint64_t)fn;
 	*buf = ptr;
+
 	return th;
 }
 
@@ -620,7 +712,7 @@ int sched_init_thread(void)
 
 	new_stack.ss_sp = (void *)signal_stack;
 	new_stack.ss_size = sizeof(signal_stack->usable);
-	new_stack.ss_flags =  0;
+	new_stack.ss_flags = 0;
 
 	return sigaltstack(&new_stack, &old_stack);
 }

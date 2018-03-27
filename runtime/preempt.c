@@ -26,7 +26,7 @@ static void handle_sigusr1(int s, siginfo_t *si, void *c)
 	struct kthread *k = myk();
 	ucontext_t *ctx = c;
 
-	assert(ctx->uc_stack.ss_sp == (void*)signal_stack);
+	assert(ctx->uc_stack.ss_sp == (void *)signal_stack);
 
 	STAT(PREEMPTIONS)++;
 
@@ -97,12 +97,15 @@ void preempt_redirect_tf(thread_t *th, ucontext_t *uctx,
 	tf->rsp = align_down(tf->rsp - sizeof(*uctx), __WORD_SIZE);
 	frame_uctx = (ucontext_t *)tf->rsp;
 	BUG_ON(tf->rsp < (uintptr_t)th->stack ||
-	       tf->rsp >= (uintptr_t)th->stack + sizeof(*th->stack));
+	       tf->rsp >= (uintptr_t)th->stack + sizeof(th->stack->usable));
 	memcpy(frame_fpstate, fpstate, sizeof(*fpstate));
 	memcpy(frame_uctx, uctx, sizeof(*uctx));
 
-	/* ucontext_t contains a pointer, fix it to reflect the new location */
+	/* ucontext_t contains a pointer, fix to reflect the stack location */
 	frame_uctx->uc_mcontext.fpregs = frame_fpstate;
+
+	/* disable do_sigalstack() in __rt_sigreturn() */
+	frame_uctx->uc_stack.ss_flags = 3; /* invalid flags on purpose */
 
 	/* point the instruction pointer to the reentry handler */
 	tf->rip = (uintptr_t)&__rt_sigreturn;

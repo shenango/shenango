@@ -15,7 +15,7 @@
 #define RX_PREFETCH_STRIDE 2
 
 /* the maximum number of packets to process per scheduler invocation */
-#define MAX_BUDGET	512
+#define MAX_BUDGET	128
 
 /* important global state */
 struct net_cfg netcfg __aligned(CACHE_LINE_SIZE);
@@ -230,9 +230,10 @@ drop:
 }
 
 struct net_rx_closure {
-	unsigned int recv_cnt, compl_cnt;
+	unsigned int recv_cnt, compl_cnt, join_cnt;
 	struct rx_net_hdr *recv_reqs[MAX_BUDGET];
 	struct mbuf *compl_reqs[MAX_BUDGET];
+	struct kthread *join_reqs[MAX_BUDGET];
 };
 
 static void net_rx_worker(void *arg)
@@ -250,6 +251,9 @@ static void net_rx_worker(void *arg)
 			prefetch(c->recv_reqs[i + RX_PREFETCH_STRIDE]);
 		net_rx_one(c->recv_reqs[i]);
 	}
+
+	for (i = 0; i < c->join_cnt; i++)
+		join_kthread(c->join_reqs[i]);
 }
 
 /**
@@ -264,7 +268,7 @@ thread_t *net_run(struct kthread *k, unsigned int budget)
 {
 	thread_t *th;
 	struct net_rx_closure *c;
-	unsigned int recv_cnt = 0, compl_cnt = 0;
+	unsigned int recv_cnt = 0, compl_cnt = 0, join_cnt = 0;
 	int budget_left;
 
 	assert_spin_lock_held(&k->lock);
@@ -296,14 +300,19 @@ thread_t *net_run(struct kthread *k, unsigned int budget)
 			c->compl_reqs[compl_cnt++] = (struct mbuf *)payload;
 			break;
 
+		case RX_JOIN:
+			c->join_reqs[join_cnt++] = (struct kthread *)payload;
+			break;
+
 		default:
 			log_err_ratelimited("net: invalid RXQ cmd '%ld'", cmd);
 		}
 	}
 
-	assert(recv_cnt + compl_cnt > 0);
+	assert(recv_cnt + compl_cnt + join_cnt > 0);
 	c->recv_cnt = recv_cnt;
 	c->compl_cnt = compl_cnt;
+	c->join_cnt = join_cnt;
 	th->state = THREAD_STATE_RUNNABLE;
 	return th;
 }

@@ -191,6 +191,10 @@ void kthread_park(bool voluntary)
 	struct kthread *k = myk();
 	unsigned long payload = 0;
 
+	if (!voluntary || !mbufq_empty(&k->txpktq_overflow) ||
+	    !mbufq_empty(&k->txcmdq_overflow))
+		payload = (unsigned long)k;
+
 	assert_spin_lock_held(&k->lock);
 	assert(k->parked == false);
 

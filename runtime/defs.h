@@ -34,6 +34,7 @@
 #define RUNTIME_NET_BUDGET	16
 #define RUNTIME_MAX_TIMERS	4096
 #define RUNTIME_PARK_POLL_US	2
+#define RUNTIME_WATCHDOG_US	50
 
 
 /*
@@ -490,3 +491,4 @@ extern int cfg_load(const char *path);
 extern void sched_start(void) __noreturn;
 extern void sched_make_uctx(ucontext_t *c);
 extern int thread_spawn_main(thread_fn_t fn, void *arg);
+extern void join_kthread(struct kthread *k);
