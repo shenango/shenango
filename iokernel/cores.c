@@ -216,10 +216,11 @@ static inline void thread_reserve(struct thread *th, unsigned int core)
 	th->core = core;
 	p->active_threads[p->active_thread_count] = th;
 	th->at_idx = p->active_thread_count++;
-	list_del_from(&p->idle_threads, &th->idle_link);
 
 	if (p->preempting && (p->preempting_thread == th))
 		p->preempting = false;
+	else
+		list_del_from(&p->idle_threads, &th->idle_link);
 
 	if (p->active_thread_count > p->sched_cfg.guaranteed_cores)
 		proc_set_bursting(p);
@@ -293,16 +294,39 @@ static void cores_log_assignments()
 /**
  *  pick_thread_for_proc - choose a thread to start up for this proc.
  *  @p: the process to choose a thread for
+ *  @core: the core that will be given to the proc
  *
  *  Returns a struct thread *, or NULL if no thread is idle. This function must
  *  return the 0th index kthread the first time it is called for a proc,
  *  because the first runtime thread is added to the 0th kthread's runqueue and
  *  no kthreads are attached yet, so that thread cannot be stolen.
  */
-static inline struct thread *pick_thread_for_proc(struct proc *p)
+static struct thread *pick_thread_for_proc(struct proc *p, int core)
 {
-	/* return the most recently parked kthread */
-	return list_top(&p->idle_threads, struct thread, idle_link);
+	struct thread *lastth;
+
+	/* must return the 0th kthread when a process first starts */
+	if (unlikely(p->launched)) {
+		p->launched = false;
+		return list_top(&p->idle_threads, struct thread, idle_link);
+	}
+
+	/* try to reuse the same kthread on this core */
+	lastth = core_history[core].current;
+	if (lastth && lastth->p == p && lastth->parked &&
+	    (!p->preempting || p->preempting_thread != lastth)) {
+		return lastth;
+	}
+
+	/* try to reuse the previous kthread on this core */
+	lastth = core_history[core].prev;
+	if (lastth && lastth->p == p && lastth->parked &&
+	    (!p->preempting || p->preempting_thread != lastth)) {
+		return lastth;
+	}
+
+	/* return the least recently parked kthread */
+	return list_tail(&p->idle_threads, struct thread, idle_link);
 }
 
 /**
@@ -389,6 +413,13 @@ static struct thread *pick_thread_for_core(int core)
 	if (no_overloaded_procs())
 		return NULL;
 
+	/* try to allocate to the process that used this core most recently */
+	if (core_history[core].current) {
+		p = core_history[core].current->p;
+		if (!p->removed && proc_is_overloaded(p))
+			goto chose_proc;
+	}
+
 	/* try to allocate to the process running on the hyperthread pair core */
 	buddy_core = cpu_to_sibling_cpu(core);
 	if (core_history[buddy_core].current) {
@@ -397,7 +428,7 @@ static struct thread *pick_thread_for_core(int core)
 			goto chose_proc;
 	}
 
-	/* try to allocate to the process that used this core most recently */
+	/* try to allocate to the process that used this core previously */
 	if (core_history[core].prev) {
 		p = core_history[core].prev->p;
 		if (!p->removed && proc_is_overloaded(p))
@@ -408,7 +439,7 @@ static struct thread *pick_thread_for_core(int core)
 	p = get_overloaded_proc();
 
 chose_proc:
-	return pick_thread_for_proc(p);
+	return pick_thread_for_proc(p, core);
 }
 
 /**
@@ -516,23 +547,26 @@ struct thread *cores_add_core(struct proc *p)
 
 	/* pick a core to add and a thread to run on it */
 	core = pick_core_for_proc(p);
-	th = pick_thread_for_proc(p);
+	th = pick_thread_for_proc(p, core);
+	if (!th) {
+		log_err("cores: proc already has max allowed kthreads (%d)",
+			p->thread_count);
+		BUG();
+	}
+	if (th->p->preempting && th->p->preempting_thread == th)
+		BUG();
+	BUG_ON(!bitmap_test(p->available_threads, th - p->threads));
 
 	if (core_available(core)) {
 		/* core is idle, immediately wake a kthread on it */
-		if (!th) {
-			log_err("cores: proc already has max allowed kthreads (%d)",
-				p->thread_count);
-			BUG();
-		}
 		wake_kthread_on_core(th, core);
-
 		return th;
 	}
 
 	/* core is busy, preempt the currently running thread */
 	p->preempting = true;
 	p->preempting_thread = th;
+	list_del_from(&p->idle_threads, &th->idle_link);
 
 	th_current = core_history[core].current;
 	proc_set_overloaded(th_current->p);
@@ -597,6 +631,7 @@ void cores_init_proc(struct proc *p)
 
 	p->bursting = false;
 	p->overloaded = false;
+	p->launched = true;
 
 	/* wake the first kthread so the runtime can run the main_fn */
 	cores_add_core(p);
