@@ -133,16 +133,6 @@ static bool steal_work(struct kthread *l, struct kthread *r)
 		return false;
 	}
 
-	/* resume execution of a preempted thread */
-	if (r->preempted) {
-		r->preempted = false;
-		th = r->preempted_th;
-		preempt_redirect_tf(th, r->preempted_ctx,
-				    r->preempted_fpstate);
-		STAT(PREEMPTIONS_STOLEN)++;
-		goto done;
-	}
-
 	/* try to steal directly from the runqueue */
 	avail = load_acquire(&r->rq_head) - r->rq_tail;
 	if (avail) {
@@ -378,14 +368,6 @@ void join_kthread(struct kthread *k)
 	if (k->detached || !k->parked || k == myk()) {
 		spin_unlock_np(&k->lock);
 		return;
-	}
-
-	/* run the preempted thread if one exists */
-	if (k->preempted) {
-		k->preempted = false;
-		list_add_tail(&tmp, &k->preempted_th->link);
-		preempt_redirect_tf(k->preempted_th, k->preempted_ctx,
-				    k->preempted_fpstate);
 	}
 
 	/* drain the runqueue */

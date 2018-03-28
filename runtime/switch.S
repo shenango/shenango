@@ -130,15 +130,3 @@ __jmp_runtime_nosave:
 
 	/* jump into runtime code */
 	jmpq    *%rsi
-
-/**
- * __rt_sigreturn - executes the rt_sigreturn system call
- *
- * %rsp must point to the ucontext_t to restore.
- * No args, no return value.
- */
-.globl __rt_sigreturn
-__rt_sigreturn:
-	/* syscall(SYS_rt_sigreturn) */
-	movq    $0xf, %rax
-	syscall

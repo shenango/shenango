@@ -112,7 +112,6 @@ void kthread_detach(struct kthread *r)
 	assert(r != k);
 	assert(r->parked == true);
 	assert(r->detached == false);
-	assert(r->preempted == false);
 
 	/* make sure the park rxcmd was processed */
 	lrpc_poll_send_tail(&r->txcmdq);

@@ -111,7 +111,6 @@ extern void __jmp_runtime(struct thread_tf *tf, runtime_fn_t fn,
 			  void *stack, unsigned long arg);
 extern void __jmp_runtime_nosave(runtime_fn_t fn, void *stack,
 				 unsigned long arg) __noreturn;
-extern void __rt_sigreturn(void) __noreturn;
 
 
 /*
@@ -278,7 +277,6 @@ struct kthread {
 	int			park_efd;
 	unsigned int		parked:1;
 	unsigned int		detached:1;
-	unsigned int		preempted:1;
 
 	/* 2nd cache-line */
 	struct gen_num		rq_gen;
@@ -305,9 +303,6 @@ struct kthread {
 	uint64_t		stats[STAT_NR];
 
 	/* cold-data this point onward */
-	thread_t		*preempted_th;
-	ucontext_t		*preempted_ctx;
-	struct _libc_fpstate	*preempted_fpstate;
 };
 
 /* compile-time verification of cache-line alignment */
@@ -449,14 +444,6 @@ extern thread_t *timer_run(struct kthread *k);
 
 
 /*
- * Preemption support
- */
-
-extern void preempt_redirect_tf(thread_t *th, ucontext_t *uctx,
-				struct _libc_fpstate *fpstate);
-
-
-/*
  * Init
  */
 
@@ -466,7 +453,6 @@ extern int ioqueues_init_thread(void);
 extern int stack_init_thread(void);
 extern int timer_init_thread(void);
 extern int sched_init_thread(void);
-extern int preempt_init_thread(void);
 extern int stat_init_thread(void);
 extern int net_init_thread(void);
 
