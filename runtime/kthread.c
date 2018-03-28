@@ -163,7 +163,7 @@ static void kthread_yield_to_iokernel(void)
 {
 	struct kthread *k = myk();
 	ssize_t s;
-	uint64_t assigned_core;
+	uint64_t assigned_core, last_core = k->curr_cpu;
 
 	/* yield to the iokernel */
 	s = read(k->park_efd, &assigned_core, sizeof(assigned_core));
@@ -173,9 +173,12 @@ static void kthread_yield_to_iokernel(void)
 		clear_preempt_needed();
 		s = read(k->park_efd, &assigned_core, sizeof(assigned_core));
 	}
-	k->curr_cpu = assigned_core - 1;
-	store_release(&cpu_map[assigned_core - 1].recent_kthread, k);
 	BUG_ON(s != sizeof(uint64_t));
+
+	k->curr_cpu = assigned_core - 1;
+	if (k->curr_cpu != last_core)
+		STAT(CORE_MIGRATIONS)++;
+	store_release(&cpu_map[assigned_core - 1].recent_kthread, k);
 }
 
 /*

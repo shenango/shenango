@@ -17,14 +17,16 @@ func prettyPrint(m, lastm map[string]uint64, interval int) {
 	fmt.Printf("net: RX %.1f pkts, %.1f bytes | TX %.1f pkts, %.1f bytes | %.1f drops\n",
 		   dm["rx_packets"], dm["rx_bytes"],
 		   dm["tx_packets"], dm["tx_bytes"], dm["drops"])
-	fmt.Printf("sched: %.1f rescheds (%.1f%% sched time, %.1f%% local), %.1f nets, %.1f timers, %.1f %%CPU, %.1f parks, %.1f preempts (%.1f stolen)\n",
+	fmt.Printf("sched: %.1f rescheds (%.1f%% sched time, %.1f%% local), %.1f nets, %.1f timers, %.1f %%CPU, %.1f parks (%.1f%% migrated), %.1f preempts (%.1f stolen)\n",
 		   dm["reschedules"],
 		   dm["sched_cycles"] / (dm["sched_cycles"] + dm["program_cycles"]) * 100,
 		   (1 - dm["threads_stolen"] / dm["reschedules"]) * 100,
 		   dm["nets_local"] + dm["nets_stolen"],
 		   dm["timers_local"] + dm["timers_stolen"],
 		   (dm["sched_cycles"] + dm["program_cycles"]) * 100 /
-		    (float64(m["cycles_per_us"]) * 1000000), dm["parks"], dm["preemptions"], dm["preemptions_stolen"])
+		    (float64(m["cycles_per_us"]) * 1000000), dm["parks"],
+		   dm["core_migrations"] * 100 / dm["parks"],
+		   dm["preemptions"], dm["preemptions_stolen"])
 }
 
 func main() {

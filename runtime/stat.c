@@ -33,6 +33,7 @@ static const char *stat_names[] = {
 	"parks",
 	"preemptions",
 	"preemptions_stolen",
+	"core_migrations",
 
 	/* network stack counters */
 	"rx_bytes",
