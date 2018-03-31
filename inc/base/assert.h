@@ -100,7 +100,7 @@ extern void logk_bug(bool fatal, const char *expr,
  * Your compile will fail if the condition isn't true, or can't be evaluated
  * by the compiler.
  */
-#ifndef __CHECKER__
+#if !defined(__CHECKER__) && !defined(__cplusplus)
 #define BUILD_ASSERT(cond) \
 	_Static_assert(cond, "build-time condition failed")
 #else /* __CHECKER__ */
@@ -116,7 +116,7 @@ extern void logk_bug(bool fatal, const char *expr,
  * Your compile will fail if the condition isn't true, or can't be evaluated
  * by the compiler.
  */
-#ifndef __CHECKER__
+#if !defined(__CHECKER__) && !defined(__cplusplus)
 #define BUILD_ASSERT_MSG(cond, msg) \
 	_Static_assert(cond, msg)
 #else /* __CHECKER__ */

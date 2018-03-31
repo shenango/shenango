@@ -46,9 +46,12 @@ netbench_obj = $(netbench_src:.cc=.o)
 netbench_linux_src = netbench_linux.cc
 netbench_linux_obj = $(netbench_linux_src:.cc=.o)
 
+linux_mech_bench_src = linux_mech_bench.cc
+linux_mech_bench_obj = $(linux_mech_bench_src:.cc=.o)
+
 # must be first
 all: tbench tbench_linux callibrate stress efficiency efficiency_linux \
-     netbench netbench_linux
+     netbench netbench_linux linux_mech_bench
 
 tbench: $(tbench_obj)
 	$(LD) -o $@ $(LDFLAGS) $(tbench_obj) $(CXXPATH)/librt++.a \
@@ -83,10 +86,15 @@ netbench: $(netbench_obj)
 netbench_linux: $(netbench_linux_obj)
 	$(LD) -o $@ $(LDFLAGS) $(netbench_linux_obj) -lpthread
 
+linux_mech_bench: $(linux_mech_bench_obj)
+	$(LD) -o $@ $(LDFLAGS) $(linux_mech_bench_obj) \
+        $(CXXPATH)/librt++.a $(BASEPATH)/libruntime.a $(BASEPATH)/libnet.a \
+        $(BASEPATH)/libbase.a -lpthread
+
 # general build rules for all targets
 src = $(fake_worker_src) $(tbench_src) $(tbench_linux_src) $(callibrate_src)
 src += $(stress_src) $(efficiency_src) $(efficiency_linux_src) $(netbench_src)
-src += $(netbench_linux_src)
+src += $(netbench_linux_src) $(linux_mech_bench_src)
 obj = $(src:.cc=.o)
 dep = $(obj:.o=.d)
 
@@ -104,4 +112,4 @@ endif
 .PHONY: clean
 clean:
 	rm -f $(obj) $(dep) tbench tbench_linux callibrate stress efficiency \
-	efficiency_linux netbench netbench_linux
+	efficiency_linux netbench netbench_linux linux_mech_bench
