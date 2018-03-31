@@ -216,11 +216,7 @@ static inline void thread_reserve(struct thread *th, unsigned int core)
 	th->core = core;
 	p->active_threads[p->active_thread_count] = th;
 	th->at_idx = p->active_thread_count++;
-
-	if (p->preempting && (p->preempting_thread == th))
-		p->preempting = false;
-	else
-		list_del_from(&p->idle_threads, &th->idle_link);
+	list_del_from(&p->idle_threads, &th->idle_link);
 
 	if (p->active_thread_count > p->sched_cfg.guaranteed_cores)
 		proc_set_bursting(p);
@@ -313,17 +309,13 @@ static struct thread *pick_thread_for_proc(struct proc *p, int core)
 
 	/* try to reuse the same kthread on this core */
 	lastth = core_history[core].current;
-	if (lastth && lastth->p == p && lastth->parked &&
-	    (!p->preempting || p->preempting_thread != lastth)) {
+	if (lastth && lastth->p == p && lastth->parked)
 		return lastth;
-	}
 
 	/* try to reuse the previous kthread on this core */
 	lastth = core_history[core].prev;
-	if (lastth && lastth->p == p && lastth->parked &&
-	    (!p->preempting || p->preempting_thread != lastth)) {
+	if (lastth && lastth->p == p && lastth->parked)
 		return lastth;
-	}
 
 	/* return the least recently parked kthread */
 	return list_tail(&p->idle_threads, struct thread, idle_link);
@@ -457,7 +449,8 @@ static void wake_kthread_on_core(struct thread *th, int core)
 
 	/* mark core and kthread as reserved */
 	core_reserve(core, th);
-	thread_reserve(th, core);
+	if (th->parked)
+		thread_reserve(th, core);
 
 	/* assign the kthread to its core */
 	ret = cores_pin_thread(th->tid, th->core);
@@ -537,10 +530,6 @@ struct thread *cores_add_core(struct proc *p)
 	int core;
 	struct thread *th, *th_current;
 
-	/* only allow one in-flight preemption per process */
-	if (p->preempting)
-		return p->preempting_thread;
-
 	/* can't add cores if we're already using all available kthreads */
 	if (p->active_thread_count == p->thread_count)
 		return NULL;
@@ -553,8 +542,6 @@ struct thread *cores_add_core(struct proc *p)
 			p->thread_count);
 		BUG();
 	}
-	if (th->p->preempting && th->p->preempting_thread == th)
-		BUG();
 	BUG_ON(!bitmap_test(p->available_threads, th - p->threads));
 
 	if (core_available(core)) {
@@ -564,10 +551,7 @@ struct thread *cores_add_core(struct proc *p)
 	}
 
 	/* core is busy, preempt the currently running thread */
-	p->preempting = true;
-	p->preempting_thread = th;
-	list_del_from(&p->idle_threads, &th->idle_link);
-
+	thread_reserve(th, core);
 	th_current = core_history[core].current;
 	proc_set_overloaded(th_current->p);
 	core_history[core].next = th;
@@ -666,6 +650,7 @@ void cores_adjust_assignments()
 	   which procs want more burstable cores */
 	for (i = 0; i < dp.nr_clients; i++) {
 		p = dp.clients[i];
+		proc_clear_overloaded(p);
 
 		for (j = 0; j < p->active_thread_count; j++) {
 			th = p->active_threads[j];

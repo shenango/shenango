@@ -64,8 +64,6 @@ struct proc {
 	unsigned int		kill:1;       /* the proc is being torn down */
 	unsigned int		overloaded:1; /* the proc needs more cores */
 	unsigned int		bursting:1;   /* the proc is using past resv. */
-	unsigned int		preempting:1; /* a thread was preempted for this proc
-						 but has not yet parked */
 	unsigned int		launched:1;   /* executing the first time */
 
 	/* intrusive list links */
@@ -82,8 +80,6 @@ struct proc {
 	struct thread		*active_threads[NCPU];
 	DEFINE_BITMAP(available_threads, NCPU);
 	struct list_head	idle_threads;
-	struct thread		*preempting_thread; /* if preempting, this thread will
-											run when preemption completes */
 
 	/* network data */
 	struct eth_addr		mac;
