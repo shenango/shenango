@@ -246,8 +246,10 @@ static __noreturn void schedule(void)
 
 	/* park if we have been preempted */
 	if (unlikely(preempt_needed())) {
+		STAT(SCHED_CYCLES) += rdtsc() - start_tsc;
 		clear_preempt_needed();
 		kthread_park(false);
+		start_tsc = rdtsc();
 	}
 
 	/* move overflow tasks into the runqueue */
@@ -321,6 +323,8 @@ again:
 
 	/* did not find anything to run, park this kthread */
 	STAT(SCHED_CYCLES) += rdtsc() - start_tsc;
+	/* we may have got a preempt signal while voluntarily yielding */
+	clear_preempt_needed();
 	kthread_park(true);
 	start_tsc = rdtsc();
 
