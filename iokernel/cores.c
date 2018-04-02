@@ -479,7 +479,6 @@ void cores_park_kthread(struct thread *th, bool force)
 	unsigned int kthread = th - p->threads;
 	ssize_t s;
 	uint64_t val;
-	int ret;
 	struct thread *th_new;
 
 	assert(kthread < NCPU);
@@ -500,14 +499,16 @@ void cores_park_kthread(struct thread *th, bool force)
 		}
 	}
 
+#if 0
 	/* move the kthread to the linux core */
-	ret = cores_pin_thread(th->tid, core_assign.linux_core);
+	int ret = cores_pin_thread(th->tid, core_assign.linux_core);
 	if (ret < 0 && ret != -ESRCH) {
 		/* pinning failed for reason other than tid doesn't exist */
 		log_err("cores: failed to pin tid %d to linux core %d",
 			th->tid, core_assign.linux_core);
 		/* continue running but performance is unpredictable */
 	}
+#endif
 
 	/* mark core and kthread as available */
 	core_cede(core);
