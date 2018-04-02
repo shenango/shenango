@@ -21,7 +21,7 @@ namespace {
 
 using sec = std::chrono::duration<double, std::micro>;
 
-constexpr int N = (1000 * 1000);
+constexpr int N = (10 * 1000 * 1000);
 int MSG_COUNT = 1024;
 
 struct thread_data {
@@ -73,6 +73,27 @@ void Report(std::vector<double> timings)
 }
 
 /*
+ * Repeatedly block on reading an eventfd.
+ */
+void *BlockOnEventfd(void *data)
+{
+	struct thread_data *my_t = (struct thread_data *) data;
+	uint64_t val;
+	int ret;
+
+	std::cout << "in child thread, tid: " << gettid() << std::endl;
+	while (true) {
+		ret = read(my_t->read_efd, &val, sizeof(val));
+		if (ret != sizeof(uint64_t))
+			std::cerr << "error reading eventfd" << std::endl;
+		if (val > 1)
+			std::cout << "read value > 1: " << val << std::endl;
+	}
+
+	return NULL;
+}
+
+/*
  * Busy spin, incrementing a counter
  */
 void *BusySpin(void *data)
@@ -96,17 +117,23 @@ void RunAffinityBench()
 {
 	pid_t child_pid, child_tid;
 	int ret;
+	struct thread_data t;
 	pthread_t pthread_tid;
 	cpu_set_t cpuset_0;
 	cpu_set_t cpuset_1;
 	std::vector<double> timings;
 
 	std::cout << "running affinity bench" << std::endl;
-	
+
+	/* initialize efd */
+	t.read_efd = eventfd(0, 0);
+	if (t.read_efd == -1)
+		std::cerr << "error creating eventfd" << std::endl;
+
 	child_pid = fork();
 	if (child_pid == 0) {
 		/* in child */
-		ret = pthread_create(&pthread_tid, NULL, BusySpin, NULL);
+		ret = pthread_create(&pthread_tid, NULL, BlockOnEventfd, &t);
 		if (ret) {
 			std::cerr << "failed to create pthread" << std::endl;
 			exit(0);
@@ -117,9 +144,9 @@ void RunAffinityBench()
 		sleep(1);
 
 		CPU_ZERO(&cpuset_0);
-		CPU_SET(3, &cpuset_0);
+		CPU_SET(2, &cpuset_0);
 		CPU_ZERO(&cpuset_1);
-		CPU_SET(5, &cpuset_1);
+		CPU_SET(4, &cpuset_1);
 
 		/* guess that child thread will have a pid of child proc's pid + 1 */
 		child_tid = child_pid + 1;
@@ -150,34 +177,11 @@ void RunAffinityBench()
 			timings.push_back(
 					std::chrono::duration_cast < sec
 							> (finish - start).count());
-			/* sleep briefly, to ensure the thread has moved */
-			usleep(10);
 		}
 	}
 	kill(child_pid, SIGKILL);
 
 	Report(timings);
-}
-
-/*
- * Repeatedly block on reading an eventfd.
- */
-void *BlockOnEventfd(void *data)
-{
-	struct thread_data *my_t = (struct thread_data *) data;
-	uint64_t val;
-	int ret;
-
-	std::cout << "in child thread, tid: " << gettid() << std::endl;
-	while (true) {
-		ret = read(my_t->read_efd, &val, sizeof(val));
-		if (ret != sizeof(uint64_t))
-			std::cerr << "error reading eventfd" << std::endl;
-		if (val > 1)
-			std::cout << "read value > 1: " << val << std::endl;
-	}
-
-	return NULL;
 }
 
 /*
@@ -708,9 +712,25 @@ void RunLRPCCommunicationBench()
 
 int main(int argc, char *argv[])
 {
+	int ret;
+	cpu_set_t base_cpuset;
+
 	if (argc < 2) {
 		std::cerr << "usage: [cmd] ..." << std::endl;
 		return -EINVAL;
+	}
+
+	/* pin self to a set of non-hyperthread pair cores on the same socket */
+	CPU_ZERO(&base_cpuset);
+	CPU_SET(2, &base_cpuset);
+	CPU_SET(4, &base_cpuset);
+	CPU_SET(6, &base_cpuset);
+	CPU_SET(8, &base_cpuset);
+
+	ret = sched_setaffinity(getpid(), sizeof(cpu_set_t), &base_cpuset);
+	if (ret) {
+		std::cerr << "failed to setaffinity" << std::endl;
+		exit(0);
 	}
 
 	std::string cmd = argv[1];
