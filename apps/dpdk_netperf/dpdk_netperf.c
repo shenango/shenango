@@ -17,10 +17,35 @@
 #define NUM_MBUFS 8191
 #define MBUF_CACHE_SIZE 250
 #define BURST_SIZE 32
+#define MAX_CORES 64
+#define UDP_MAX_PAYLOAD 1472
 
 static const struct rte_eth_conf port_conf_default = {
-	.rxmode = { .max_rx_pkt_len = ETHER_MAX_LEN,
-				.hw_ip_checksum = 1,}
+	.rxmode = {
+		.max_rx_pkt_len = ETHER_MAX_LEN,
+		.hw_ip_checksum = 1,
+		.mq_mode = ETH_MQ_RX_RSS,
+	},
+	.rx_adv_conf = {
+		.rss_conf = {
+			.rss_key = NULL,
+			.rss_hf = ETH_RSS_UDP,
+		},
+	},
+};
+
+uint32_t kMagic = 0x6e626368; // 'nbch'
+
+struct nbench_req {
+  uint32_t magic;
+  int nports;
+  int measure_sec;
+};
+
+struct nbench_resp {
+  uint32_t magic;
+  int nports;
+  uint16_t ports[];
 };
 
 enum {
@@ -34,6 +59,7 @@ enum {
 
 static unsigned int dpdk_port = 0;
 static uint8_t mode;
+struct rte_mempool *rx_mbuf_pool;
 struct rte_mempool *tx_mbuf_pool;
 static struct ether_addr my_eth;
 static uint32_t my_ip;
@@ -48,6 +74,7 @@ struct ether_addr zero_mac = {
 struct ether_addr broadcast_mac = {
 		.addr_bytes = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}
 };
+uint16_t next_port = 50000;
 
 /* dpdk_netperf.c: simple implementation of netperf on DPDK */
 
@@ -78,10 +105,10 @@ static int str_to_long(const char *str, long *val)
  * coming from the mbuf_pool passed as a parameter.
  */
 static inline int
-port_init(uint8_t port, struct rte_mempool *mbuf_pool)
+port_init(uint8_t port, struct rte_mempool *mbuf_pool, unsigned int n_queues)
 {
 	struct rte_eth_conf port_conf = port_conf_default;
-	const uint16_t rx_rings = 1, tx_rings = 1;
+	const uint16_t rx_rings = n_queues, tx_rings = n_queues;
 	uint16_t nb_rxd = RX_RING_SIZE;
 	uint16_t nb_txd = TX_RING_SIZE;
 	int retval;
@@ -406,17 +433,25 @@ got_mac:
 /*
  * Run a netperf server
  */
-static __attribute__((noreturn)) void
-do_server(uint8_t port)
+static int
+do_server(void *arg)
 {
-	struct rte_mbuf *bufs[BURST_SIZE];
+	uint8_t port = dpdk_port;
+	uint8_t queue = (uint64_t) arg;
+	struct rte_mbuf *rx_bufs[BURST_SIZE];
+	struct rte_mbuf *tx_bufs[BURST_SIZE];
 	struct rte_mbuf *buf;
-	uint16_t nb_rx, nb_tx, i;
+	uint16_t nb_rx, n_to_tx, nb_tx, i, j;
 	struct ether_hdr *ptr_mac_hdr;
 	struct ether_addr src_addr;
 	struct ipv4_hdr *ptr_ipv4_hdr;
 	uint32_t src_ip_addr;
 	uint16_t tmp_port;
+	struct nbench_req *control_req;
+	struct nbench_resp *control_resp;
+
+	printf("on server core with lcore_id: %d, queue: %d", rte_lcore_id(),
+			queue);
 
 	/*
 	 * Check that the port is on the same NUMA node as the polling thread
@@ -433,13 +468,14 @@ do_server(uint8_t port)
 	/* Run until the application is quit or killed. */
 	for (;;) {
 		/* receive packets */
-		nb_rx = rte_eth_rx_burst(port, 0, bufs, BURST_SIZE);
+		nb_rx = rte_eth_rx_burst(port, queue, rx_bufs, BURST_SIZE);
 
 		if (nb_rx == 0)
 			continue;
 
+		n_to_tx = 0;
 		for (i = 0; i < nb_rx; i++) {
-			buf = bufs[i];
+			buf = rx_bufs[i];
 
 			if (!check_eth_hdr(buf))
 				goto free_buf;
@@ -469,17 +505,40 @@ do_server(uint8_t port)
 			udp_hdr->src_port = udp_hdr->dst_port;
 			udp_hdr->dst_port = tmp_port;
 
-			/* transmit packet */
-			nb_tx = rte_eth_tx_burst(port, 0, &buf, 1);
+			/* check if this is a control message and we need to reply with
+			 * ports */
+			control_req = rte_pktmbuf_mtod_offset(buf, struct nbench_req *,
+					ETHER_HDR_LEN + sizeof(struct ipv4_hdr) +
+					sizeof(struct udp_hdr));
+			if (control_req->magic == kMagic) {
+				rte_pktmbuf_append(buf, sizeof(struct nbench_resp) +
+						sizeof(uint16_t) *
+						control_req->nports -
+						sizeof(struct nbench_req));
+				control_resp = (struct nbench_resp *) control_req;
+				for (j = 0; j < control_req->nports; j++) {
+					/* simple port allocation */
+					control_resp->ports[j] = next_port++;
+				}
+			}
 
-			if (nb_tx == 1)
-				continue;
+			tx_bufs[n_to_tx++] = buf;
+			continue;
 
 		free_buf:
 			/* packet wasn't sent, free it */
 			rte_pktmbuf_free(buf);
 		}
+
+		/* transmit packets */
+		nb_tx = rte_eth_tx_burst(port, queue, tx_bufs, n_to_tx);
+
+		if (nb_tx != n_to_tx)
+			printf("error: could not transmit all packets: %d %d\n",
+				n_to_tx, nb_tx);
 	}
+
+	return 0;
 }
 
 /*
@@ -488,7 +547,6 @@ do_server(uint8_t port)
 static int dpdk_init(int argc, char *argv[])
 {
 	int args_parsed;
-	struct rte_mempool *rx_mbuf_pool;
 	unsigned nb_ports;
 
 	/* Initialize the Environment Abstraction Layer (EAL). */
@@ -514,13 +572,6 @@ static int dpdk_init(int argc, char *argv[])
 
 	if (tx_mbuf_pool == NULL)
 		rte_exit(EXIT_FAILURE, "Cannot create tx mbuf pool\n");
-
-	/* Initialize port. */
-	if (port_init(dpdk_port, rx_mbuf_pool) != 0)
-        rte_exit(EXIT_FAILURE, "Cannot init port %"PRIu8 "\n", dpdk_port);
-
-	if (rte_lcore_count() > 1)
-		printf("\nWARNING: Too many lcores enabled. Only 1 used.\n");
 
 	return args_parsed;
 }
@@ -570,7 +621,8 @@ static int parse_netperf_args(int argc, char *argv[])
 int
 main(int argc, char *argv[])
 {
-	int args_parsed, res;
+	int args_parsed, res, lcore_id;
+	uint64_t i;
 
 	/* Initialize dpdk. */
 	args_parsed = dpdk_init(argc, argv);
@@ -582,10 +634,20 @@ main(int argc, char *argv[])
 	if (res < 0)
 		return 0;
 
+	/* initialize port */
+	if (mode == MODE_UDP_CLIENT && rte_lcore_count() > 1)
+		printf("\nWARNING: Too many lcores enabled. Only 1 used.\n");
+	if (port_init(dpdk_port, rx_mbuf_pool, rte_lcore_count()) != 0)
+		rte_exit(EXIT_FAILURE, "Cannot init port %"PRIu8 "\n", dpdk_port);
+
 	if (mode == MODE_UDP_CLIENT)
 		do_client(dpdk_port);
-	else
-		do_server(dpdk_port);
+	else {
+		i = 0;
+		RTE_LCORE_FOREACH_SLAVE(lcore_id)
+			rte_eal_remote_launch(do_server, (void *) i++, lcore_id);
+		do_server((void *) i);
+	}
 
 	return 0;
 }

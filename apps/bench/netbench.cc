@@ -18,6 +18,7 @@ extern "C" {
 #include <vector>
 #include <future>
 #include <algorithm>
+#include <numeric>
 
 namespace {
 
