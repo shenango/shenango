@@ -8,14 +8,14 @@ extern crate clap;
 
 extern crate bincode;
 extern crate byteorder;
+extern crate dns_parser;
 extern crate libc;
+extern crate lockstep;
 extern crate rand;
 extern crate shenango;
 extern crate test;
-extern crate dns_parser;
 
-use std::iter;
-use std::net::{SocketAddrV4, UdpSocket};
+use std::net::SocketAddrV4;
 use std::slice;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -56,6 +56,15 @@ enum Distribution {
     Bimodal2(f64),
 }
 impl Distribution {
+    fn name(&self) -> &'static str {
+        match *self {
+            Distribution::Zero => "zero",
+            Distribution::Constant(_) => "constant",
+            Distribution::Exponential(_) => "exponential",
+            Distribution::Bimodal1(_) => "bimodal1",
+            Distribution::Bimodal2(_) => "bimodal2",
+        }
+    }
     fn sample<R: Rng>(&self, rng: &mut R) -> u64 {
         match *self {
             Distribution::Zero => 0,
@@ -83,7 +92,15 @@ impl Distribution {
 enum Protocol {
     Synthetic,
     Memcached,
-    Dns
+    Dns,
+}
+
+#[derive(Copy, Clone)]
+enum OutputMode {
+    Silent,
+    Normal,
+    WithHeader,
+    Trace,
 }
 
 #[inline(always)]
@@ -139,24 +156,17 @@ fn run_spawner_server(addr: SocketAddrV4) {
     }
 }
 
-fn warmup(backend: Backend, addr: SocketAddrV4, nthreads: u32, protocol: Protocol) {
-    match protocol {
-        Protocol::Dns => return,
-        Protocol::Synthetic => return,
-        Protocol::Memcached => memcached::warmup(backend, addr, nthreads),
-    }
-}
-
 fn run_client(
     backend: Backend,
     addr: SocketAddrV4,
     runtime: Duration,
     packets_per_second: usize,
     nthreads: u32,
-    trace: bool,
+    output: OutputMode,
     protocol: Protocol,
     distribution: Distribution,
-) {
+    barrier_group: &mut Option<lockstep::Group>,
+) -> bool {
     let packets_per_thread =
         duration_to_ns(runtime) as usize * packets_per_second / (1000_000_000 * nthreads as usize);
     let ns_per_packet = nthreads as usize * 1000_000_000 / packets_per_second;
@@ -180,6 +190,9 @@ fn run_client(
         })
         .collect();
 
+    if let Some(ref mut g) = *barrier_group {
+        g.barrier();
+    }
     let start = Instant::now();
 
     let mut send_threads = Vec::new();
@@ -265,10 +278,18 @@ fn run_client(
         .iter()
         .filter(|p| p.completion_time.is_none())
         .count() - never_sent;
-    let first_send = packets.iter().filter_map(|p| match p.actual_start {
-        Some(ref start) if *start < runtime / 10 => None,
-        _ => p.actual_start,
-    }).min().unwrap();
+    if dropped + never_sent > packets.len() / 10 {
+        return false;
+    }
+
+    let first_send = packets
+        .iter()
+        .filter_map(|p| match p.actual_start {
+            Some(ref start) if *start < runtime / 10 => None,
+            _ => p.actual_start,
+        })
+        .min()
+        .unwrap();
     let last_send = packets.iter().filter_map(|p| p.actual_start).max().unwrap();
     let mut latencies: Vec<_> = packets
         .iter()
@@ -281,47 +302,60 @@ fn run_client(
 
     latencies.sort();
 
-    let percentile = |p| {
-        duration_to_ns(latencies[(latencies.len() as f32 * p / 100.0) as usize]) as f32 / 1000.0
-    };
-    println!(
-        "{}, {}, {}, {}, {:.1}, {:.1}, {:.1}, {:.1}, {:.1}",
-        packets_per_second,
-        latencies.len() as u64 * 1000_000_000 / duration_to_ns(last_send - first_send),
-        dropped,
-        never_sent,
-        percentile(50.0),
-        percentile(90.0),
-        percentile(99.0),
-        percentile(99.9),
-        percentile(99.99)
-    );
+    if let Some(ref mut g) = *barrier_group {
+        g.barrier();
+    }
+    if let OutputMode::WithHeader = output {
+        println!("Distribution, Target, Actual, Dropped, Never Sent, Median, 90th, 99th, 99.9th, 99.99th");
+    }
+    match output {
+        OutputMode::Silent => {}
+        OutputMode::WithHeader | OutputMode::Normal => {
+            let percentile = |p| {
+                duration_to_ns(latencies[(latencies.len() as f32 * p / 100.0) as usize]) as f32
+                    / 1000.0
+            };
 
-    if trace {
-        packets.sort_by_key(|p| p.actual_start.unwrap_or(p.target_start));
-        for p in packets {
-            if let Some(completion_time) = p.completion_time {
-                let actual_start = p.actual_start.unwrap();
-                println!(
-                    "{} {} {}",
-                    duration_to_ns(actual_start),
-                    duration_to_ns(actual_start - p.target_start),
-                    duration_to_ns(completion_time - actual_start)
-                )
-            } else if p.actual_start.is_some() {
-                let actual_start = p.actual_start.unwrap();
-                println!(
-                    "{} {} -1",
-                    duration_to_ns(actual_start),
-                    duration_to_ns(actual_start - p.target_start),
-                )
-            } else {
-                println!("{} -1 -1", duration_to_ns(p.target_start))
+            println!(
+                "{}, {}, {}, {}, {}, {:.1}, {:.1}, {:.1}, {:.1}, {:.1}",
+                distribution.name(),
+                packets_per_second,
+                latencies.len() as u64 * 1000_000_000 / duration_to_ns(last_send - first_send),
+                dropped,
+                never_sent,
+                percentile(50.0),
+                percentile(90.0),
+                percentile(99.0),
+                percentile(99.9),
+                percentile(99.99)
+            );
+        }
+        OutputMode::Trace => {
+            packets.sort_by_key(|p| p.actual_start.unwrap_or(p.target_start));
+            for p in packets {
+                if let Some(completion_time) = p.completion_time {
+                    let actual_start = p.actual_start.unwrap();
+                    println!(
+                        "{} {} {}",
+                        duration_to_ns(actual_start),
+                        duration_to_ns(actual_start - p.target_start),
+                        duration_to_ns(completion_time - actual_start)
+                    )
+                } else if p.actual_start.is_some() {
+                    let actual_start = p.actual_start.unwrap();
+                    println!(
+                        "{} {} -1",
+                        duration_to_ns(actual_start),
+                        duration_to_ns(actual_start - p.target_start),
+                    )
+                } else {
+                    println!("{} -1 -1", duration_to_ns(p.target_start))
+                }
             }
         }
     }
+    true
 }
-
 fn main() {
     let matches = App::new("Synthetic Workload Application")
         .version("0.1")
@@ -418,9 +452,30 @@ fn main() {
                 .default_value("167")
                 .help("Mean number of work iterations per request"),
         )
+        .arg(
+            Arg::with_name("barrier-peers")
+                .long("barrier-peers")
+                .requires("barrier-leader")
+                .takes_value(true)
+                .help("Number of peers in barrier group"),
+        )
+        .arg(
+            Arg::with_name("barrier-leader")
+                .long("barrier-leader")
+                .requires("barrier-peers")
+                .takes_value(true)
+                .help("Leader of barrier group"),
+        )
+        .arg(
+            Arg::with_name("samples")
+                .long("samples")
+                .takes_value(true)
+                .default_value("20")
+                .help("Number of samples to collect"),
+        )
         .get_matches();
 
-    let addr = matches.value_of("ADDR").unwrap().to_owned();
+    let addr: SocketAddrV4 = FromStr::from_str(matches.value_of("ADDR").unwrap()).unwrap();
     let nthreads = value_t_or_exit!(matches, "threads", u32);
     let runtime = Duration::from_secs(value_t!(matches, "runtime", u64).unwrap());
     let packets_per_second = (1.0e6 * value_t_or_exit!(matches, "mpps", f32)) as usize;
@@ -442,108 +497,22 @@ fn main() {
         "bimodal2" => Distribution::Bimodal2(mean),
         _ => unreachable!(),
     };
+    let samples = value_t_or_exit!(matches, "samples", usize);
+    let mode = matches.value_of("mode").unwrap();
+    let backend = match mode {
+        "linux-server" | "linux-client" => Backend::Linux,
+        "runtime-server" | "spawner-server" | "runtime-client" => Backend::Runtime,
+        _ => unreachable!(),
+    };
+    let mut barrier_group = matches.value_of("barrier-leader").map(|leader| {
+        lockstep::Group::from_hostname(
+            leader,
+            23232,
+            value_t_or_exit!(matches, "barrier-peers", usize),
+        ).unwrap()
+    });
 
-    match matches.value_of("mode").unwrap() {
-        "linux-server" => {
-            let socket = UdpSocket::bind(addr).unwrap();
-            println!("Bound to address {}", socket.local_addr().unwrap());
-            run_server(Backend::Linux, UdpConnection::Linux(socket), nthreads)
-        }
-        "linux-client" => {
-            if dowarmup {
-                warmup(
-                    Backend::Linux,
-                    FromStr::from_str(&addr).unwrap(),
-                    nthreads,
-                    proto,
-                );
-                println!("Warmup done");
-                return;
-            }
-            for packets_per_second in (1..100).map(|i| i * 10000) {
-                run_client(
-                    Backend::Linux,
-                    FromStr::from_str(&addr).unwrap(),
-                    runtime,
-                    packets_per_second,
-                    nthreads,
-                    false,
-                    proto,
-                    distribution,
-                )
-            }
-        }
-        "runtime-server" => shenango::runtime_init(config.unwrap().to_owned(), move || {
-            let addr = FromStr::from_str(&addr).unwrap();
-            let socket = shenango::udp::UdpConnection::listen(addr);
-            println!("Bound to address {}", socket.local_addr());
-            run_server(Backend::Runtime, UdpConnection::Runtime(socket), nthreads)
-        }).unwrap(),
-        "runtime-client" => shenango::runtime_init(config.unwrap().to_owned(), move || {
-            if trace {
-                for packets_per_second in (1..3).map(|i| i * 100000) {
-                    print!("# ");
-                    run_client(
-                        Backend::Runtime,
-                        FromStr::from_str(&addr).unwrap(),
-                        Duration::from_secs(1),
-                        packets_per_second,
-                        nthreads,
-                        false,
-                        proto,
-                        distribution,
-                    );
-                }
-                run_client(
-                    Backend::Runtime,
-                    FromStr::from_str(&addr).unwrap(),
-                    runtime,
-                    packets_per_second,
-                    nthreads,
-                    true,
-                    proto,
-                    distribution,
-                );
-            } else {
-                if dowarmup {
-                    warmup(
-                        Backend::Runtime,
-                        FromStr::from_str(&addr).unwrap(),
-                        nthreads,
-                        proto,
-                    );
-                    println!("Warmup done");
-                    return;
-                }
-                println!(
-                    "Distribution = {:?}, threads = {}, runtime = {}",
-                    distribution,
-                    nthreads,
-                    runtime.as_secs(),
-                );
-                let start = Instant::now();
-                for (i, packets_per_second) in
-                    (iter::once(1).chain(1..21)).map(|i| i * 5000).enumerate()
-                {
-                    while start.elapsed() < (runtime + Duration::from_secs(1)) * i as u32 {
-                        shenango::cpu_relax();
-                    }
-                    run_client(
-                        Backend::Runtime,
-                        FromStr::from_str(&addr).unwrap(),
-                        runtime,
-                        packets_per_second,
-                        nthreads,
-                        false,
-                        proto,
-                        distribution,
-                    );
-                }
-            }
-        }).unwrap(),
-        "spawner-server" => shenango::runtime_init(config.unwrap().to_owned(), move || {
-            run_spawner_server(FromStr::from_str(&addr).unwrap())
-        }).unwrap(),
+    match mode {
         "work-bench" => {
             let iterations = 100_000_000;
             println!("Timing {} iterations of work()", iterations);
@@ -551,6 +520,79 @@ fn main() {
             work(iterations);
             let elapsed = duration_to_ns(start.elapsed());
             println!("Rate = {} ns/iteration", elapsed as f64 / iterations as f64);
+        }
+        "spawner-server" => backend.init_and_run(config, move || run_spawner_server(addr)),
+        "linux-server" | "runtime-server" => backend.init_and_run(config, move || {
+            let socket = backend.create_udp_connection(addr, None);
+            println!("Bound to address {}", socket.local_addr());
+            run_server(backend, socket, nthreads)
+        }),
+        "linux-client" | "runtime-client" => {
+            backend.init_and_run(config, move || {
+                if dowarmup {
+                    match proto {
+                        Protocol::Dns => {}
+                        Protocol::Memcached => {
+                            memcached::warmup(backend, addr, nthreads);
+                            println!("Warmup done");
+                        }
+                        Protocol::Synthetic => for packets_per_second in (1..3).map(|i| i * 100000)
+                        {
+                            run_client(
+                                backend,
+                                addr,
+                                Duration::from_secs(1),
+                                packets_per_second,
+                                nthreads,
+                                OutputMode::Silent,
+                                proto,
+                                distribution,
+                                &mut barrier_group,
+                            );
+                        },
+                    }
+                }
+
+                if trace {
+                    run_client(
+                        backend,
+                        addr,
+                        runtime,
+                        packets_per_second,
+                        nthreads,
+                        OutputMode::Trace,
+                        proto,
+                        distribution,
+                        &mut barrier_group,
+                    );
+                } else {
+                    for (i, distribution) in [
+                        Distribution::Constant(mean as u64),
+                        Distribution::Exponential(mean),
+                        Distribution::Bimodal1(mean),
+                        Distribution::Bimodal2(mean),
+                    ].iter().enumerate()
+                    {
+                        for j in 1..=samples {
+                            run_client(
+                                backend,
+                                addr,
+                                runtime,
+                                packets_per_second * j / samples,
+                                nthreads,
+                                if i == 0 && j == 1 {
+                                    OutputMode::WithHeader
+                                } else {
+                                    OutputMode::Normal
+                                },
+                                proto,
+                                *distribution,
+                                &mut barrier_group,
+                            );
+                        }
+                    }
+                }
+            });
         }
         _ => unreachable!(),
     };

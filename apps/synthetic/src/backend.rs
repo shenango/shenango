@@ -61,6 +61,17 @@ impl Backend {
             Backend::Runtime => shenango::thread_yield(),
         }
     }
+
+    pub fn init_and_run<'a, F>(&self, cfgpath: Option<&'a str>, f: F)
+    where
+        F: FnOnce(),
+        F: Send + 'static,
+    {
+        match *self {
+            Backend::Linux => f(),
+            Backend::Runtime => shenango::runtime_init(cfgpath.unwrap().to_owned(), f).unwrap(),
+        }
+    }
 }
 
 pub enum UdpConnection {
@@ -94,6 +105,16 @@ impl UdpConnection {
         match *self {
             UdpConnection::Linux(ref s) => s.recv(buf),
             UdpConnection::Runtime(ref s) => s.recv(buf),
+        }
+    }
+
+    pub fn local_addr(&self) -> SocketAddrV4 {
+        match *self {
+            UdpConnection::Linux(ref s) => match s.local_addr() {
+                Ok(SocketAddr::V4(addr)) => addr,
+                _ => unreachable!(),
+            },
+            UdpConnection::Runtime(ref s) => s.local_addr(),
         }
     }
 
