@@ -47,7 +47,7 @@ mod memcache_error;
 
 mod dns;
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 enum Distribution {
     Zero,
     Constant(u64),
@@ -60,7 +60,7 @@ impl Distribution {
         match *self {
             Distribution::Zero => 0,
             Distribution::Constant(m) => m,
-            Distribution::Exponential(m) => Exp::new(m).ind_sample(rng) as u64,
+            Distribution::Exponential(m) => Exp::new(1.0 / m).ind_sample(rng) as u64,
             Distribution::Bimodal1(m) => {
                 if rng.gen_weighted_bool(10) {
                     (m * 5.5) as u64
@@ -280,7 +280,6 @@ fn run_client(
         .collect();
 
     latencies.sort();
-    assert!(!latencies.is_empty());
 
     let percentile = |p| {
         duration_to_ns(latencies[(latencies.len() as f32 * p / 100.0) as usize]) as f32 / 1000.0
@@ -437,7 +436,7 @@ fn main() {
     let mean = value_t_or_exit!(matches, "mean", f64);
     let distribution = match matches.value_of("distribution").unwrap() {
         "zero" => Distribution::Zero,
-        "fixed" => Distribution::Constant(mean as u64),
+        "constant" => Distribution::Constant(mean as u64),
         "exponential" => Distribution::Exponential(mean),
         "bimodal1" => Distribution::Bimodal1(mean),
         "bimodal2" => Distribution::Bimodal2(mean),
@@ -516,9 +515,15 @@ fn main() {
                     println!("Warmup done");
                     return;
                 }
+                println!(
+                    "Distribution = {:?}, threads = {}, runtime = {}",
+                    distribution,
+                    nthreads,
+                    runtime.as_secs(),
+                );
                 let start = Instant::now();
                 for (i, packets_per_second) in
-                    (iter::once(1).chain(1..500)).map(|i| i * 50000).enumerate()
+                    (iter::once(1).chain(1..21)).map(|i| i * 5000).enumerate()
                 {
                     while start.elapsed() < (runtime + Duration::from_secs(1)) * i as u32 {
                         shenango::cpu_relax();
@@ -540,7 +545,7 @@ fn main() {
             run_spawner_server(FromStr::from_str(&addr).unwrap())
         }).unwrap(),
         "work-bench" => {
-            let iterations = 1000_000;
+            let iterations = 100_000_000;
             println!("Timing {} iterations of work()", iterations);
             let start = Instant::now();
             work(iterations);
