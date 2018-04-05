@@ -703,8 +703,7 @@ static inline const void *slist_pop_(struct slist_head *h, size_t off)
 	     (ppos) = (ppos)->next)
 
 struct hlist_node {
-	/* WARNING: @next has to line up with @head in struct hlist_head */
-	struct hlist_node *next, *prev;
+	struct hlist_node *next, **pprev;
 };
 
 struct hlist_head {
@@ -719,35 +718,25 @@ static inline void hlist_init_head(struct hlist_head *h)
 static inline void hlist_add_head(struct hlist_head *h,
 				  struct hlist_node *n)
 {
-	n->next = h->head;
-	n->prev = (struct hlist_node *) h;
-	if (n->next)
-		n->next->prev = n;
+	struct hlist_node *head = h->head;
+	n->next = head;
+	n->pprev = &h->head;
 	h->head = n;
-}
-
-static inline void hlist_del_head(struct hlist_head *h)
-{
-	h->head = h->head->next;
-	if (h->head)
-		h->head->prev = (struct hlist_node *) h;
-}
-
-static inline void hlist_add_after(struct hlist_node *n,
-				   struct hlist_node *prev)
-{
-	n->next = prev->next;
-	n->prev = prev;
-	prev->next = n;
-	if (n->next)
-		n->next->prev = n;
+	if (head)
+		head->pprev = &n->next;
 }
 
 static inline void hlist_del(struct hlist_node *n)
 {
-	n->prev->next = n->next;
+	*n->pprev = n->next;
 	if (n->next)
-		n->next->prev = n->prev;
+		n->next->pprev = n->pprev;
+}
+
+static inline void hlist_del_head(struct hlist_head *h)
+{
+	if (h->head)
+		hlist_del(h->head);
 }
 
 static inline bool hlist_empty(struct hlist_head *h)

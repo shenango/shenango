@@ -10,8 +10,8 @@
 
 /* describes a generation number */
 struct gen_num {
-	uint32_t	prev_gen;
-	uint32_t	*gen;
+	uint32_t		prev_gen;
+	volatile uint32_t	*gen;
 };
 
 /*
