@@ -46,12 +46,15 @@ netbench_obj = $(netbench_src:.cc=.o)
 netbench_linux_src = netbench_linux.cc
 netbench_linux_obj = $(netbench_linux_src:.cc=.o)
 
+netperf_src = netperf.cc
+netperf_obj = $(netperf_src:.cc=.o)
+
 linux_mech_bench_src = linux_mech_bench.cc
 linux_mech_bench_obj = $(linux_mech_bench_src:.cc=.o)
 
 # must be first
 all: tbench tbench_linux callibrate stress efficiency efficiency_linux \
-     netbench netbench_linux linux_mech_bench
+     netbench netbench_linux netperf linux_mech_bench
 
 tbench: $(tbench_obj)
 	$(LD) -o $@ $(LDFLAGS) $(tbench_obj) $(CXXPATH)/librt++.a \
@@ -78,13 +81,18 @@ efficiency_linux: $(fake_worker_obj) $(efficiency_linux_obj)
 	$(LD) -o $@ $(LDFLAGS) $(fake_worker_obj) $(efficiency_linux_obj) \
 	-lpthread
 
-netbench: $(netbench_obj)
-	$(LD) -o $@ $(LDFLAGS) $(netbench_obj) \
+netbench: $(netbench_obj) $(fake_worker_obj)
+	$(LD) -o $@ $(LDFLAGS) $(fake_worker_obj) $(netbench_obj) \
         $(CXXPATH)/librt++.a $(BASEPATH)/libruntime.a $(BASEPATH)/libnet.a \
         $(BASEPATH)/libbase.a -lpthread
 
-netbench_linux: $(netbench_linux_obj)
-	$(LD) -o $@ $(LDFLAGS) $(netbench_linux_obj) -lpthread
+netbench_linux: $(netbench_linux_obj) $(fake_worker_obj)
+	$(LD) -o $@ $(LDFLAGS) $(fake_worker_obj) $(netbench_linux_obj) -lpthread
+
+netperf: $(netperf_obj)
+	$(LD) -o $@ $(LDFLAGS) $(netperf_obj) \
+        $(CXXPATH)/librt++.a $(BASEPATH)/libruntime.a $(BASEPATH)/libnet.a \
+        $(BASEPATH)/libbase.a -lpthread
 
 linux_mech_bench: $(linux_mech_bench_obj)
 	$(LD) -o $@ $(LDFLAGS) $(linux_mech_bench_obj) \
@@ -94,7 +102,7 @@ linux_mech_bench: $(linux_mech_bench_obj)
 # general build rules for all targets
 src = $(fake_worker_src) $(tbench_src) $(tbench_linux_src) $(callibrate_src)
 src += $(stress_src) $(efficiency_src) $(efficiency_linux_src) $(netbench_src)
-src += $(netbench_linux_src) $(linux_mech_bench_src)
+src += $(netbench_linux_src) $(netperf_src) $(linux_mech_bench_src)
 obj = $(src:.cc=.o)
 dep = $(obj:.o=.d)
 
@@ -112,4 +120,4 @@ endif
 .PHONY: clean
 clean:
 	rm -f $(obj) $(dep) tbench tbench_linux callibrate stress efficiency \
-	efficiency_linux netbench netbench_linux linux_mech_bench
+	efficiency_linux netbench netbench_linux netperf linux_mech_bench

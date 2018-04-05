@@ -9,6 +9,8 @@ extern "C" {
 #undef max
 
 #include "udp.h"
+#include "fake_worker.h"
+#include "proto.h"
 
 #include <iostream>
 #include <iomanip>
@@ -21,25 +23,13 @@ namespace {
 
 using sec = std::chrono::duration<double, std::micro>;
 
-// The netbench server responds to this port.
-constexpr uint16_t kNetbenchPort = 8001;
-
-constexpr uint32_t kMagic = 0x6e626368; // 'nbch'
-
-struct nbench_req {
-  uint32_t magic;
-  int nports;
-  int measure_sec;
-};
-
-struct nbench_resp {
-  uint32_t magic;
-  int nports;
-  uint16_t ports[];
-};
-
 void ServerWorker(int fd) {
-  unsigned char buf[rt::UdpConn::kMaxPayloadSize];
+  union {
+    unsigned char buf[rt::UdpConn::kMaxPayloadSize];
+    payload p;
+  };
+  std::unique_ptr<FakeWorker> w(FakeWorkerFactory("stridedmem:3200:64"));
+  if (unlikely(w == nullptr)) exit(1);
 
   while (true) {
     // Receive a network response.
@@ -49,6 +39,12 @@ void ServerWorker(int fd) {
       printf("udp read failed, ret = %ld\n", ret);
       exit(1);
     }
+
+    // Determine if the connection is being killed.
+    if (unlikely(p.tag == kKill)) break;
+
+    // Perform fake work if requested.
+    if (p.workn != 0) w->Work(p.workn * 82.0);
 
     // Send a network request.
     ssize_t sret = write(fd, &buf, ret);
@@ -85,13 +81,15 @@ void ServerHandler(void *arg) {
     nbench_req req;
     sockaddr_in caddr;
     socklen_t caddr_len = sizeof(caddr);
-    ssize_t ret = recvfrom(fd, &req, sizeof(req), 0, (struct sockaddr *)&caddr, &caddr_len);
+    ssize_t ret = recvfrom(fd, &req, sizeof(req), 0, (struct sockaddr *)&caddr,
+                           &caddr_len);
     if (ret != sizeof(req) || req.magic != kMagic) continue;
 
+    std::vector<std::thread> ts;
+
     auto t = std::thread([=]{
-      printf("got connection %x:%d, %d seconds, %d ports\n",
-             addr.sin_addr.s_addr, addr.sin_port,
-             req.measure_sec, req.nports);
+      printf("got connection %x:%d, %d ports\n",
+             addr.sin_addr.s_addr, addr.sin_port, req.nports);
 
       union {
         nbench_resp resp;
@@ -140,19 +138,17 @@ void ServerHandler(void *arg) {
       ssize_t len = sizeof(nbench_resp) + sizeof(uint16_t) * req.nports;
       if (len > static_cast<ssize_t>(rt::UdpConn::kMaxPayloadSize))
         printf("too big\n");
-      ssize_t ret = sendto(fd, &resp, len, 0, (struct sockaddr *)&caddr, sizeof(caddr));
+      ssize_t ret = sendto(fd, &resp, len, 0, (struct sockaddr *)&caddr,
+                           sizeof(caddr));
       if (ret != len) {
         printf("udp write failed, ret = %ld\n", ret);
       }
-
-      // Sleep for one extra second to give the experiment time to finish.
-      sleep(req.measure_sec + 1);
-
-      // Shutdown the workers and wait for them to exit.
-      for (int i = 0; i < req.nports; i++)
-        shutdown(conns[i], SHUT_RDWR);
     });
-    t.detach();
+    ts.emplace_back(std::move(t));
+
+    for (auto& t: ts)
+      t.join();
+    printf("done\n");
   }
 }
 
