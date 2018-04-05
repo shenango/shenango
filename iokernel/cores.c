@@ -15,6 +15,8 @@
 
 #include "defs.h"
 
+/*#define CORES_NOHT 1*/
+
 unsigned int nr_avail_cores = 0;
 DEFINE_BITMAP(avail_cores, NCPU);
 struct core_assignments core_assign;
@@ -336,6 +338,7 @@ static int pick_core_for_proc(struct proc *p)
 	struct thread *t;
 	struct proc *buddy_proc, *core_proc;
 
+#ifndef CORES_NOHT
 	/* try to allocate a hyperthread pair core */
 	for (i = 0; i < p->active_thread_count; i++) {
 		t = p->active_threads[i];
@@ -351,6 +354,7 @@ static int pick_core_for_proc(struct proc *p)
 		if (buddy_proc != p && proc_is_bursting(buddy_proc))
 			return buddy_core;
 	}
+#endif
 
 	/* try the core that we most recently ran on */
 	t = list_top(&p->idle_threads, struct thread, idle_link);
@@ -416,6 +420,7 @@ static struct thread *pick_thread_for_core(int core)
 			goto chose_proc;
 	}
 
+#ifndef CORES_NOHT
 	/* try to allocate to the process running on the hyperthread pair core */
 	buddy_core = cpu_to_sibling_cpu(core);
 	if (core_history[buddy_core].current) {
@@ -423,6 +428,7 @@ static struct thread *pick_thread_for_core(int core)
 		if (!p->removed && proc_is_overloaded(p))
 			goto chose_proc;
 	}
+#endif
 
 	/* try to allocate to the process that used this core previously */
 	if (core_history[core].prev) {
@@ -752,6 +758,14 @@ int cores_init(void)
 		    i == core_assign.dp_core) {
 			continue;
 		}
+
+#ifdef CORES_NOHT
+		/* disable hyperthreads */
+		j = bitmap_find_next_set(cpu_info_tbl[i].thread_siblings_mask,
+					 cpu_count, 0);
+		if (i != j)
+			continue;
+#endif
 
 		if (cpu_info_tbl[i].package == 0)
 			core_init(i);
