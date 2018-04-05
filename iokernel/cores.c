@@ -58,6 +58,8 @@ static inline void core_reserve(unsigned int core, struct thread *th)
 	bitmap_clear(avail_cores, core);
 	nr_avail_cores--;
 
+	BUG_ON(core_history[core].next && th != core_history[core].next);
+
 	if (core_history[core].prev)
 		proc_put(core_history[core].prev->p);
 	proc_get(th->p);
@@ -368,18 +370,20 @@ static int pick_core_for_proc(struct proc *p)
 	if (core != cpu_count)
 		return core;
 
-	/* no cores available, take from any bursting proc */
-	core_proc = get_bursting_proc();
-	if (core_proc == NULL) {
-		/* this is possible because we only allow one in-flight preemption
-		 * per core at once. we need to handle this. */
-		log_err("pick_core_for_proc: no available cores!");
-		BUG();
+	/* no cores available, take from the first bursting proc */
+	for (i = 0; i < cpu_count; i++) {
+		if (!core_history[i].current)
+			continue;
+		if (!proc_is_bursting(core_history[i].current->p))
+			continue;
+		if (core_history[i].next != NULL)
+			continue;
+		return i;
 	}
 
-	core = core_proc->active_threads[rand_crc32c((uintptr_t) core_proc) %
-	       core_proc->active_thread_count]->core;
-	return core;
+	log_err("pick_core_for_proc: no available cores!");
+	BUG();
+	return 0;
 }
 
 /**
@@ -555,6 +559,7 @@ struct thread *cores_add_core(struct proc *p)
 	thread_reserve(th, core);
 	th_current = core_history[core].current;
 	proc_set_overloaded(th_current->p);
+	BUG_ON(core_history[core].next);
 	core_history[core].next = th;
 	if (unlikely(syscall(SYS_tgkill, th_current->p->pid,
 		     th_current->tid, SIGUSR1) < 0)) {
