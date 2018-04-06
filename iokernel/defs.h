@@ -25,7 +25,6 @@
 #define IOKERNEL_CMD_BURST_SIZE		64
 #define IOKERNEL_RX_BURST_SIZE		64
 #define IOKERNEL_CONTROL_BURST_SIZE	4
-#define IOKERNEL_RX_WAKE_THRESH		64
 
 
 /*
@@ -44,7 +43,7 @@ struct thread {
 	pid_t			tid;
 	int32_t			park_efd;
 	struct gen_num		rq_gen;
-	uint32_t		last_send_tail;
+	uint32_t		last_send_head;
 	/* current or most recent core this thread ran on, depending on whether
 	 * this thread is parked or not */
 	unsigned int		core;

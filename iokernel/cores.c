@@ -655,7 +655,7 @@ void cores_adjust_assignments()
 {
 	struct proc *p, *next;
 	struct thread *th;
-	uint32_t send_tail, len;
+	uint32_t send_tail;
 	int i, j;
 
 	/* determine which procs need more cores to meet their guarantees, and
@@ -677,15 +677,14 @@ void cores_adjust_assignments()
 			if (gen_in_same_gen(&th->rq_gen))
 				goto request_kthread;
 
-			/* check if rx queue remained non-empty or overflow */
+			/* check if rx queue still holds packets that were queued last time
+			 * we checked */
 			send_tail = lrpc_poll_send_tail(&th->rxq);
-			len = lrpc_get_cached_length(&th->rxq);
-			if (len > 0 && (len >= IOKERNEL_RX_WAKE_THRESH ||
-					send_tail == th->last_send_tail)) {
-				th->last_send_tail = send_tail;
+			if (send_tail < th->last_send_head) {
+				th->last_send_head = th->rxq.send_head;
 				goto request_kthread;
 			}
-			th->last_send_tail = send_tail;
+			th->last_send_head = th->rxq.send_head;
 			/* TODO: check on timers */
 
 			continue; /* no need to wake a kthread */
