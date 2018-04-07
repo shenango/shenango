@@ -9,6 +9,7 @@
 #include <base/page.h>
 #include <base/atomic.h>
 #include <base/limits.h>
+#include <base/log.h>
 
 #include "defs.h"
 
@@ -89,6 +90,7 @@ static int stack_tcache_alloc(struct tcache *tc, int nr, void **items)
 	return 0;
 
 fail:
+	log_err_ratelimited("stack: failed to allocate stack memory");
 	stack_tcache_free(tc, i, items);
 	return -ENOMEM;
 }
