@@ -94,6 +94,8 @@ static bool rxq_spin_us(struct kthread *k, uint64_t us)
 	unsigned long start = rdtsc();
 
 	while (rdtsc() - start < cycles) {
+		if (unlikely(preempt_needed()))
+			break;
 		if (!lrpc_empty(&k->rxq))
 			return true;
 		cpu_relax();
@@ -189,31 +191,27 @@ done:
 	return th != NULL;
 }
 
-static __noinline void do_watchdog(struct kthread *l)
+static __noinline struct thread *do_watchdog(struct kthread *l)
 {
 	thread_t *th;
 
 	assert_spin_lock_held(&l->lock);
 
-	/* check for timeouts */
-	th = timer_run(l);
-	if (th) {
-		STAT(TIMERS_LOCAL)++;
-		if (unlikely(l->rq_head - l->rq_tail >= RUNTIME_RQ_SIZE))
-			list_add_tail(&l->rq_overflow, &th->link);
-		else
-			l->rq[l->rq_head++ % RUNTIME_RQ_SIZE] = th;
-	}
-
 	/* then check the network queues */
 	th = net_run(l, RUNTIME_NET_BUDGET);
 	if (th) {
 		STAT(NETS_LOCAL)++;
-		if (unlikely(l->rq_head - l->rq_tail >= RUNTIME_RQ_SIZE))
-			list_add_tail(&l->rq_overflow, &th->link);
-		else
-			l->rq[l->rq_head++ % RUNTIME_RQ_SIZE] = th;
+		return th;
 	}
+
+	/* check for timeouts */
+	th = timer_run(l);
+	if (th) {
+		STAT(TIMERS_LOCAL)++;
+		return th;
+	}
+
+	return NULL;
 }
 
 /* the main scheduler routine, decides what to run next */
@@ -252,16 +250,18 @@ static __noreturn void schedule(void)
 		start_tsc = rdtsc();
 	}
 
+	/* if it's been too long, run the net and timer handler */
+	if (unlikely(start_tsc - last_watchdog_tsc >
+	             cycles_per_us * RUNTIME_WATCHDOG_US)) {
+		last_watchdog_tsc = start_tsc;
+		th = do_watchdog(l);
+		if (th)
+			goto done;
+	}
+
 	/* move overflow tasks into the runqueue */
 	if (unlikely(!list_empty(&l->rq_overflow)))
 		drain_overflow(l);
-
-	/* if it's been too long, add timer and net handlers to runqueue */
-	if (unlikely(start_tsc - last_watchdog_tsc >
-	             cycles_per_us * RUNTIME_WATCHDOG_US)) {
-		do_watchdog(l);
-		last_watchdog_tsc = start_tsc;
-	}
 
 again:
 	/* first try the local runqueue */
@@ -275,7 +275,6 @@ again:
 	th = timer_run(l);
 	if (th) {
 		STAT(TIMERS_LOCAL)++;
-		l->rq[l->rq_head++] = th;
 		goto done;
 	}
 
@@ -283,7 +282,6 @@ again:
 	th = net_run(l, RUNTIME_NET_BUDGET);
 	if (th) {
 		STAT(NETS_LOCAL)++;
-		l->rq[l->rq_head++] = th;
 		goto done;
 	}
 
@@ -302,6 +300,8 @@ again:
 
 	/* finally try to steal from every kthread */
 	for (i = 0; i < last_nrks; i++) {
+		if (unlikely(preempt_needed()))
+			break;
 		if (ks[i] == l)
 			continue;
 		if (steal_work(l, ks[i]))
@@ -316,7 +316,6 @@ again:
 		th = net_run(l, RUNTIME_NET_BUDGET);
 		if (th) {
 			STAT(NETS_LOCAL)++;
-			l->rq[l->rq_head++] = th;
 			goto done;
 		}
 	}
@@ -332,8 +331,10 @@ again:
 
 done:
 	/* pop off a thread and run it */
-	assert(l->rq_head != l->rq_tail);
-	th = l->rq[l->rq_tail++ % RUNTIME_RQ_SIZE];
+	if (!th) {
+		assert(l->rq_head != l->rq_tail);
+		th = l->rq[l->rq_tail++ % RUNTIME_RQ_SIZE];
+	}
 
 	/* check if we have emptied the runqueue */
 	if (l->rq_head == l->rq_tail)
