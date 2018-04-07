@@ -22,9 +22,12 @@ func sqrt(n uint64) float64 {
 
 func callibrate(n uint64) uint64 {
 	start := time.Now()
-	v := sqrt(n)
+	v := float64(0)
+	for i := int(0); i < 10000; i++ {
+		v += sqrt(n)
+	}
 	elapsed := time.Since(start)
-	log.Printf("took %s %f", elapsed, v)
+	log.Printf("took %s %f", elapsed / 10000, v)
 	return 0
 }
 
@@ -36,17 +39,17 @@ func worker(n uint64, udpc *net.UDPConn, c chan uint64) {
 	for {
 		err := binary.Write(buf, binary.LittleEndian, sqrt(n))
 		if err != nil {
-			return
+			break
 		}
 
 		_, err = udpc.Write(bs)
 		if err != nil {
-			return
+			break
 		}
 
 		_, err = udpc.Read(bs)
 		if err != nil {
-			return
+			break
 		}
 
 		reqs += 1
@@ -84,17 +87,17 @@ func main() {
 		printUsage(2)
 	}
 
-	seconds, err := strconv.Atoi(os.Args[3])
+	seconds, err := strconv.Atoi(os.Args[4])
 	if err != nil {
 		printUsage(4)
 	}
 
-	stepUS, err := strconv.Atoi(os.Args[4])
+	stepUS, err := strconv.Atoi(os.Args[5])
 	if err != nil {
 		printUsage(5)
 	}
 
-	endUS, err := strconv.Atoi(os.Args[5])
+	endUS, err := strconv.Atoi(os.Args[6])
 	if err != nil {
 		printUsage(6)
 	}
@@ -120,7 +123,6 @@ func main() {
 		// Sleep for the experiment measurement duration.
 		time.Sleep(time.Duration(seconds) * time.Second)
 
-
 		// Close the UDP sockets.
 		for i := 0; i < threads; i++ {
 			conns[i].Close()
@@ -132,6 +134,8 @@ func main() {
 			reqs += <-c
 		}
 		elapsed := time.Since(start) // stop elapsed time measurement.
-		log.Println(elapsed)
+		reqs_per_sec := float64(reqs) / elapsed.Seconds()
+		ideal_reqs_per_sec := 8.0 * 1000000.0 / float64(curUS)
+		fmt.Printf("%d %e %.4f\n", curUS, reqs_per_sec, reqs_per_sec / ideal_reqs_per_sec * 100)
 	}
 }
