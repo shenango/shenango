@@ -1,5 +1,10 @@
+extern "C" {
+#include <base/log.h>
+}
+
 #include "thread.h"
 #include "sync.h"
+#include "timer.h"
 #include "fake_worker.h"
 
 #include <iostream>
@@ -12,9 +17,10 @@ std::string worker_spec;
 
 void MainHandler(void *arg) {
   rt::WaitGroup wg(1);
+  uint64_t cnt[threads] = {};
 
   for (int i = 0; i < threads; ++i) {
-    rt::Spawn([](){
+    rt::Spawn([&,i](){
       auto *w = FakeWorkerFactory(worker_spec);
       if (w == nullptr) {
         std::cerr << "Failed to create worker." << std::endl;
@@ -23,10 +29,22 @@ void MainHandler(void *arg) {
 
       while (true) {
         w->Work(n);
+        cnt[i]++;
         rt::Yield();
       }
     });
   }
+
+  rt::Spawn([&](){
+    uint64_t last_total = 0;
+    while (1) {
+      uint64_t total = 0;
+      for (int i = 0; i < threads; i++) total += cnt[i];
+      log_info("%ld", total - last_total);
+      last_total = total;
+      rt::Sleep(rt::kSeconds);
+    }
+  });
 
   // never returns
   wg.Wait();
