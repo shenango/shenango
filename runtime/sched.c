@@ -336,6 +336,10 @@ done:
 		th = l->rq[l->rq_tail++ % RUNTIME_RQ_SIZE];
 	}
 
+	/* move overflow tasks into the runqueue */
+	if (unlikely(!list_empty(&l->rq_overflow)))
+		drain_overflow(l);
+
 	/* check if we have emptied the runqueue */
 	if (l->rq_head == l->rq_tail)
 		gen_inactive(&l->rq_gen);
