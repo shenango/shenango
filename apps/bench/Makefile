@@ -34,6 +34,9 @@ callibrate_obj = $(callibrate_src:.cc=.o)
 stress_src = stress.cc
 stress_obj = $(stress_src:.cc=.o)
 
+stress_linux_src = stress_linux.cc
+stress_linux_obj = $(stress_linux_src:.cc=.o)
+
 efficiency_src = efficiency.cc
 efficiency_obj = $(efficiency_src:.cc=.o)
 
@@ -71,6 +74,10 @@ stress: $(fake_worker_obj) $(stress_obj)
 	$(LD) -o $@ $(LDFLAGS) $(fake_worker_obj) $(stress_obj) \
         $(CXXPATH)/librt++.a $(BASEPATH)/libruntime.a $(BASEPATH)/libnet.a \
         $(BASEPATH)/libbase.a -lpthread
+
+stress_linux: $(fake_worker_obj) $(stress_linux_obj)
+	$(LD) -o $@ $(LDFLAGS) $(fake_worker_obj) $(stress_linux_obj) \
+	-lpthread
 
 efficiency: $(fake_worker_obj) $(efficiency_obj)
 	$(LD) -o $@ $(LDFLAGS) $(fake_worker_obj) $(efficiency_obj) \
