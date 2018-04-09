@@ -162,15 +162,15 @@ std::vector<double> PoissonWorker(rt::UdpConn *c, double req_rate,
 
   // Start the receiver thread.
   auto th = rt::Thread([&]{
-    union {
-      unsigned char rbuf[32] = {};
-      payload rp;
-    };
+  union {
+    unsigned char rbuf[32] = {};
+    payload rp;
+  };
 
-    while (true) {
-      ssize_t ret = c->Read(rbuf, sizeof(rbuf));
-      if (ret != static_cast<ssize_t>(sizeof(rbuf))) {
-        if (ret == 0) break;
+  while (true) {
+    ssize_t ret = c->Read(rbuf, sizeof(rbuf));
+    if (ret != static_cast<ssize_t>(sizeof(rbuf))) {
+      if (ret == 0) break;
         panic("udp read failed, ret = %ld", ret);
       }
 
@@ -223,111 +223,126 @@ std::vector<double> PoissonWorker(rt::UdpConn *c, double req_rate,
   return timings;
 }
 
-void RunExperiment(double req_rate, double service_time) {
-    std::unique_ptr<rt::UdpConn> c(rt::UdpConn::Dial({0, 0}, raddr));
-    if (c == nullptr) panic("couldn't establish control connection");
+std::vector<double> RunExperiment(double req_rate, double *reqs_per_sec) {
+  std::unique_ptr<rt::UdpConn> c(rt::UdpConn::Dial({0, 0}, raddr));
+  if (c == nullptr) panic("couldn't establish control connection");
 
-    // Send the control message.
-    nbench_req req = {kMagic, threads};
-    ssize_t ret = c->Write(&req, sizeof(req));
-    if (ret != sizeof(req)) panic("couldn't send control message");
+  // Send the control message.
+  nbench_req req = {kMagic, threads};
+  ssize_t ret = c->Write(&req, sizeof(req));
+  if (ret != sizeof(req)) panic("couldn't send control message");
 
-    // Receive the control response.
-    union {
-      nbench_resp resp;
-      char buf[rt::UdpConn::kMaxPayloadSize];
-    };
-    ret = c->Read(&resp, rt::UdpConn::kMaxPayloadSize);
-    if (ret < static_cast<ssize_t>(sizeof(nbench_resp)))
-      panic("failed to receive control response");
-    if (resp.magic != kMagic || resp.nports != threads)
-      panic("got back invalid control response");
+  // Receive the control response.
+  union {
+    nbench_resp resp;
+    char buf[rt::UdpConn::kMaxPayloadSize];
+  };
+  ret = c->Read(&resp, rt::UdpConn::kMaxPayloadSize);
+  if (ret < static_cast<ssize_t>(sizeof(nbench_resp)))
+    panic("failed to receive control response");
+  if (resp.magic != kMagic || resp.nports != threads)
+    panic("got back invalid control response");
 
-    // Create one UDP connection per thread.
-    std::vector<std::unique_ptr<rt::UdpConn>> conns;
-    for (int i = 0; i < threads; ++i) {
-      std::unique_ptr<rt::UdpConn>
-        outc(rt::UdpConn::Dial(c->LocalAddr(), {raddr.ip, resp.ports[i]}));
-      if (unlikely(outc == nullptr)) panic("couldn't connect to raddr.");
-      conns.emplace_back(std::move(outc));
-    }
+  // Create one UDP connection per thread.
+  std::vector<std::unique_ptr<rt::UdpConn>> conns;
+  for (int i = 0; i < threads; ++i) {
+    std::unique_ptr<rt::UdpConn>
+      outc(rt::UdpConn::Dial(c->LocalAddr(), {raddr.ip, resp.ports[i]}));
+    if (unlikely(outc == nullptr)) panic("couldn't connect to raddr.");
+    conns.emplace_back(std::move(outc));
+  }
 
-    // Launch a worker thread for each connection.
-    rt::WaitGroup starter(threads + 1);
-    std::vector<rt::Thread> th;
-    std::vector<double> *samples[threads];
-    for (int i = 0; i < threads; ++i) {
-      th.emplace_back(rt::Thread([&, i]{
-        auto v = PoissonWorker(conns[i].get(), req_rate / threads, st,
-                               &starter);
-        samples[i] = new std::vector<double>(std::move(v));
-      }));
-    }
+  // Launch a worker thread for each connection.
+  rt::WaitGroup starter(threads + 1);
+  std::vector<rt::Thread> th;
+  std::vector<double> *samples[threads];
+  for (int i = 0; i < threads; ++i) {
+    th.emplace_back(rt::Thread([&, i]{
+      auto v = PoissonWorker(conns[i].get(), req_rate / threads, st,
+                             &starter);
+      samples[i] = new std::vector<double>(std::move(v));
+    }));
+  }
 
-    // Give the workers time to initialize, then start recording.
-    starter.Done();
-    starter.Wait();
+  // Give the workers time to initialize, then start recording.
+  starter.Done();
+  starter.Wait();
 
-    // |--- start experiment duration timing ---|
-    barrier();
-    auto start = std::chrono::steady_clock::now();
-    barrier();
+  // |--- start experiment duration timing ---|
+  barrier();
+  auto start = std::chrono::steady_clock::now();
+  barrier();
 
-    // Wait for the workers to finish.
-    for (auto& t: th)
-      t.Join();
+  // Wait for the workers to finish.
+  for (auto& t: th)
+    t.Join();
 
-    // |--- end experiment duration timing ---|
-    barrier();
-    auto finish = std::chrono::steady_clock::now();
-    barrier();
+  // |--- end experiment duration timing ---|
+  barrier();
+  auto finish = std::chrono::steady_clock::now();
+  barrier();
 
-    // Close the connections.
-    for (auto& c: conns)
-      KillConn(c.get());
+  // Close the connections.
+  for (auto& c: conns)
+    KillConn(c.get());
 
-    // Aggregate all the latency timings together.
-    uint64_t total = 0;
-    std::vector<double> timings;
-    for (int i = 0; i < threads; ++i) {
-      auto &v = *samples[i];
-      total += v.size();
-      if (v.size() <= kDiscardSamples * 2) panic("not enough samples");
-      v.erase(v.begin(), v.begin() + kDiscardSamples);
-      v.erase(v.end() - kDiscardSamples, v.end());
-      timings.insert(timings.end(), v.begin(), v.end());
-    }
+  // Aggregate all the latency timings together.
+  uint64_t total = 0;
+  std::vector<double> timings;
+  for (int i = 0; i < threads; ++i) {
+    auto &v = *samples[i];
+    total += v.size();
+    if (v.size() <= kDiscardSamples * 2) panic("not enough samples");
+    v.erase(v.begin(), v.begin() + kDiscardSamples);
+    v.erase(v.end() - kDiscardSamples, v.end());
+    timings.insert(timings.end(), v.begin(), v.end());
+  }
 
-    // Report statistics.
-    double elapsed = std::chrono::duration_cast<sec>(finish - start).count();
-    double reqs_per_sec = static_cast<double>(total) / elapsed * 1000000;
-    std::sort(timings.begin(), timings.end());
-    double sum = std::accumulate(timings.begin(), timings.end(), 0.0);
-    double mean = sum / timings.size();
-    double count = static_cast<double>(timings.size());
-    double p9 = timings[count * 0.9];
-    double p99 = timings[count * 0.99];
-    double p999 = timings[count * 0.999];
-    double p9999 = timings[count * 0.9999];
-    double min = timings[0];
-    double max = timings[timings.size() - 1];
-    std::cout << std::setprecision(2) << std::fixed
-              << "t: "       << threads
-              << " rps: "    << reqs_per_sec
-              << " n: "      << timings.size()
-              << " min: "    << min
-              << " mean: "   << mean
-              << " 90%: "    << p9
-              << " 99%: "    << p99
-              << " 99.9%: "  << p999
-              << " 99.99%: " << p9999
-              << " max: "    << max << std::endl;
+  // Report results.
+  double elapsed = std::chrono::duration_cast<sec>(finish - start).count();
+  *reqs_per_sec = static_cast<double>(total) / elapsed * 1000000;
+  return timings;
+}
+
+void DoExperiment(double req_rate) {
+  constexpr int kRounds = 1;
+  std::vector<double> timings;
+  double reqs_per_sec = 0;
+  for (int i = 0; i < kRounds; i++) {
+    double tmp;
+    auto t = RunExperiment(req_rate, &tmp);
+    timings.insert(timings.end(), t.begin(), t.end());
+    reqs_per_sec += tmp;
+    rt::Sleep(500 * rt::kMilliseconds);
+  }
+  reqs_per_sec /= kRounds;
+
+  std::sort(timings.begin(), timings.end());
+  double sum = std::accumulate(timings.begin(), timings.end(), 0.0);
+  double mean = sum / timings.size();
+  double count = static_cast<double>(timings.size());
+  double p9 = timings[count * 0.9];
+  double p99 = timings[count * 0.99];
+  double p999 = timings[count * 0.999];
+  double p9999 = timings[count * 0.9999];
+  double min = timings[0];
+  double max = timings[timings.size() - 1];
+  std::cout << std::setprecision(2) << std::fixed
+            << "t: "       << threads
+            << " rps: "    << reqs_per_sec
+            << " n: "      << timings.size()
+            << " min: "    << min
+            << " mean: "   << mean
+            << " 90%: "    << p9
+            << " 99%: "    << p99
+            << " 99.9%: "  << p999
+            << " 99.99%: " << p9999
+            << " max: "    << max << std::endl;
 }
 
 void ClientHandler(void *arg) {
-  for (double i = 10000; i <= 4000000; i += 10000) {
-    RunExperiment(i, 10);
-  }
+  for (double i = 10000; i <= 4000000; i += 10000)
+    DoExperiment(i);
 }
 
 int StringToAddr(const char *str, uint32_t *addr) {
