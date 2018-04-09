@@ -210,6 +210,27 @@ struct core_assignments {
 
 extern struct core_assignments core_assign;
 
+
+/*
+ * Stats collected in the iokernel
+ */
+enum {
+	RX_UNREGISTERED_MAC = 0,
+	RX_UNICAST_FAIL,
+	RX_BROADCAST_FAIL,
+	RX_UNHANDLED,
+
+	TX_COMPLETION_OVERFLOW,
+	TX_COMPLETION_FAIL,
+
+	NR_STATS,
+
+};
+
+extern uint64_t stats[NR_STATS];
+
+extern void print_stats(void);
+
 /*
  * RXQ command steering
  */

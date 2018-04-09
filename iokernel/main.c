@@ -112,6 +112,7 @@ void dataplane_loop()
 
 		if (false && microtime() > next_log_time) {
 			dpdk_print_eth_stats();
+			print_stats();
 			next_log_time += LOG_INTERVAL_US;
 		}
 	}

@@ -105,6 +105,7 @@ static void rx_one_pkt(struct rte_mbuf *buf)
 		ret = rte_hash_lookup_data(dp.mac_to_proc,
 				&ptr_dst_addr->addr_bytes[0], &data);
 		if (unlikely(ret < 0)) {
+			stats[RX_UNREGISTERED_MAC]++;
 			log_debug_ratelimited("rx: received packet for unregistered MAC");
 			rte_pktmbuf_free(buf);
 			return;
@@ -113,6 +114,7 @@ static void rx_one_pkt(struct rte_mbuf *buf)
 		p = (struct proc *)data;
 		net_hdr = rx_prepend_rx_preamble(buf);
 		if (!rx_send_pkt_to_runtime(p, net_hdr)) {
+			stats[RX_UNICAST_FAIL]++;
 			log_debug_ratelimited("rx: failed to send unicast packet to runtime");
 			rte_pktmbuf_free(buf);
 		}
@@ -130,6 +132,7 @@ static void rx_one_pkt(struct rte_mbuf *buf)
 			if (success) {
 				n_sent++;
 			} else {
+				stats[RX_BROADCAST_FAIL]++;
 				log_debug_ratelimited("rx: failed to enqueue broadcast "
 					 "packet to runtime");
 			}
@@ -149,6 +152,7 @@ static void rx_one_pkt(struct rte_mbuf *buf)
 		 ptr_dst_addr->addr_bytes[2], ptr_dst_addr->addr_bytes[3],
 		 ptr_dst_addr->addr_bytes[4], ptr_dst_addr->addr_bytes[5]);
 	rte_pktmbuf_free(buf);
+	stats[RX_UNHANDLED]++;
 }
 
 /*

@@ -135,6 +135,7 @@ bool tx_send_completion(void *obj)
 	}
 	p->overflow_queue[p->nr_overflows++] = priv_data->completion_data;
 	log_debug_ratelimited("tx: failed to send completion to runtime");
+	stats[TX_COMPLETION_OVERFLOW]++;
 
 success:
 	proc_put(p);
@@ -239,6 +240,7 @@ full:
 		ret = rte_mempool_get_bulk(tx_mbuf_pool, (void **)&bufs[n_bufs],
 					n_pkts - n_bufs);
 		if (unlikely(ret)) {
+			stats[TX_COMPLETION_FAIL] += n_pkts - n_bufs;
 			log_warn_ratelimited("tx: error getting %d mbufs from mempool", n_pkts - n_bufs);
 			return true;
 		}
