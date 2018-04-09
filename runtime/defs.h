@@ -476,6 +476,5 @@ extern int cfg_load(const char *path);
 
 /* runtime entry helpers */
 extern void sched_start(void) __noreturn;
-extern void sched_make_uctx(ucontext_t *c);
 extern int thread_spawn_main(thread_fn_t fn, void *arg);
 extern void join_kthread(struct kthread *k);

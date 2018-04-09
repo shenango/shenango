@@ -660,18 +660,6 @@ void sched_start(void)
 	jmp_runtime_nosave((runtime_fn_t)schedule_start, 0);
 }
 
-/**
- * sched_make_uctx - initializes an existing ucontext so it jumps into the
- *		     scheduler to reschedule
- * @c: a valid, existing ucontext (from a signal handler or getcontext()).
- */
-void sched_make_uctx(ucontext_t *c)
-{
-	c->uc_mcontext.gregs[REG_RIP] = (uintptr_t)schedule;
-	c->uc_mcontext.gregs[REG_RSP] = (uintptr_t)runtime_stack;
-	c->uc_link = 0;
-}
-
 static void runtime_top_of_stack(void)
 {
 	panic("a runtime function returned to the top of the stack");
