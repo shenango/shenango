@@ -2,6 +2,7 @@
 #![feature(duration_from_micros)]
 #![feature(nll)]
 #![feature(test)]
+#![feature(inclusive_range_syntax)]
 
 #[macro_use]
 extern crate clap;
@@ -15,6 +16,7 @@ extern crate rand;
 extern crate shenango;
 extern crate test;
 
+use std::collections::HashMap;
 use std::net::SocketAddrV4;
 use std::slice;
 use std::str::FromStr;
@@ -35,7 +37,7 @@ use payload::Payload;
 #[derive(Default)]
 pub struct Packet {
     work_iterations: u64,
-    randomness: u32,
+    randomness: u64,
     target_start: Duration,
     actual_start: Option<Duration>,
     completion_time: Option<Duration>,
@@ -101,6 +103,7 @@ enum OutputMode {
     Normal,
     WithHeader,
     Trace,
+    IncludeRaw,
 }
 
 #[inline(always)]
@@ -180,7 +183,7 @@ fn run_client(
             for _ in 0..packets_per_thread {
                 last += exp.ind_sample(&mut rng) as u64;
                 packets.push(Packet {
-                    randomness: rng.gen::<u32>(),
+                    randomness: rng.gen::<u64>(),
                     target_start: Duration::from_nanos(last),
                     work_iterations: distribution.sample(&mut rng),
                     ..Default::default()
@@ -217,7 +220,10 @@ fn run_client(
                         }
                         receive_times[idx.unwrap() as usize] = Some(start.elapsed());
                     }
-                    Err(_) => break,
+                    Err(e) => {
+                        println!("Receive thread: {}", e);
+                        break;
+                    },
                 }
             }
             receive_times
@@ -250,7 +256,8 @@ fn run_client(
                 }
 
                 packet.actual_start = Some(start.elapsed());
-                if socket2.send(&payload[..]).is_err() {
+                if let Err(e) = socket2.send(&payload[..]) {
+                    println!("Send thread: {}", e);
                     break;
                 }
             }
@@ -279,6 +286,8 @@ fn run_client(
         .filter(|p| p.completion_time.is_none())
         .count() - never_sent;
     if dropped + never_sent > packets.len() / 10 {
+        println!("Warning: missing more than 10% of packets");
+        println!("Dropped: {}, Never sent: {}, Total packets: {}", dropped, never_sent, packets.len());
         return false;
     }
 
@@ -310,7 +319,7 @@ fn run_client(
     }
     match output {
         OutputMode::Silent => {}
-        OutputMode::WithHeader | OutputMode::Normal => {
+        OutputMode::WithHeader | OutputMode::Normal | OutputMode::IncludeRaw => {
             let percentile = |p| {
                 duration_to_ns(latencies[(latencies.len() as f32 * p / 100.0) as usize]) as f32
                     / 1000.0
@@ -352,7 +361,19 @@ fn run_client(
                     println!("{} -1 -1", duration_to_ns(p.target_start))
                 }
             }
+        },
+    }
+    if let OutputMode::IncludeRaw = output {
+        let mut buckets = HashMap::new();
+
+        for l in latencies {
+            *buckets.entry(duration_to_ns(l) / 1000).or_insert(0) += 1;
         }
+        print!("Latencies: ");
+        for k in buckets.keys() {
+            print!("{}:{} ", k, buckets[k]);
+        }
+        println!("");
     }
     true
 }
@@ -533,8 +554,9 @@ fn main() {
                     match proto {
                         Protocol::Dns => {}
                         Protocol::Memcached => {
-                            memcached::warmup(backend, addr, nthreads);
+                            memcached::warmup(backend, addr, nthreads as u64);
                             println!("Warmup done");
+                            return;
                         }
                         Protocol::Synthetic => for packets_per_second in (1..3).map(|i| i * 100000)
                         {
@@ -565,7 +587,10 @@ fn main() {
                         distribution,
                         &mut barrier_group,
                     );
-                } else {
+                    return;
+                }
+
+                if let Protocol::Synthetic = proto {
                     for (i, distribution) in [
                         Distribution::Constant(mean as u64),
                         Distribution::Exponential(mean),
@@ -590,6 +615,34 @@ fn main() {
                                 &mut barrier_group,
                             );
                         }
+                    }
+                } else {
+                    run_client(
+                        backend,
+                        addr,
+                        Duration::from_secs(1),
+                        packets_per_second,
+                        nthreads,
+                        OutputMode::Silent,
+                        proto,
+                        distribution,
+                        &mut barrier_group,
+                    );
+                    for j in 1..=samples {
+                        run_client(
+                            backend,
+                            addr,
+                            runtime,
+                            packets_per_second * j / samples,
+                            nthreads,
+                            OutputMode::IncludeRaw,
+                            proto,
+                            distribution,
+                            &mut barrier_group,
+                        );
+                    }
+                    if let Some(ref mut g) = barrier_group {
+                        g.barrier();
                     }
                 }
             });

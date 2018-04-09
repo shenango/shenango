@@ -4,6 +4,7 @@ use std::io::Write;
 
 use std::net::SocketAddrV4;
 use std::sync::Arc;
+use std::time::Duration;
 
 use memcache_packet::{PacketHeader, Opcode, Magic, ResponseStatus};
 use memcache_packet::parse_header_only_response;
@@ -12,10 +13,12 @@ use backend::*;
 
 use Packet;
 
-pub const NVALUES : u32 = 2000000;
+static NVALUES : u64 = 100000;
+static PCT_SET : u64 = 10; // out of 100
+// static value_size  : u32 = 0;
+// static key_size    : u32 = 0;
 
-fn set_request(keyidx: u32, opaque: u32, buf: &mut Vec<u8>) {
-    let key = keyidx.to_string();
+fn set_request(key: &String, opaque: u32, buf: &mut Vec<u8>) {
     let request_header = PacketHeader {
         magic: Magic::Request as u8,
         opcode: Opcode::Set as u8,
@@ -36,10 +39,14 @@ fn set_request(keyidx: u32, opaque: u32, buf: &mut Vec<u8>) {
 }
 
 pub fn create_request(i: usize, packet: &Packet, buf: &mut Vec<u8>) {
-    let key = (packet.randomness % NVALUES).to_string();
 
-    if i % 10 == 1 {
-        set_request(packet.randomness % NVALUES, i as u32, buf);
+    // Use first 32 bits of randomness to determine if this is a SET or GET req
+    let low32 = packet.randomness & 0xffffffff;
+    // Use high 32 bits of randomness to select the key
+    let key = ((packet.randomness >> 32) % NVALUES).to_string();
+
+    if low32 % 100 < PCT_SET {
+        set_request(&key, i as u32, buf);
         return;
     }
 
@@ -75,7 +82,7 @@ pub fn parse_response(buf: &[u8]) -> Result<usize, ()> {
 pub fn warmup(
     backend: Backend,
     addr: SocketAddrV4,
-    nthreads: u32,
+    nthreads: u64,
 ) {
 
     let perthread = (NVALUES + nthreads - 1) / nthreads;
@@ -85,30 +92,42 @@ pub fn warmup(
     for i in 0..nthreads {
         join_handles.push(backend.spawn_thread(move || {
             let sock1 = Arc::new(backend.create_udp_connection("0.0.0.0:0".parse().unwrap(), Some(addr)));
+            let socket = sock1.clone();
+            backend.spawn_thread(move || {
+                backend.sleep(Duration::from_secs(5));
+                if Arc::strong_count(&socket) > 1 {
+                    println!("Timing out socket");
+                    socket.shutdown();
+                }
+            });
+
             for n in 0..perthread {
                 let mut vec: Vec<u8> = Vec::new();
-                set_request(i * perthread + n, 0, &mut vec);
+                let key = (i * perthread + n).to_string();
+                set_request(&key, 0, &mut vec);
 
-                if sock1.send(&vec[..]).is_err() {
-                    println!("Warmup: Send error");
+                if let Err(e) = sock1.send(&vec[..]) {
+                    println!("Warmup send: {}", e);
                     break;
                 }
 
                 let mut recv_buf: Vec<u8> = vec![0; 4096];
                 match sock1.recv(&mut recv_buf[..]) {
                     Ok(len) => {
+                        if len < 8 {
+                            continue;
+                        }
                         if parse_header_only_response(&mut Cursor::new(&recv_buf[8..len])).is_err() {
                             println!("Warmup: parse response error");
                             break;
                         }
                     }
-                    Err(_) => {
-                        println!("Warmup: receive error");
+                    Err(e) => {
+                        println!("Warmup receive: {}", e);
                         break;
                     },
                 }
             }
-            i
         }));
     }
 

@@ -5,7 +5,7 @@ use Packet;
 
 use dns_parser::{QueryClass, QueryType, Header, Opcode, ResponseCode, Name};
 
-const NDOMAINS : u32 = 2000000;
+const NDOMAINS : u64 = 100000;
 
 pub fn create_request(i: usize, packet: &Packet, buf: &mut Vec<u8>) {
 
