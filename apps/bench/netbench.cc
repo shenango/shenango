@@ -18,7 +18,6 @@ extern "C" {
 #include <memory>
 #include <chrono>
 #include <vector>
-#include <future>
 #include <algorithm>
 #include <numeric>
 
@@ -255,12 +254,12 @@ std::vector<double> RunExperiment(double req_rate, double *reqs_per_sec) {
   // Launch a worker thread for each connection.
   rt::WaitGroup starter(threads + 1);
   std::vector<rt::Thread> th;
-  std::vector<double> *samples[threads];
+  std::unique_ptr<std::vector<double>> samples[threads];
   for (int i = 0; i < threads; ++i) {
     th.emplace_back(rt::Thread([&, i]{
       auto v = PoissonWorker(conns[i].get(), req_rate / threads, st,
                              &starter);
-      samples[i] = new std::vector<double>(std::move(v));
+      samples[i].reset(new std::vector<double>(std::move(v)));
     }));
   }
 
