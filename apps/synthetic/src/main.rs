@@ -24,8 +24,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use clap::{App, Arg};
-use rand::distributions::{Exp, IndependentSample};
 use rand::Rng;
+use rand::distributions::{Exp, IndependentSample};
 use shenango::udp::UdpSpawner;
 
 mod backend;
@@ -43,9 +43,9 @@ pub struct Packet {
     completion_time: Option<Duration>,
 }
 
-mod memcached;
-mod memcache_packet;
 mod memcache_error;
+mod memcache_packet;
+mod memcached;
 
 mod dns;
 
@@ -227,7 +227,7 @@ fn run_client(
                             _ => println!("Receive thread: {}", e),
                         }
                         break;
-                    },
+                    }
                 }
             }
             receive_times
@@ -291,7 +291,28 @@ fn run_client(
         .filter(|p| p.completion_time.is_none())
         .count() - never_sent;
     if dropped + never_sent > packets.len() / 10 {
-       println!("Warning: missing more than 10% of packets");
+        match output {
+            OutputMode::Silent => {}
+            OutputMode::WithHeader | OutputMode::Normal | OutputMode::IncludeRaw => {
+                println!(
+                    "{}, {}, , {}, {}",
+                    distribution.name(),
+                    packets_per_second,
+                    dropped,
+                    never_sent,
+                );
+            }
+            OutputMode::Trace => {
+                println!("Warning: missing more than 10% of packets");
+                println!(
+                    "Dropped: {}, Never sent: {}, Total packets: {}",
+                    dropped,
+                    never_sent,
+                    packets.len()
+                );
+            }
+        }
+        return false;
     }
 
     let first_send = packets
@@ -314,9 +335,6 @@ fn run_client(
 
     latencies.sort();
 
-    if let Some(ref mut g) = *barrier_group {
-        g.barrier();
-    }
     if let OutputMode::WithHeader = output {
         println!("Distribution, Target, Actual, Dropped, Never Sent, Median, 90th, 99th, 99.9th, 99.99th");
     }
@@ -364,7 +382,7 @@ fn run_client(
                     println!("{} -1 -1", duration_to_ns(p.target_start))
                 }
             }
-        },
+        }
     }
     if let OutputMode::IncludeRaw = output {
         let mut buckets = HashMap::new();
@@ -525,7 +543,7 @@ fn main() {
     let mode = matches.value_of("mode").unwrap();
     let backend = match mode {
         "linux-server" | "linux-client" => Backend::Linux,
-        "runtime-server" | "spawner-server" | "runtime-client" => Backend::Runtime,
+        "runtime-server" | "spawner-server" | "runtime-client" | "work-bench" => Backend::Runtime,
         _ => unreachable!(),
     };
     let mut barrier_group = matches.value_of("barrier-leader").map(|leader| {
@@ -599,7 +617,8 @@ fn main() {
                         Distribution::Exponential(mean),
                         Distribution::Bimodal1(mean),
                         Distribution::Bimodal2(mean),
-                    ].iter().enumerate()
+                    ].iter()
+                        .enumerate()
                     {
                         for j in 1..=samples {
                             run_client(

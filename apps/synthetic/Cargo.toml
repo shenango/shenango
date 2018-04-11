@@ -9,7 +9,7 @@ byteorder = "1"
 clap = "2.29.1"
 dns-parser = "0.7.1"
 libc = "0.2"
-lockstep = { git = "https://github.com/fintelia/lockstep.git",  rev = "2bf5a5d5884a0a45cbdf2f14935eca8cca3c1d0c" }
+lockstep = { git = "https://github.com/fintelia/lockstep.git",  rev = "9be97f6ef9d75b1a28a79734df238c08b4de7013" }
 rand = "0.4"
 serde = "1.0"
 shenango = { path = "../../bindings/rust" }
