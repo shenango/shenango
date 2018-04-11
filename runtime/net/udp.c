@@ -551,7 +551,7 @@ ssize_t udp_read_from(udpconn_t *c, void *buf, size_t len,
 	/* is the socket shutdown? */
 	if (c->shutdown) {
 		spin_unlock_np(&c->inq_lock);
-		return 0;
+		return -ESHUTDOWN;
 	}
 
 	/* propagate error status code if an error was detected */

@@ -216,12 +216,16 @@ fn run_client(
                             Protocol::Dns => dns::parse_response(&recv_buf[..len]),
                         };
                         if idx.is_err() {
+                            println!("Error parsing response");
                             continue;
                         }
                         receive_times[idx.unwrap() as usize] = Some(start.elapsed());
                     }
                     Err(e) => {
-                        println!("Receive thread: {}", e);
+                        match e.raw_os_error() {
+                            Some(-108) => {}, // -ESHUTDOWN
+                            _ => println!("Receive thread: {}", e),
+                        }
                         break;
                     },
                 }
@@ -248,8 +252,9 @@ fn run_client(
                     Protocol::Dns => dns::create_request(i, packet, &mut payload),
                 };
 
-                while start.elapsed() < packet.target_start {
-                    backend.thread_yield()
+                let t = start.elapsed();
+                if t < packet.target_start {
+                    backend.sleep(packet.target_start - t);
                 }
                 if start.elapsed() > packet.target_start + Duration::from_micros(5) {
                     continue;
@@ -286,9 +291,7 @@ fn run_client(
         .filter(|p| p.completion_time.is_none())
         .count() - never_sent;
     if dropped + never_sent > packets.len() / 10 {
-        println!("Warning: missing more than 10% of packets");
-        println!("Dropped: {}, Never sent: {}, Total packets: {}", dropped, never_sent, packets.len());
-        return false;
+       println!("Warning: missing more than 10% of packets");
     }
 
     let first_send = packets
@@ -620,8 +623,8 @@ fn main() {
                     run_client(
                         backend,
                         addr,
-                        Duration::from_secs(1),
-                        packets_per_second,
+                        Duration::from_secs(3),
+                        packets_per_second / samples,
                         nthreads,
                         OutputMode::Silent,
                         proto,
