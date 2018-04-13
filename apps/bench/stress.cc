@@ -10,6 +10,7 @@ extern "C" {
 #include "fake_worker.h"
 
 #include <iostream>
+#include <chrono>
 
 namespace {
 
@@ -39,12 +40,17 @@ void MainHandler(void *arg) {
 
   rt::Spawn([&](){
     uint64_t last_total = 0;
+    auto last = std::chrono::steady_clock::now();
     while (1) {
-      uint64_t total = 0;
-      for (int i = 0; i < threads; i++) total += cnt[i];
-      log_info("%ld", total - last_total);
-      last_total = total;
       rt::Sleep(rt::kSeconds);
+      auto now = std::chrono::steady_clock::now();
+      uint64_t total = 0;
+      double duration = std::chrono::duration_cast<
+        std::chrono::duration<double>>(now - last).count();
+      for (int i = 0; i < threads; i++) total += cnt[i];
+      log_info("%f", static_cast<double>(total - last_total) / duration);
+      last_total = total;
+      last = now;
     }
   });
 

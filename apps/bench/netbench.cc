@@ -161,22 +161,22 @@ std::vector<double> PoissonWorker(rt::UdpConn *c, double req_rate,
 
   // Start the receiver thread.
   auto th = rt::Thread([&]{
-  union {
-    unsigned char rbuf[32] = {};
-    payload rp;
-  };
+    union {
+      unsigned char rbuf[32] = {};
+      payload rp;
+    };
 
-  while (true) {
-    ssize_t ret = c->Read(rbuf, sizeof(rbuf));
-    if (ret != static_cast<ssize_t>(sizeof(rbuf))) {
-      if (ret == 0) break;
-        panic("udp read failed, ret = %ld", ret);
-      }
+    while (true) {
+     ssize_t ret = c->Read(rbuf, sizeof(rbuf));
+     if (ret != static_cast<ssize_t>(sizeof(rbuf))) {
+       if (ret == 0) break;
+         panic("udp read failed, ret = %ld", ret);
+       }
 
-      barrier();
-      uint64_t ts = microtime();
-      barrier();
-      timings.push_back(ts - start_us[rp.idx]);
+       barrier();
+       uint64_t ts = microtime();
+       barrier();
+       timings.push_back(ts - start_us[rp.idx]);
     }
   });
 
@@ -198,8 +198,10 @@ std::vector<double> PoissonWorker(rt::UdpConn *c, double req_rate,
     barrier();
     uint64_t now = microtime();
     barrier();
-    if (now - expstart < sched[i])
+    if (now - expstart < sched[i]) {
       rt::Sleep(sched[i] - (now - expstart));
+      now = microtime();
+    }
     if (now - expstart - sched[i] > kMaxCatchUpUS)
       continue;
 

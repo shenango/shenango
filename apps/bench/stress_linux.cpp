@@ -31,13 +31,19 @@ void MainHandler(void *arg) {
 
   std::thread([&](){
     uint64_t last_total = 0;
+    auto last = std::chrono::steady_clock::now();
     while (1) {
-      uint64_t total = 0;
-      for (int i = 0; i < threads; i++) total += cnt[i];
-      std::cerr << total - last_total << std::endl;
-      last_total = total;
-      std::chrono::seconds sec(10);
+      std::chrono::seconds sec(1);
       std::this_thread::sleep_for(sec);
+      auto now = std::chrono::steady_clock::now();
+      uint64_t total = 0;
+      double duration = std::chrono::duration_cast<
+        std::chrono::duration<double>>(now - last).count();
+      for (int i = 0; i < threads; i++) total += cnt[i];
+      std::cerr << static_cast<double>(total - last_total) / duration
+                << std::endl;
+      last_total = total;
+      last = now;
     }
   }).join();
 
