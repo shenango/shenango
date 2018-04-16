@@ -13,13 +13,19 @@
 /* The abstract namespace path for the control socket. */
 #define CONTROL_SOCK_PATH	"\0/control/iokernel.sock"
 
+/* describes a queue */
+struct q_ptrs {
+	uint32_t rxq_wb; /* must be first */
+	uint32_t rq_head;
+	uint32_t rq_tail;
+};
+
 /* describes a runtime kernel thread */
 struct thread_spec {
 	struct queue_spec	rxq;
 	struct queue_spec	txpktq;
 	struct queue_spec	txcmdq;
-	shmptr_t		rq_gen;
-	shmptr_t		rxq_gen;
+	shmptr_t		q_ptrs;
 	pid_t			tid;
 	int32_t			park_efd;
 };

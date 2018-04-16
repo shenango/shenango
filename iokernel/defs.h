@@ -42,8 +42,9 @@ struct thread {
 	struct lrpc_chan_in	txcmdq;
 	pid_t			tid;
 	int32_t			park_efd;
-	struct gen_num		rq_gen;
-	uint32_t		last_send_head;
+	struct q_ptrs		*q_ptrs;
+	uint32_t		last_rq_head;
+	uint32_t		last_rxq_send_head;
 	/* current or most recent core this thread ran on, depending on whether
 	 * this thread is parked or not */
 	unsigned int		core;

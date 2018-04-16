@@ -280,12 +280,13 @@ struct kthread {
 	unsigned int		detached:1;
 
 	/* 2nd cache-line */
-	struct gen_num		rq_gen;
+	struct q_ptrs		*q_ptrs;
 	struct mbufq		txpktq_overflow;
 	struct mbufq		txcmdq_overflow;
 	unsigned int		rcu_gen;
 	unsigned int		curr_cpu;
 	uint64_t		park_us;
+	unsigned long		pad1[1];
 
 	/* 3rd cache-line */
 	struct lrpc_chan_out	txpktq;
@@ -308,7 +309,7 @@ struct kthread {
 
 /* compile-time verification of cache-line alignment */
 BUILD_ASSERT(offsetof(struct kthread, lock) % CACHE_LINE_SIZE == 0);
-BUILD_ASSERT(offsetof(struct kthread, rq_gen) % CACHE_LINE_SIZE == 0);
+BUILD_ASSERT(offsetof(struct kthread, q_ptrs) % CACHE_LINE_SIZE == 0);
 BUILD_ASSERT(offsetof(struct kthread, txpktq) % CACHE_LINE_SIZE == 0);
 BUILD_ASSERT(offsetof(struct kthread, rq) % CACHE_LINE_SIZE == 0);
 BUILD_ASSERT(offsetof(struct kthread, timer_lock) % CACHE_LINE_SIZE == 0);

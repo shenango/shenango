@@ -655,7 +655,7 @@ void cores_adjust_assignments()
 {
 	struct proc *p, *next;
 	struct thread *th;
-	uint32_t send_tail;
+	uint32_t rq_tail, send_tail;
 	int i, j;
 
 	/* determine which procs need more cores to meet their guarantees, and
@@ -673,18 +673,23 @@ void cores_adjust_assignments()
 				continue;
 			}
 
-			/* check if runqueue remained non-empty */
-			if (gen_in_same_gen(&th->rq_gen))
+			/* check if runqueue still holds threads that were queued last time
+			 * we checked */
+			rq_tail = load_acquire(&th->q_ptrs->rq_tail);
+			if (rq_tail < th->last_rq_head) {
+				th->last_rq_head = th->q_ptrs->rq_head;
 				goto request_kthread;
+			}
+			th->last_rq_head = th->q_ptrs->rq_head;
 
 			/* check if rx queue still holds packets that were queued last time
 			 * we checked */
 			send_tail = lrpc_poll_send_tail(&th->rxq);
-			if (send_tail < th->last_send_head) {
-				th->last_send_head = th->rxq.send_head;
+			if (send_tail < th->last_rxq_send_head) {
+				th->last_rxq_send_head = th->rxq.send_head;
 				goto request_kthread;
 			}
-			th->last_send_head = th->rxq.send_head;
+			th->last_rxq_send_head = th->rxq.send_head;
 			/* TODO: check on timers */
 
 			continue; /* no need to wake a kthread */

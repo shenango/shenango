@@ -113,9 +113,10 @@ static struct proc *control_create_proc(mem_key_t key, size_t len, pid_t pid,
 		th->at_idx = -1;
 		th->ts_idx = -1;
 
-		/* initialize runqueue and rxq generation numbers */
-		ret = shm_init_gen(&reg, s->rq_gen, &th->rq_gen);
-		if (ret)
+		/* initialize pointer to queue pointers in shared memory */
+		th->q_ptrs = (struct q_ptrs *) shmptr_to_ptr(&reg, s->q_ptrs,
+				sizeof(struct q_ptrs));
+		if (!th->q_ptrs)
 			goto fail_free_proc;
 	}
 

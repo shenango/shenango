@@ -63,20 +63,26 @@ static size_t calculate_shm_space(unsigned int thread_count)
 	ret += sizeof(struct thread_spec) * thread_count;
 	ret = align_up(ret, CACHE_LINE_SIZE);
 
-	// Packet Queues
+	// RX queues (wb is not included)
+	q = sizeof(struct lrpc_msg) * PACKET_QUEUE_MCOUNT;
+	q = align_up(q, CACHE_LINE_SIZE);
+	ret += q * thread_count;
+
+	// TX packet queues
 	q = sizeof(struct lrpc_msg) * PACKET_QUEUE_MCOUNT;
 	q = align_up(q, CACHE_LINE_SIZE);
 	q += align_up(sizeof(uint32_t), CACHE_LINE_SIZE);
-	ret += 2 * q * thread_count;
+	ret += q * thread_count;
 
+	// TX command queues
 	q = sizeof(struct lrpc_msg) * COMMAND_QUEUE_MCOUNT;
 	q = align_up(q, CACHE_LINE_SIZE);
 	q += align_up(sizeof(uint32_t), CACHE_LINE_SIZE);
 	ret += q * thread_count;
 
-	// Generation numbers for the runqueue and rxq for each thread
-	q = align_up(sizeof(uint32_t), CACHE_LINE_SIZE);
-	ret += 2 * q * thread_count;
+	// Shared queue pointers for the iokernel to use to determine busyness
+	q = align_up(sizeof(struct q_ptrs), CACHE_LINE_SIZE);
+	ret += q * thread_count;
 
 	ret = align_up(ret, PGSIZE_2MB);
 
@@ -91,22 +97,28 @@ static size_t calculate_shm_space(unsigned int thread_count)
 }
 
 static void ioqueue_alloc(struct shm_region *r, struct queue_spec *q,
-			  char **ptr, size_t msg_count)
+			  char **ptr, size_t msg_count, bool alloc_wb)
 {
 	q->msg_buf = ptr_to_shmptr(r, *ptr, sizeof(struct lrpc_msg) * msg_count);
 	*ptr += align_up(sizeof(struct lrpc_msg) * msg_count, CACHE_LINE_SIZE);
 
-	q->wb = ptr_to_shmptr(r, *ptr, sizeof(uint32_t));
-	*ptr += align_up(sizeof(uint32_t), CACHE_LINE_SIZE);
+	if (alloc_wb) {
+		q->wb = ptr_to_shmptr(r, *ptr, sizeof(uint32_t));
+		*ptr += align_up(sizeof(uint32_t), CACHE_LINE_SIZE);
+	}
 
 	q->msg_count = msg_count;
 }
 
-static void gen_num_alloc(struct shm_region *r, shmptr_t *gen, char **ptr)
+static void queue_pointers_alloc(struct shm_region *r,
+		struct thread_spec *tspec, char **ptr)
 {
-	*gen = ptr_to_shmptr(r, *ptr, sizeof(uint32_t));
+	/* set wb for rxq */
+	tspec->rxq.wb = ptr_to_shmptr(r, *ptr, sizeof(struct q_ptrs));
+
+	tspec->q_ptrs = ptr_to_shmptr(r, *ptr, sizeof(struct q_ptrs));
 	*((uint32_t *) *ptr) = 0;
-	*ptr += align_up(sizeof(uint32_t), CACHE_LINE_SIZE);
+	*ptr += align_up(sizeof(struct q_ptrs), CACHE_LINE_SIZE);
 }
 
 static int ioqueues_shm_setup(unsigned int threads)
@@ -154,12 +166,11 @@ static int ioqueues_shm_setup(unsigned int threads)
 
 	for (i = 0; i < threads; i++) {
 		struct thread_spec *tspec = &iok.threads[i];
-		ioqueue_alloc(r, &tspec->rxq, &ptr, PACKET_QUEUE_MCOUNT);
-		ioqueue_alloc(r, &tspec->txpktq, &ptr, PACKET_QUEUE_MCOUNT);
-		ioqueue_alloc(r, &tspec->txcmdq, &ptr, COMMAND_QUEUE_MCOUNT);
+		ioqueue_alloc(r, &tspec->rxq, &ptr, PACKET_QUEUE_MCOUNT, false);
+		ioqueue_alloc(r, &tspec->txpktq, &ptr, PACKET_QUEUE_MCOUNT, true);
+		ioqueue_alloc(r, &tspec->txcmdq, &ptr, COMMAND_QUEUE_MCOUNT, true);
 
-		gen_num_alloc(r, &tspec->rq_gen, &ptr);
-		gen_num_alloc(r, &tspec->rxq_gen, &ptr);
+		queue_pointers_alloc(r, tspec, &ptr);
 	}
 
 	ptr = (char *)align_up((uintptr_t)ptr, PGSIZE_2MB);
@@ -310,8 +321,9 @@ int ioqueues_init_thread(void)
 	ret = shm_init_lrpc_out(r, &ts->txcmdq, &myk()->txcmdq);
 	BUG_ON(ret);
 
-	ret = shm_init_gen(r, ts->rq_gen, &myk()->rq_gen);
-	BUG_ON(ret);
+	myk()->q_ptrs = (struct q_ptrs *) shmptr_to_ptr(r, ts->q_ptrs,
+			sizeof(uint32_t));
+	BUG_ON(!myk()->q_ptrs);
 
 	return 0;
 }

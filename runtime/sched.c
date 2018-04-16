@@ -115,6 +115,7 @@ static void drain_overflow(struct kthread *l)
 		if (!th)
 			break;
 		l->rq[l->rq_head++ % RUNTIME_RQ_SIZE] = th;
+		l->q_ptrs->rq_head++;
 	}
 }
 
@@ -145,7 +146,9 @@ static bool steal_work(struct kthread *l, struct kthread *r)
 		for (i = 0; i < avail; i++)
 			l->rq[i] = r->rq[rq_tail++ % RUNTIME_RQ_SIZE];
 		l->rq_head = avail;
+		l->q_ptrs->rq_head += avail;
 		store_release(&r->rq_tail, rq_tail);
+		store_release(&r->q_ptrs->rq_tail, r->q_ptrs->rq_tail + avail);
 		spin_unlock(&r->lock);
 
 		STAT(THREADS_STOLEN) += avail;
@@ -175,6 +178,7 @@ done:
 	/* either enqueue the stolen work or detach the kthread */
 	if (th) {
 		l->rq[l->rq_head++] = th;
+		l->q_ptrs->rq_head++;
 		STAT(THREADS_STOLEN)++;
 	} else if (r->parked) {
 		kthread_detach(r);
@@ -219,7 +223,7 @@ static __noreturn void schedule(void)
 {
 	struct kthread *r = NULL, *l = myk();
 	uint64_t start_tsc, end_tsc;
-	thread_t *th;
+	thread_t *th = NULL;
 	unsigned int last_nrks;
 	int i, sibling;
 
@@ -334,15 +338,12 @@ done:
 	if (!th) {
 		assert(l->rq_head != l->rq_tail);
 		th = l->rq[l->rq_tail++ % RUNTIME_RQ_SIZE];
+		l->q_ptrs->rq_tail++;
 	}
 
 	/* move overflow tasks into the runqueue */
 	if (unlikely(!list_empty(&l->rq_overflow)))
 		drain_overflow(l);
-
-	/* check if we have emptied the runqueue */
-	if (l->rq_head == l->rq_tail)
-		gen_inactive(&l->rq_gen);
 
 	spin_unlock(&l->lock);
 
@@ -380,8 +381,10 @@ void join_kthread(struct kthread *k)
 	}
 
 	/* drain the runqueue */
-	for (; k->rq_tail < k->rq_head; k->rq_tail++)
+	for (; k->rq_tail < k->rq_head; k->rq_tail++) {
 		list_add_tail(&tmp, &k->rq[k->rq_tail % RUNTIME_RQ_SIZE]->link);
+		k->q_ptrs->rq_tail++;
+	}
 	k->rq_head = k->rq_tail = 0;
 
 	/* drain the overflow runqueue */
@@ -485,11 +488,9 @@ void thread_ready(thread_t *th)
 		return;
 	}
 
-	/* at least one thread to run - we are in a generation */
-	gen_active(&k->rq_gen);
-
 	k->rq[k->rq_head % RUNTIME_RQ_SIZE] = th;
 	store_release(&k->rq_head, k->rq_head + 1);
+	store_release(&k->q_ptrs->rq_head, k->q_ptrs->rq_head + 1);
 	putk();
 }
 
