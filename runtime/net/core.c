@@ -148,6 +148,7 @@ static void net_rx_one(struct rx_net_hdr *hdr)
 	struct mbuf *m;
 	const struct eth_hdr *llhdr;
 	const struct ip_hdr *iphdr;
+	struct ip_hdr iphdr_copy;
 	uint16_t len;
 
 	m = net_rx_alloc_mbuf(hdr);
@@ -199,10 +200,12 @@ static void net_rx_one(struct rx_net_hdr *hdr)
 		goto drop;
 
 	/* Did HW checksum verification pass? */
-	if (hdr->csum_type != CHECKSUM_TYPE_UNNECESSARY)
-		goto drop;
-
-	/* The NIC has validated IP checksum for us. */
+	if (hdr->csum_type != CHECKSUM_TYPE_UNNECESSARY) {
+		iphdr_copy = *iphdr;
+		iphdr_copy.chksum = 0;
+		if (iphdr->chksum != chksum_internet((void *)&iphdr_copy, sizeof(iphdr_copy)))
+			goto drop;
+	}
 
 	if (unlikely(!ip_hdr_supported(iphdr)))
 		goto drop;
