@@ -7,6 +7,7 @@
 #include <base/slab.h>
 #include <base/hash.h>
 #include <base/thread.h>
+#include <asm/chksum.h>
 #include <runtime/thread.h>
 
 #include "defs.h"
@@ -459,6 +460,9 @@ int net_tx_ip(struct mbuf *m, uint8_t proto, uint32_t daddr)
 	iphdr->chksum = 0;
 	iphdr->saddr = hton32(netcfg.addr);
 	iphdr->daddr = hton32(daddr);
+
+	/* calculate IP checksum */
+	iphdr->chksum = chksum_internet((void *)iphdr, sizeof(*iphdr));
 
 	/* ask NIC to calculate IP checksum */
 	m->txflags |= OLFLAG_IP_CHKSUM | OLFLAG_IPV4;

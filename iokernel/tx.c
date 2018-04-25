@@ -60,6 +60,7 @@ static void tx_prepare_tx_mbuf(struct rte_mbuf *buf,
 	buf->data_len = net_hdr->len;
 
 	buf->ol_flags = 0;
+#if 0
 	if (net_hdr->olflags != 0) {
 		if (net_hdr->olflags & OLFLAG_IP_CHKSUM)
 			buf->ol_flags |= PKT_TX_IP_CKSUM;
@@ -73,6 +74,7 @@ static void tx_prepare_tx_mbuf(struct rte_mbuf *buf,
 		buf->l3_len = sizeof(struct ipv4_hdr);
 		buf->l2_len = ETHER_HDR_LEN;
 	}
+#endif
 
 	/* initialize the private data, used to send completion events */
 	priv_data = tx_pktmbuf_get_priv(buf);

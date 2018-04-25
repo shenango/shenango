@@ -51,7 +51,7 @@
 static const struct rte_eth_conf port_conf_default = {
 	.rxmode = {
 		.max_rx_pkt_len = ETHER_MAX_LEN,
-		.hw_ip_checksum = 1,
+		.hw_ip_checksum = 0,
 		.mq_mode = ETH_MQ_RX_RSS,
 	},
 	.rx_adv_conf = {
@@ -100,8 +100,10 @@ static inline int dpdk_port_init(uint8_t port, struct rte_mempool *mbuf_pool)
 	/* Enable TX offloading */
 	rte_eth_dev_info_get(0, &dev_info);
 	txconf = &dev_info.default_txconf;
+#if 0
 	txconf->txq_flags &= ~(ETH_TXQ_FLAGS_NOXSUMUDP |
 			ETH_TXQ_FLAGS_NOXSUMTCP);
+#endif
 
 	/* Allocate and set up 1 TX queue per Ethernet port. */
 	for (q = 0; q < tx_rings; q++) {
