@@ -13,18 +13,22 @@ use backend::*;
 
 use Packet;
 
-static NVALUES : u64 = 100000;
-static PCT_SET : u64 = 10; // out of 100
-// static value_size  : u32 = 0;
-// static key_size    : u32 = 0;
 
-fn set_request(key: &String, opaque: u32, buf: &mut Vec<u8>) {
+static NVALUES : u64 = 1000000;
+static PCT_SET : u64 = 2; // out of 1000
+static VALUE_SIZE  : usize = 2;
+static KEY_SIZE    : usize = 20;
+
+macro_rules! key_fmt { ($key:expr) => (format_args!("{:020}", $key)) }
+
+fn set_request(key: u64, opaque: u32, buf: &mut Vec<u8>) {
+
     let request_header = PacketHeader {
         magic: Magic::Request as u8,
         opcode: Opcode::Set as u8,
-        key_length: key.len() as u16,
+        key_length: KEY_SIZE as u16,
         extras_length: 8,
-        total_body_length: (8 + key.len() + key.len()) as u32,
+        total_body_length: (8 + KEY_SIZE + VALUE_SIZE) as u32,
         opaque: opaque,
         ..Default::default()
     };
@@ -34,32 +38,33 @@ fn set_request(key: &String, opaque: u32, buf: &mut Vec<u8>) {
         buf.push(0 as u8);
     }
 
-    buf.write_all(key.as_bytes()).unwrap();
-    buf.write_all(key.as_bytes()).unwrap();
+    buf.write_fmt(key_fmt!(key)).unwrap();
+    for i in 0..VALUE_SIZE {
+        buf.push((((key * i as u64) >> (i % 4)) & 0xff) as u8);
+    }
 }
 
 pub fn create_request(i: usize, packet: &Packet, buf: &mut Vec<u8>) {
 
     // Use first 32 bits of randomness to determine if this is a SET or GET req
     let low32 = packet.randomness & 0xffffffff;
-    // Use high 32 bits of randomness to select the key
-    let key = ((packet.randomness >> 32) % NVALUES).to_string();
+    let key =  (packet.randomness >> 32) % NVALUES;
 
-    if low32 % 100 < PCT_SET {
-        set_request(&key, i as u32, buf);
+    if low32 % 1000 < PCT_SET {
+        set_request(key, i as u32, buf);
         return;
     }
 
     let request_header = PacketHeader {
         magic: Magic::Request as u8,
         opcode: Opcode::Get as u8,
-        key_length: key.len() as u16,
-        total_body_length: key.len() as u32,
+        key_length: KEY_SIZE as u16,
+        total_body_length: KEY_SIZE as u32,
         opaque: i as u32,
         ..Default::default()
     };
     request_header.write(buf).unwrap();
-    buf.write_all(key.as_bytes()).unwrap();
+    buf.write_fmt(key_fmt!(key)).unwrap();
 }
 
 pub fn parse_response(buf: &[u8]) -> Result<usize, ()> {
@@ -103,8 +108,7 @@ pub fn warmup(
 
             for n in 0..perthread {
                 let mut vec: Vec<u8> = Vec::new();
-                let key = (i * perthread + n).to_string();
-                set_request(&key, 0, &mut vec);
+                set_request(i * perthread + n, 0, &mut vec);
 
                 if let Err(e) = sock1.send(&vec[..]) {
                     println!("Warmup send: {}", e);
