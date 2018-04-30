@@ -16,7 +16,7 @@ extern crate rand;
 extern crate shenango;
 extern crate test;
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::net::SocketAddrV4;
 use std::slice;
 use std::str::FromStr;
@@ -405,7 +405,7 @@ fn run_client(
         }
     }
     if let OutputMode::IncludeRaw | OutputMode::IncludeRawWithHeader = output {
-        let mut buckets = HashMap::new();
+        let mut buckets = BTreeMap::new();
 
         for l in latencies {
             *buckets.entry(duration_to_ns(l) / 1000).or_insert(0) += 1;
