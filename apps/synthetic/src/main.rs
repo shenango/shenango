@@ -2,7 +2,6 @@
 #![feature(duration_from_micros)]
 #![feature(nll)]
 #![feature(test)]
-#![feature(inclusive_range_syntax)]
 #![feature(if_while_or_patterns)]
 
 #[macro_use]
@@ -108,11 +107,23 @@ enum OutputMode {
     IncludeRawWithHeader,
 }
 
+#[allow(unused)]
 #[inline(always)]
-fn work(iterations: u64) {
+fn sqrt_work(iterations: u64) {
     let k = 2350845.545;
     for i in 0..iterations {
         test::black_box(f64::sqrt(k * i as f64));
+    }
+}
+
+static mut STRIDED_MEMTOUCH_STRIDE: usize = 1;
+static mut STRIDED_MEMTOUCH_BUFFER: Option<Vec<u8>> = None;
+
+#[inline(always)]
+fn work(iterations: u64) {
+    let buffer = unsafe { STRIDED_MEMTOUCH_BUFFER.as_ref().unwrap() };
+    for i in 0..(iterations as usize) {
+        test::black_box::<u8>(unsafe { buffer[(i * STRIDED_MEMTOUCH_STRIDE) % buffer.len()] });
     }
 }
 
@@ -524,6 +535,20 @@ fn main() {
                 .default_value("20")
                 .help("Number of samples to collect"),
         )
+        .arg(
+            Arg::with_name("strided-size")
+                .long("strided-size")
+                .takes_value(true)
+                .default_value("1024")
+                .help("Amount of memory to use for strided-memtouch fake work"),
+        )
+        .arg(
+            Arg::with_name("strided-stride")
+                .long("strided-stride")
+                .takes_value(true)
+                .default_value("7")
+                .help("Stride used for strided-memtouch fake work"),
+        )
         .get_matches();
 
     let addr: SocketAddrV4 = FromStr::from_str(matches.value_of("ADDR").unwrap()).unwrap();
@@ -562,6 +587,16 @@ fn main() {
             value_t_or_exit!(matches, "barrier-peers", usize),
         ).unwrap()
     });
+
+    let mut rng = rand::thread_rng();
+    unsafe {
+        STRIDED_MEMTOUCH_STRIDE = value_t_or_exit!(matches, "strided-stride", usize);
+        STRIDED_MEMTOUCH_BUFFER = Some(
+            (0..value_t_or_exit!(matches, "strided-size", usize))
+                .map(|_| rng.gen())
+                .collect(),
+        );
+    }
 
     match mode {
         "work-bench" => {

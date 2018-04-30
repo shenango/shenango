@@ -55,6 +55,7 @@ impl Backend {
         }
     }
 
+    #[allow(unused)]
     pub fn thread_yield(&self) {
         match *self {
             Backend::Linux => thread::yield_now(),
