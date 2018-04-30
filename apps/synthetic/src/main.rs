@@ -3,6 +3,7 @@
 #![feature(nll)]
 #![feature(test)]
 #![feature(inclusive_range_syntax)]
+#![feature(if_while_or_patterns)]
 
 #[macro_use]
 extern crate clap;
@@ -24,8 +25,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use clap::{App, Arg};
-use rand::Rng;
 use rand::distributions::{Exp, IndependentSample};
+use rand::Rng;
 use shenango::udp::UdpSpawner;
 
 mod backend;
@@ -104,6 +105,7 @@ enum OutputMode {
     WithHeader,
     Trace,
     IncludeRaw,
+    IncludeRawWithHeader,
 }
 
 #[inline(always)]
@@ -210,6 +212,9 @@ fn run_client(
             for _ in 0..receive_times.len() {
                 match socket.recv(&mut recv_buf[..]) {
                     Ok(len) => {
+                        if len == 0 {
+                            continue;
+                        }
                         let idx = match protocol {
                             Protocol::Memcached => memcached::parse_response(&recv_buf[..len]),
                             Protocol::Synthetic => payload::parse_response(&recv_buf[..len]),
@@ -223,7 +228,7 @@ fn run_client(
                     }
                     Err(e) => {
                         match e.raw_os_error() {
-                            Some(-108) => {}, // -ESHUTDOWN
+                            Some(-108) => {} // -ESHUTDOWN
                             _ => println!("Receive thread: {}", e),
                         }
                         break;
@@ -285,17 +290,25 @@ fn run_client(
             ..p
         })
         .collect();
+    packets.sort_by_key(|p| p.target_start);
+
+    // Discard the first 10% of the packets.
+    let mut packets = packets.split_off(packets.len() / 10);
+
     let never_sent = packets.iter().filter(|p| p.actual_start.is_none()).count();
     let dropped = packets
         .iter()
         .filter(|p| p.completion_time.is_none())
         .count() - never_sent;
-    if dropped + never_sent > packets.len() / 10 {
+    if packets.len() - dropped - never_sent <= 1 {
         match output {
             OutputMode::Silent => {}
-            OutputMode::WithHeader | OutputMode::Normal | OutputMode::IncludeRaw => {
+            OutputMode::WithHeader
+            | OutputMode::IncludeRawWithHeader
+            | OutputMode::Normal
+            | OutputMode::IncludeRaw => {
                 println!(
-                    "{}, {}, , {}, {}",
+                    "{}, {}, 0, {}, {}",
                     distribution.name(),
                     packets_per_second,
                     dropped,
@@ -303,7 +316,7 @@ fn run_client(
                 );
             }
             OutputMode::Trace => {
-                println!("Warning: missing more than 10% of packets");
+                println!("Warning: missing *all* of the packets");
                 println!(
                     "Dropped: {}, Never sent: {}, Total packets: {}",
                     dropped,
@@ -315,32 +328,28 @@ fn run_client(
         return false;
     }
 
-    let first_send = packets
-        .iter()
-        .filter_map(|p| match p.actual_start {
-            Some(ref start) if *start < runtime / 10 => None,
-            _ => p.actual_start,
-        })
-        .min()
-        .unwrap();
+    let first_send = packets.iter().filter_map(|p| p.actual_start).min().unwrap();
     let last_send = packets.iter().filter_map(|p| p.actual_start).max().unwrap();
     let mut latencies: Vec<_> = packets
         .iter()
         .filter_map(|p| match (p.actual_start, p.completion_time) {
-            (Some(ref start), _) if *start < runtime / 10 => None,
             (Some(ref start), Some(ref end)) => Some(*end - *start),
-            _ => None,
+            (Some(_), None) => Some(Duration::from_secs(9999)),
+            (None, None) => None,
+            (None, Some(_)) => unreachable!(),
         })
         .collect();
-
     latencies.sort();
 
-    if let OutputMode::WithHeader = output {
+    if let OutputMode::WithHeader | OutputMode::IncludeRawWithHeader = output {
         println!("Distribution, Target, Actual, Dropped, Never Sent, Median, 90th, 99th, 99.9th, 99.99th");
     }
     match output {
         OutputMode::Silent => {}
-        OutputMode::WithHeader | OutputMode::Normal | OutputMode::IncludeRaw => {
+        OutputMode::WithHeader
+        | OutputMode::IncludeRawWithHeader
+        | OutputMode::Normal
+        | OutputMode::IncludeRaw => {
             let percentile = |p| {
                 duration_to_ns(latencies[(latencies.len() as f32 * p / 100.0) as usize]) as f32
                     / 1000.0
@@ -384,7 +393,7 @@ fn run_client(
             }
         }
     }
-    if let OutputMode::IncludeRaw = output {
+    if let OutputMode::IncludeRaw | OutputMode::IncludeRawWithHeader = output {
         let mut buckets = HashMap::new();
 
         for l in latencies {
@@ -616,7 +625,6 @@ fn main() {
                         Distribution::Constant(mean as u64),
                         Distribution::Exponential(mean),
                         Distribution::Bimodal1(mean),
-                        Distribution::Bimodal2(mean),
                     ].iter()
                         .enumerate()
                     {
@@ -628,9 +636,9 @@ fn main() {
                                 packets_per_second * j / samples,
                                 nthreads,
                                 if i == 0 && j == 1 {
-                                    OutputMode::WithHeader
+                                    OutputMode::IncludeRawWithHeader
                                 } else {
-                                    OutputMode::Normal
+                                    OutputMode::IncludeRaw
                                 },
                                 proto,
                                 *distribution,
