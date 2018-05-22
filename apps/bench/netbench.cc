@@ -20,6 +20,7 @@ extern "C" {
 #include <vector>
 #include <algorithm>
 #include <numeric>
+#include <random>
 
 namespace {
 
