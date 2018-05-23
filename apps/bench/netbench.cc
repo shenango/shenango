@@ -52,7 +52,7 @@ void ServerWorker(rt::UdpConn *c) {
     // Receive a network response.
     ssize_t ret = c->Read(&buf, sizeof(buf));
     if (ret <= 0 || ret > static_cast<ssize_t>(sizeof(buf))) {
-      if (ret == 0) break;
+      if (ret == -ESHUTDOWN) break;
       panic("udp read failed, ret = %ld", ret);
     }
 
@@ -170,7 +170,7 @@ std::vector<double> PoissonWorker(rt::UdpConn *c, double req_rate,
     while (true) {
      ssize_t ret = c->Read(rbuf, sizeof(rbuf));
      if (ret != static_cast<ssize_t>(sizeof(rbuf))) {
-       if (ret == 0) break;
+       if (ret == -ESHUTDOWN) break;
          panic("udp read failed, ret = %ld", ret);
        }
 
