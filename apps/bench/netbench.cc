@@ -65,8 +65,8 @@ void ServerWorker(rt::UdpConn *c) {
     // Send a network request.
     ssize_t sret = c->Write(&buf, ret);
     if (sret != ret) {
-      if (ret == -ESHUTDOWN) break;
-      panic("udp write failed, ret = %ld", ret);
+      if (sret == -ESHUTDOWN) break;
+      panic("udp write failed, ret = %ld", sret);
     }
   }
 }

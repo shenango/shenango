@@ -57,7 +57,7 @@ linux_mech_bench_obj = $(linux_mech_bench_src:.cc=.o)
 
 # must be first
 all: tbench tbench_linux callibrate stress efficiency efficiency_linux \
-     netbench netbench_linux netperf linux_mech_bench
+     netbench netbench_linux netperf linux_mech_bench stress_linux
 
 tbench: $(tbench_obj)
 	$(LD) -o $@ $(LDFLAGS) $(tbench_obj) $(CXXPATH)/librt++.a \
@@ -127,4 +127,4 @@ endif
 .PHONY: clean
 clean:
 	rm -f $(obj) $(dep) tbench tbench_linux callibrate stress efficiency \
-	efficiency_linux netbench netbench_linux netperf linux_mech_bench
+	efficiency_linux netbench netbench_linux netperf linux_mech_bench stress_linux

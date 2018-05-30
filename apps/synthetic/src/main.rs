@@ -3,7 +3,7 @@
 #![feature(nll)]
 #![feature(test)]
 #![feature(if_while_or_patterns)]
-
+#![feature(assoc_unix_epoch)]
 #[macro_use]
 extern crate clap;
 
@@ -21,7 +21,7 @@ use std::net::SocketAddrV4;
 use std::slice;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use clap::{App, Arg};
 use rand::distributions::{Exp, IndependentSample};
@@ -209,6 +209,7 @@ fn run_client(
     if let Some(ref mut g) = *barrier_group {
         g.barrier();
     }
+    let start_unix = SystemTime::now();
     let start = Instant::now();
 
     let mut send_threads = Vec::new();
@@ -278,7 +279,10 @@ fn run_client(
 
                 packet.actual_start = Some(start.elapsed());
                 if let Err(e) = socket2.send(&payload[..]) {
-                    println!("Send thread: {}", e);
+                    match e.raw_os_error() {
+                        Some(-108) => {}
+                        _ => println!("Send thread: {}", e)
+                    }
                     break;
                 }
             }
@@ -353,7 +357,7 @@ fn run_client(
     latencies.sort();
 
     if let OutputMode::WithHeader | OutputMode::IncludeRawWithHeader = output {
-        println!("Distribution, Target, Actual, Dropped, Never Sent, Median, 90th, 99th, 99.9th, 99.99th");
+        println!("Distribution, Target, Actual, Dropped, Never Sent, Median, 90th, 99th, 99.9th, 99.99th, Start");
     }
     match output {
         OutputMode::Silent => {}
@@ -367,9 +371,9 @@ fn run_client(
             };
 
             println!(
-                "{}, {}, {}, {}, {}, {:.1}, {:.1}, {:.1}, {:.1}, {:.1}",
+                "{}, {}, {}, {}, {}, {:.1}, {:.1}, {:.1}, {:.1}, {:.1}, {}",
                 distribution.name(),
-                packets_per_second,
+                (packets.len() - never_sent) as u64 * 1000_000_000 / duration_to_ns(last_send - first_send),
                 latencies.len() as u64 * 1000_000_000 / duration_to_ns(last_send - first_send),
                 dropped,
                 never_sent,
@@ -377,7 +381,8 @@ fn run_client(
                 percentile(90.0),
                 percentile(99.0),
                 percentile(99.9),
-                percentile(99.99)
+                percentile(99.99),
+                start_unix.duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs()
             );
         }
         OutputMode::Trace => {
@@ -686,7 +691,7 @@ fn main() {
                         backend,
                         addr,
                         Duration::from_secs(3),
-                        packets_per_second / samples,
+                        packets_per_second,
                         nthreads,
                         OutputMode::Silent,
                         proto,
