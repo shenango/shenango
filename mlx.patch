@@ -215,7 +215,7 @@ index c12bd39a9..e7645e932 100644
 +			/* Found region. */
 +			return txq->id2mr[i].lkey;
 +		}
-+		if (__max(txq->id2mr[i].mr->start, m->start_addr) <=
++		if (__max(txq->id2mr[i].mr->start, m->start_addr) <
 +					__min(txq->id2mr[i].mr->end, m->end_addr)) {
 +			/* Recreate lkey/mr for previously mapped regions */
 +			return mlx4_txq_add_mr_from_mem_info(txq, m, i);
