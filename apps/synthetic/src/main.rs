@@ -22,6 +22,7 @@ use std::slice;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
+use std::f32::INFINITY;
 
 use clap::{App, Arg};
 use rand::distributions::{Exp, IndependentSample};
@@ -349,9 +350,7 @@ fn run_client(
         .iter()
         .filter_map(|p| match (p.actual_start, p.completion_time) {
             (Some(ref start), Some(ref end)) => Some(*end - *start),
-            (Some(_), None) => Some(Duration::from_secs(9999)),
-            (None, None) => None,
-            (None, Some(_)) => unreachable!(),
+            _ => None,
         })
         .collect();
     latencies.sort();
@@ -366,7 +365,11 @@ fn run_client(
         | OutputMode::Normal
         | OutputMode::IncludeRaw => {
             let percentile = |p| {
-                duration_to_ns(latencies[(latencies.len() as f32 * p / 100.0) as usize]) as f32
+                let idx = ((packets.len() - never_sent) as f32 * p / 100.0) as usize;
+                if idx >= latencies.len() {
+                    return INFINITY;
+                }
+                duration_to_ns(latencies[idx]) as f32
                     / 1000.0
             };
 

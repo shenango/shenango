@@ -5,6 +5,9 @@ use Packet;
 
 use dns_parser::{QueryClass, QueryType, Header, Opcode, ResponseCode, Name};
 
+use std::io::Write;
+use std::str::from_utf8;
+
 const NDOMAINS : u64 = 100000;
 
 pub fn create_request(i: usize, packet: &Packet, buf: &mut Vec<u8>) {
@@ -25,18 +28,23 @@ pub fn create_request(i: usize, packet: &Packet, buf: &mut Vec<u8>) {
 		nameservers: 0,
 		additional: 0,
 	};
-	buf.extend([0u8; 12].iter());
+
+	for _ in 0..12 {
+		buf.push(0);
+	}
 	h.write(&mut buf[..12]);
 
-	let subd = i.to_string();
-	buf.push(subd.len() as u8);
-	buf.extend(subd.as_bytes());
+	buf.push(0);
+	let len1 = buf.len();
+	buf.write_fmt(format_args!("{}", i)).unwrap();
+	buf[len1-1] = (buf.len() - len1) as u8;
 
-	let subd = (packet.randomness % NDOMAINS).to_string();
-	buf.push(subd.len() as u8);
-	buf.extend(subd.as_bytes());
+	buf.push(0);
+	let len2 = buf.len();
+	buf.write_fmt(format_args!("{}", packet.randomness % NDOMAINS)).unwrap();
+	buf[len2-1] = (buf.len() - len2) as u8;
 
-	buf.push("com".len() as u8);
+	buf.push(3);
 	buf.extend("com".as_bytes());
 
 	buf.push(0);
@@ -47,15 +55,14 @@ pub fn create_request(i: usize, packet: &Packet, buf: &mut Vec<u8>) {
 
 pub fn parse_response(buf: &[u8]) -> Result<usize, ()> {
 
-	if Header::parse(buf).is_err() {
+	if Header::parse(buf).is_err() || buf[Header::size()] & 0b1100_0000 != 0 {
 		return Err(());
 	}
 
-	let name = Name::scan(&buf[Header::size()..], buf).unwrap().to_string();
+	let pos = Header::size();
+	let end = pos + buf[pos] as usize + 1;
 
-	let t : &str = name.split(".").nth(0).unwrap();
-
-	let i = usize::from_str_radix(t, 10).unwrap();
+	let i = usize::from_str_radix(from_utf8(&buf[pos+1..end]).unwrap(), 10).unwrap();
 
 	return Ok(i);
 }
