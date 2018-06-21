@@ -495,6 +495,7 @@ extern int smalloc_init(void);
 
 /* late initialization */
 extern int ioqueues_register_iokernel(void);
+extern int net_init_late(void);
 extern int arp_init_late(void);
 extern int stat_init_late(void);
 

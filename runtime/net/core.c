@@ -507,6 +507,11 @@ int net_init(void)
 		return -ENOMEM;
 
 	log_info("net: started network stack");
+	return 0;
+}
+
+int net_init_late(void)
+{
 	net_dump_config();
 	return 0;
 }

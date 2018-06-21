@@ -85,6 +85,7 @@ struct proc {
 
 	/* network data */
 	struct eth_addr		mac;
+	unsigned int permanent_index;
 
 	/* next pending timer, only valid if pending_timer is true */
 	bool			pending_timer;
@@ -194,10 +195,9 @@ enum {
 struct dataplane {
 	uint8_t			port;
 	struct rte_mempool	*rx_mbuf_pool;
-
+	struct proc		*idx_to_proc[IOKERNEL_MAX_PROC];
 	struct proc		*clients[IOKERNEL_MAX_PROC];
 	int			nr_clients;
-	struct rte_hash		*mac_to_proc;
 };
 
 extern struct dataplane dp;
