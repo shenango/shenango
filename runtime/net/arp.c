@@ -38,10 +38,8 @@ struct arp_entry {
 	struct rcu_hlist_node	link;
 
 	/* accessed only with @arp_lock */
-	union {
-		struct mbufq	q;
-		struct rcu_head rcuh;
-	};
+	struct mbufq		q;
+	struct rcu_head		rcuh;
 	uint64_t		ts;
 	int			tries_left;
 	int			pad;

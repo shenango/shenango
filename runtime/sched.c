@@ -713,7 +713,8 @@ int sched_init(void)
 
 	for (i = 0; i < cpu_count; i++) {
 		siblings = 0;
-		bitmap_for_each_set(cpu_info_tbl[i].thread_siblings_mask, cpu_count, j) {
+		bitmap_for_each_set(cpu_info_tbl[i].thread_siblings_mask,
+				    cpu_count, j) {
 			if (i == j)
 				continue;
 			BUG_ON(siblings++);

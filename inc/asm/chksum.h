@@ -16,7 +16,7 @@
  *
  * Returns a 16-bit checksum value.
  */
-static inline uint16_t chksum_internet(const char *buf, int len)
+static inline uint16_t chksum_internet(const void *buf, int len)
 {
         uint64_t sum;
 
