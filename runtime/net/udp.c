@@ -548,10 +548,10 @@ ssize_t udp_read_from(udpconn_t *c, void *buf, size_t len,
 		spin_lock_np(&c->inq_lock);
 	}
 
-	/* is the socket shutdown? */
-	if (c->shutdown) {
+	/* is the socket drained and shutdown? */
+	if (mbufq_empty(&c->inq) && c->shutdown) {
 		spin_unlock_np(&c->inq_lock);
-		return -ESHUTDOWN;
+		return 0;
 	}
 
 	/* propagate error status code if an error was detected */
@@ -643,7 +643,7 @@ ssize_t udp_write_to(udpconn_t *c, const void *buf, size_t len,
 	/* is the socket shutdown? */
 	if (c->shutdown) {
 		spin_unlock_np(&c->outq_lock);
-		return -ESHUTDOWN;
+		return -EPIPE;
 	}
 
 	c->outq_len++;
