@@ -57,7 +57,7 @@ uint64_t Worker(int fd, int cur_us) {
     // Send a network request.
     ssize_t ret = write(fd, buf, sizeof(buf));
     if (ret != sizeof(buf)) {
-      if (-errno == -ESHUTDOWN) break;
+      if (-errno == -EPIPE) break;
       break;
       printf("udp write failed, ret = %ld", ret);
       exit(1);

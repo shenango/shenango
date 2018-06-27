@@ -52,7 +52,7 @@ void ServerWorker(rt::UdpConn *c) {
     // Receive a network response.
     ssize_t ret = c->Read(&buf, sizeof(buf));
     if (ret <= 0 || ret > static_cast<ssize_t>(sizeof(buf))) {
-      if (ret == -ESHUTDOWN) break;
+      if (ret == 0) break;
       panic("udp read failed, ret = %ld", ret);
     }
 
@@ -65,7 +65,7 @@ void ServerWorker(rt::UdpConn *c) {
     // Send a network request.
     ssize_t sret = c->Write(&buf, ret);
     if (sret != ret) {
-      if (sret == -ESHUTDOWN) break;
+      if (sret == -EPIPE) break;
       panic("udp write failed, ret = %ld", sret);
     }
   }
@@ -170,14 +170,14 @@ std::vector<double> PoissonWorker(rt::UdpConn *c, double req_rate,
     while (true) {
      ssize_t ret = c->Read(rbuf, sizeof(rbuf));
      if (ret != static_cast<ssize_t>(sizeof(rbuf))) {
-       if (ret == -ESHUTDOWN) break;
-         panic("udp read failed, ret = %ld", ret);
-       }
+       if (ret == 0) break;
+       panic("udp read failed, ret = %ld", ret);
+     }
 
-       barrier();
-       uint64_t ts = microtime();
-       barrier();
-       timings.push_back(ts - start_us[rp.idx]);
+     barrier();
+     uint64_t ts = microtime();
+     barrier();
+     timings.push_back(ts - start_us[rp.idx]);
     }
   });
 

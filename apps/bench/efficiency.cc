@@ -55,7 +55,7 @@ uint64_t Worker(rt::UdpConn *c, int cur_us, rt::WaitGroup *wg) {
     // Send a network request.
     ssize_t ret = c->Write(buf, sizeof(buf));
     if (ret != sizeof(buf)) {
-      if (ret == -ESHUTDOWN) break;
+      if (ret == -EPIPE) break;
       panic("udp write failed, ret = %ld", ret);
     }
 

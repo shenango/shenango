@@ -49,7 +49,7 @@ void ServerWorker(int fd) {
     // Send a network request.
     ssize_t sret = write(fd, &buf, ret);
     if (sret != ret) {
-      if (ret == -ESHUTDOWN) break;
+      if (ret == -EPIPE) break;
       printf("udp write failed, ret = %ld\n", ret);
       exit(1);
     }

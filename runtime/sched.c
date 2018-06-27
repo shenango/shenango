@@ -663,7 +663,7 @@ void sched_start(void)
 
 static void runtime_top_of_stack(void)
 {
-	panic("a runtime function returned to the top of the stack");
+	panic("a thread returned to the top of the stack");
 }
 
 /**
