@@ -168,17 +168,15 @@ static void arp_worker(void *arg)
 	while (true) {
 		now_us = microtime();
 
-		spin_lock_np(&arp_lock);
 		for (i = 0; i < ARP_TABLE_CAPACITY; i++) {
-			if (unlikely(preempt_needed()))
-				break;
+			spin_lock_np(&arp_lock);
 			rcu_hlist_for_each(&arp_tbl[i], node, true) {
 				e = rcu_hlist_entry(node,
 						    struct arp_entry, link);
 				arp_age_entry(now_us, e);
 			}
+			spin_unlock_np(&arp_lock);
 		}
-		spin_unlock_np(&arp_lock);
 
 		timer_sleep(ONE_SECOND);
 	}
