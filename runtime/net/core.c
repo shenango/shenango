@@ -167,6 +167,7 @@ static void net_rx_one(struct rx_net_hdr *hdr)
 	STAT(RX_PACKETS)++;
 	STAT(RX_BYTES) += mbuf_length(m);
 
+
 	/*
 	 * Link Layer Processing (OSI L2)
 	 */

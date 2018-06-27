@@ -443,6 +443,8 @@ static inline void net_recurrent(void)
  */
 
 extern thread_t *timer_run(struct kthread *k);
+extern void timer_merge(struct kthread *r);
+extern uint64_t timer_earliest_deadline(void);
 
 
 /*
