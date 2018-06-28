@@ -34,7 +34,7 @@ constexpr uint64_t kMaxCatchUpUS = 5;
 // the number of worker threads to spawn.
 int threads;
 // the remote UDP address of the server.
-udpaddr raddr;
+netaddr raddr;
 // the number of samples to gather.
 uint64_t n;
 // the mean service time in us.
@@ -77,7 +77,7 @@ void ServerHandler(void *arg) {
 
   while (true) {
     nbench_req req;
-    udpaddr raddr;
+    netaddr raddr;
     ssize_t ret = c->ReadFrom(&req, sizeof(req), &raddr);
     if (ret != sizeof(req) || req.magic != kMagic) continue;
 

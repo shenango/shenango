@@ -30,7 +30,7 @@ uint64_t n;
 // the fake work specification.
 std::string worker_spec;
 // the remote UDP address of the server.
-udpaddr raddr;
+netaddr raddr;
 // the time in seconds of each measurement.
 int measure_sec;
 // the step size in number of microseconds of fake work.
@@ -80,7 +80,7 @@ void MainHandler(void *arg) {
 
     // Open one UDP connection per thread.
     for (int i = 0; i < threads; ++i) {
-      udpaddr laddr = {0, 0};
+      netaddr laddr = {0, 0};
       std::unique_ptr<rt::UdpConn> c(rt::UdpConn::Dial(laddr, raddr));
       if (unlikely(c == nullptr)) panic("couldn't connect to raddr.");
       conns.emplace_back(std::move(c), 0);

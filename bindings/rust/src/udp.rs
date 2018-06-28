@@ -17,11 +17,11 @@ fn isize_to_result(i: isize) -> io::Result<usize> {
 pub struct UdpConnection(*mut ffi::udpconn_t);
 impl UdpConnection {
     pub fn dial(local_addr: SocketAddrV4, remote_addr: SocketAddrV4) -> Self {
-        let laddr = ffi::udpaddr {
+        let laddr = ffi::netaddr {
             ip: NetworkEndian::read_u32(&local_addr.ip().octets()),
             port: local_addr.port(),
         };
-        let raddr = ffi::udpaddr {
+        let raddr = ffi::netaddr {
             ip: NetworkEndian::read_u32(&remote_addr.ip().octets()),
             port: remote_addr.port(),
         };
@@ -32,7 +32,7 @@ impl UdpConnection {
     }
 
     pub fn listen(local_addr: SocketAddrV4) -> Self {
-        let laddr = ffi::udpaddr {
+        let laddr = ffi::netaddr {
             ip: NetworkEndian::read_u32(&local_addr.ip().octets()),
             port: local_addr.port(),
         };
@@ -48,7 +48,7 @@ impl UdpConnection {
     }
 
     pub fn read_from(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddrV4)> {
-        let mut raddr = ffi::udpaddr { ip: 0, port: 0 };
+        let mut raddr = ffi::netaddr { ip: 0, port: 0 };
         isize_to_result(unsafe {
             ffi::udp_read_from(
                 self.0,
@@ -60,7 +60,7 @@ impl UdpConnection {
     }
 
     pub fn write_to(&self, buf: &[u8], remote_addr: SocketAddrV4) -> io::Result<usize> {
-        let mut raddr = ffi::udpaddr {
+        let mut raddr = ffi::netaddr {
             ip: NetworkEndian::read_u32(&remote_addr.ip().octets()),
             port: remote_addr.port(),
         };
@@ -134,7 +134,7 @@ impl UdpSpawner {
         f: extern "C" fn(*mut ffi::udp_spawn_data),
     ) -> io::Result<Self> {
         println!("{:?}", local_addr);
-        let laddr = ffi::udpaddr {
+        let laddr = ffi::netaddr {
             ip: NetworkEndian::read_u32(&local_addr.ip().octets()),
             port: local_addr.port(),
         };

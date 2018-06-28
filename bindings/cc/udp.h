@@ -17,7 +17,7 @@ class UdpConn {
   ~UdpConn() { udp_close(c_); }
 
   // Creates a UDP connection between a local and remote address.
-  static UdpConn *Dial(udpaddr laddr, udpaddr raddr) {
+  static UdpConn *Dial(netaddr laddr, netaddr raddr) {
     udpconn_t *c;
     int ret = udp_dial(laddr, raddr, &c);
     if (ret) return nullptr;
@@ -25,7 +25,7 @@ class UdpConn {
   }
 
   // Creates a UDP connection that receives all packets on a local port.
-  static UdpConn *Listen(udpaddr laddr) {
+  static UdpConn *Listen(netaddr laddr) {
     udpconn_t *c;
     int ret = udp_listen(laddr, &c);
     if (ret) return nullptr;
@@ -33,9 +33,9 @@ class UdpConn {
   }
 
   // Gets the local UDP address.
-  udpaddr LocalAddr() const { return udp_local_addr(c_); }
+  netaddr LocalAddr() const { return udp_local_addr(c_); }
   // Gets the remote UDP address.
-  udpaddr RemoteAddr() const { return udp_remote_addr(c_); }
+  netaddr RemoteAddr() const { return udp_remote_addr(c_); }
 
   // Adjusts the length of buffer limits.
   int SetBuffers(int read_mbufs, int write_mbufs) {
@@ -43,12 +43,12 @@ class UdpConn {
   }
 
   // Reads a packet and gets from remote address.
-  ssize_t ReadFrom(void *buf, size_t len, udpaddr *raddr) {
+  ssize_t ReadFrom(void *buf, size_t len, netaddr *raddr) {
     return udp_read_from(c_, buf, len, raddr);
   }
 
   // Writes a packet and sets to remote address.
-  ssize_t WriteTo(const void *buf, size_t len, const udpaddr *raddr) {
+  ssize_t WriteTo(const void *buf, size_t len, const netaddr *raddr) {
     return udp_write_to(c_, buf, len, raddr);
   }
 

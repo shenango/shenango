@@ -29,7 +29,7 @@ uint64_t n;
 // the fake work specification.
 std::string worker_spec;
 // the remote UDP address of the server.
-udpaddr raddr;
+netaddr raddr;
 // the time in seconds of each measurement.
 int measure_sec;
 // the step size in number of microseconds of fake work.

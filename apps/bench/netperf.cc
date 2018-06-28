@@ -31,7 +31,7 @@ constexpr uint64_t kDiscardSamples = 1000;
 // the number of worker threads to spawn.
 int threads;
 // the remote UDP address of the server.
-udpaddr raddr;
+netaddr raddr;
 // the number of samples to gather.
 uint64_t n;
 

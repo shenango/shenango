@@ -2,6 +2,8 @@
  * core.c - core networking infrastructure
  */
 
+#include <stdio.h>
+
 #include <base/log.h>
 #include <base/mempool.h>
 #include <base/slab.h>
@@ -9,6 +11,7 @@
 #include <base/thread.h>
 #include <asm/chksum.h>
 #include <runtime/thread.h>
+#include <runtime/net.h>
 
 #include "defs.h"
 
@@ -487,6 +490,32 @@ int net_tx_ip(struct mbuf *m, uint8_t proto, uint32_t daddr)
 
 	ret = net_tx_eth(m, ETHTYPE_IP, dhost);
 	assert(!ret); /* can't fail as implemented so far */
+	return 0;
+}
+
+/**
+ * str_to_netaddr - converts a string to an IPv4 address and port
+ * @str: the string to convert
+ * @addr: the location to store the parsed address
+ *
+ * Takes a string like "192.168.1.1:80" or "192.168.1.1" for an ephemeral port.
+ *
+ * Returns 0 if successful, otherwise -EINVAL if the parsing failed.
+ */
+int str_to_netaddr(const char *str, struct netaddr *addr)
+{
+	uint8_t a, b, c, d;
+	uint16_t port;
+
+	if(sscanf(str, "%hhu.%hhu.%hhu.%hhu:%hu",
+	          &a, &b, &c, &d, &port) != 5) {
+		port = 0; /* try with an ephemeral port */
+		if (sscanf(str, "%hhu.%hhu.%hhu.%hhu", &a, &b, &c, &d) != 4)
+			return -EINVAL;
+	}
+
+	addr->ip = MAKE_IP_ADDR(a, b, c, d);
+	addr->port = port;
 	return 0;
 }
 

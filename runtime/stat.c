@@ -95,7 +95,7 @@ static void stat_worker(void *arg)
 {
 	const size_t cmd_len = strlen("stat");
 	char buf[UDP_MAX_PAYLOAD];
-	struct udpaddr laddr, raddr;
+	struct netaddr laddr, raddr;
 	udpconn_t *c;
 	ssize_t ret, len;
 

@@ -31,14 +31,14 @@ enum {
 
 static uint32_t udp_seed;
 
-static inline uint32_t udp_hash_2tuple(struct udpaddr laddr)
+static inline uint32_t udp_hash_2tuple(struct netaddr laddr)
 {
 	return hash_crc32c_one(udp_seed,
 		(uint64_t)laddr.ip | ((uint64_t)laddr.port << 32));
 }
 
-static inline uint32_t udp_hash_4tuple(struct udpaddr laddr,
-				       struct udpaddr raddr)
+static inline uint32_t udp_hash_4tuple(struct netaddr laddr,
+				       struct netaddr raddr)
 {
 	return hash_crc32c_two(udp_seed,
 		(uint64_t)laddr.ip | ((uint64_t)laddr.port << 32),
@@ -56,8 +56,8 @@ struct udp_ops {
 
 struct udp_entry {
 	int			match;
-	struct udpaddr		laddr;
-	struct udpaddr		raddr;
+	struct netaddr		laddr;
+	struct netaddr		raddr;
 	struct rcu_hlist_node	link;
 	struct rcu_head		rcu;
 	const struct udp_ops	*ops;
@@ -175,7 +175,7 @@ static struct udp_entry *
 udp_table_lookup(uint32_t lip, uint32_t rip,
 		 uint16_t lport, uint16_t rport, bool full)
 {
-	struct udpaddr laddr, raddr;
+	struct netaddr laddr, raddr;
 	struct udp_entry *e;
 	struct rcu_hlist_node *node;
 	uint32_t idx;
@@ -275,7 +275,7 @@ void udp_error(struct mbuf *m, const struct ip_hdr *iphdr, int err)
 }
 
 static int udp_send_raw(struct mbuf *m, size_t len,
-			struct udpaddr laddr, struct udpaddr raddr)
+			struct netaddr laddr, struct netaddr raddr)
 {
 	struct udp_hdr *udphdr;
 
@@ -411,7 +411,7 @@ static void udp_release_conn(udpconn_t *c)
  *
  * Returns 0 if success, otherwise fail.
  */
-int udp_dial(struct udpaddr laddr, struct udpaddr raddr, udpconn_t **c_out)
+int udp_dial(struct netaddr laddr, struct netaddr raddr, udpconn_t **c_out)
 {
 	udpconn_t *c;
 	int ret;
@@ -451,7 +451,7 @@ int udp_dial(struct udpaddr laddr, struct udpaddr raddr, udpconn_t **c_out)
  *
  * Returns 0 if success, otherwise fail.
  */
-int udp_listen(struct udpaddr laddr, udpconn_t **c_out)
+int udp_listen(struct netaddr laddr, udpconn_t **c_out)
 {
 	udpconn_t *c;
 	int ret;
@@ -486,7 +486,7 @@ int udp_listen(struct udpaddr laddr, udpconn_t **c_out)
  * udp_local_addr - gets the local address of the socket
  * @c: the UDP socket
  */
-struct udpaddr udp_local_addr(udpconn_t *c)
+struct netaddr udp_local_addr(udpconn_t *c)
 {
 	return c->e.laddr;
 }
@@ -498,7 +498,7 @@ struct udpaddr udp_local_addr(udpconn_t *c)
  * A UDP socket may not have a remote address attached. If so, the IP and
  * port will be set to zero.
  */
-struct udpaddr udp_remote_addr(udpconn_t *c)
+struct netaddr udp_remote_addr(udpconn_t *c)
 {
 	return c->e.raddr;
 }
@@ -534,7 +534,7 @@ int udp_set_buffers(udpconn_t *c, int read_mbufs, int write_mbufs)
  * is >= @len in size. If the socket has been shutdown, returns 0.
  */
 ssize_t udp_read_from(udpconn_t *c, void *buf, size_t len,
-                      struct udpaddr *raddr)
+                      struct netaddr *raddr)
 {
 	ssize_t ret;
 	struct mbuf *m;
@@ -614,9 +614,9 @@ static void udp_tx_release_mbuf(struct mbuf *m)
  * occurs, returns < 0 to indicate the error code.
  */
 ssize_t udp_write_to(udpconn_t *c, const void *buf, size_t len,
-                     const struct udpaddr *raddr)
+                     const struct netaddr *raddr)
 {
-	struct udpaddr addr;
+	struct netaddr addr;
 	ssize_t ret;
 	struct mbuf *m;
 	void *payload;
@@ -825,7 +825,7 @@ const struct udp_ops udp_par_ops = {
  *
  * Returns 0 if successful, otherwise fail.
  */
-int udp_create_spawner(struct udpaddr laddr, udpspawn_fn_t fn,
+int udp_create_spawner(struct netaddr laddr, udpspawn_fn_t fn,
 		       udpspawner_t **s_out)
 {
 	udpspawner_t *s;
@@ -883,7 +883,7 @@ void udp_destroy_spawner(udpspawner_t *s)
  * occurs, returns < 0 to indicate the error code.
  */
 ssize_t udp_send(const void *buf, size_t len,
-		 struct udpaddr laddr, struct udpaddr raddr)
+		 struct netaddr laddr, struct netaddr raddr)
 {
 	void *payload;
 	struct mbuf *m;
@@ -915,8 +915,8 @@ ssize_t udp_send(const void *buf, size_t len,
 	return len;
 }
 
-ssize_t udp_sendv(const struct iovec *iov, int iovcnt, struct udpaddr laddr,
-	       struct udpaddr raddr)
+ssize_t udp_sendv(const struct iovec *iov, int iovcnt,
+		  struct netaddr laddr, struct netaddr raddr)
 {
 	struct mbuf *m;
 	int i, ret;

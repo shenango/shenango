@@ -17,7 +17,7 @@
 #define NETPERF_PORT	8000
 
 /* experiment parameters */
-static struct udpaddr raddr;
+static struct netaddr raddr;
 static int nworkers;
 static int seconds;
 static uint64_t stop_us;
@@ -34,7 +34,7 @@ static void client_worker(void *arg)
 	unsigned char buf[UDP_MAX_PAYLOAD];
 	struct client_rr_args *args = (struct client_rr_args *)arg;
 	udpconn_t *c;
-	struct udpaddr laddr;
+	struct netaddr laddr;
 	ssize_t ret;
 	int budget = depth;
 
@@ -116,7 +116,7 @@ static void server_recv_one(struct udp_spawn_data *d)
 static void do_server(void *arg)
 {
 	waitgroup_t wg;
-	struct udpaddr laddr;
+	struct netaddr laddr;
 	udpspawner_t *s;
 	int ret;
 

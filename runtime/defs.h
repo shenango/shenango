@@ -303,8 +303,6 @@ struct kthread {
 
 	/* 9th cache-line, statistics counters */
 	uint64_t		stats[STAT_NR];
-
-	/* cold-data this point onward */
 };
 
 /* compile-time verification of cache-line alignment */
