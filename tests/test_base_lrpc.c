@@ -2,6 +2,7 @@
  * test_base_lrpc.c - tests LRPC messaging
  */
 
+#include <stdlib.h>
 #include <pthread.h>
 
 #include <base/init.h>
@@ -9,7 +10,6 @@
 #include <base/assert.h>
 #include <base/cpu.h>
 #include <base/lrpc.h>
-#include <base/smalloc.h>
 #include <base/time.h>
 
 #define QUEUE_SIZE	128
@@ -124,19 +124,19 @@ int main(int argc, char *argv[])
 	}
 	BUG_ON(!thread_init_done);
 
-	p.client_buf = smalloc(sizeof(struct lrpc_msg) * QUEUE_SIZE);
+	p.client_buf = malloc(sizeof(struct lrpc_msg) * QUEUE_SIZE);
 	BUG_ON(!p.client_buf);
 	memset(p.client_buf, 0, sizeof(struct lrpc_msg) * QUEUE_SIZE);
 
-	p.client_wb = smalloc(CACHE_LINE_SIZE);
+	p.client_wb = malloc(CACHE_LINE_SIZE);
 	BUG_ON(!p.client_wb);
 	memset(p.client_wb, 0, CACHE_LINE_SIZE);
 
-	p.server_buf = smalloc(sizeof(struct lrpc_msg) * QUEUE_SIZE);
+	p.server_buf = malloc(sizeof(struct lrpc_msg) * QUEUE_SIZE);
 	BUG_ON(!p.server_buf);
 	memset(p.server_buf, 0, sizeof(struct lrpc_msg) * QUEUE_SIZE);
 
-	p.server_wb = smalloc(CACHE_LINE_SIZE);
+	p.server_wb = malloc(CACHE_LINE_SIZE);
 	BUG_ON(!p.server_wb);
 	memset(p.server_wb, 0, CACHE_LINE_SIZE);
 

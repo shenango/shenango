@@ -1,12 +1,15 @@
 /*
- * smalloc.c - a malloc implementation built on top of the base
+ * smalloc.c - a simple malloc implementation built on top of the base
  * libary slab and thread-local cache allocator
  */
 
 #include <base/page.h>
 #include <base/slab.h>
 #include <base/tcache.h>
-#include <base/smalloc.h>
+#include <runtime/sync.h>
+#include <runtime/smalloc.h>
+
+#include "defs.h"
 
 #define SMALLOC_MAG_SIZE	8
 #define SMALLOC_BITS            15
@@ -16,7 +19,7 @@ BUILD_ASSERT(SMALLOC_MIN_SIZE >= SLAB_MIN_SIZE);
 
 static struct slab smalloc_slabs[SMALLOC_BITS];
 static struct tcache *smalloc_tcaches[SMALLOC_BITS];
-__thread struct tcache_perthread smalloc_pts[SMALLOC_BITS];
+static DEFINE_PERTHREAD(struct tcache_perthread, smalloc_pts[SMALLOC_BITS]);
 
 /**
  * smalloc_size_to_idx - converts a size to a cache index
@@ -56,9 +59,18 @@ static const char *slab_names[SMALLOC_BITS] = {
  */
 void *smalloc(size_t size)
 {
+	struct tcache_perthread *pt;
+	void *item;
+
 	if (unlikely(size > SMALLOC_MAX_SIZE))
 		return NULL;
-	return tcache_alloc(&smalloc_pts[smalloc_size_to_idx(size)]);
+
+	preempt_disable();
+	pt = &perthread_get(smalloc_pts[smalloc_size_to_idx(size)]);
+	item = tcache_alloc(pt);
+	preempt_enable();
+
+	return item;
 }
 
 /**
@@ -84,7 +96,12 @@ void *__szalloc(size_t size)
 void sfree(void *item)
 {
 	struct slab_node *n = addr_to_page(item)->snode;
-	tcache_free(&smalloc_pts[smalloc_size_to_idx(n->size)], item);
+	struct tcache_perthread *pt;
+
+	preempt_disable();
+	pt = &perthread_get(smalloc_pts[smalloc_size_to_idx(n->size)]);
+	tcache_free(pt, item);
+	preempt_enable();
 }
 
 /**
@@ -120,7 +137,8 @@ int smalloc_init_thread(void)
 	int i;
 
 	for (i = 0; i < SMALLOC_BITS; i++)
-		tcache_init_perthread(smalloc_tcaches[i], &smalloc_pts[i]);
+		tcache_init_perthread(smalloc_tcaches[i],
+				      &perthread_get(smalloc_pts[i]));
 
 	return 0;
 }

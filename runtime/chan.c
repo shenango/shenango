@@ -8,8 +8,8 @@
 
 #include <base/lock.h>
 #include <base/log.h>
-#include <base/smalloc.h>
 #include <base/atomic.h>
+#include <runtime/smalloc.h>
 #include <runtime/thread.h>
 #include <runtime/chan.h>
 

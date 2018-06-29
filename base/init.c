@@ -72,11 +72,7 @@ static int init_internal(void)
 	if (ret)
 		return ret;
 
-	ret = slab_init();
-	if (ret)
-		return ret;
-
-	return smalloc_init();
+	return slab_init();
 }
 
 static const struct init_level init_base_levels[] = {
@@ -114,13 +110,7 @@ static const struct init_level init_thread_level = INIT_LEVEL(thread, t);
 
 static int init_thread_internal(void)
 {
-	int ret;
-
-	ret = page_init_thread();
-	if (ret)
-		return ret;
-
-	return smalloc_init_thread();
+	return page_init_thread();
 }
 
 /**

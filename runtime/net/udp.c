@@ -5,8 +5,8 @@
 #include <string.h>
 
 #include <base/hash.h>
-#include <base/smalloc.h>
 #include <base/kref.h>
+#include <runtime/smalloc.h>
 #include <runtime/rculist.h>
 #include <runtime/sync.h>
 #include <runtime/thread.h>

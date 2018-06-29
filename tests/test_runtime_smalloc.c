@@ -3,13 +3,14 @@
  */
 
 #include <stdlib.h>
+#include <stdio.h>
 
-#include <base/init.h>
 #include <base/log.h>
 #include <base/assert.h>
 #include <base/slab.h>
 #include <base/tcache.h>
-#include <base/smalloc.h>
+#include <runtime/thread.h>
+#include <runtime/smalloc.h>
 #include <asm/ops.h>
 
 #define SAMPLES	200000
@@ -50,24 +51,10 @@ static void smalloc_bench(int samples, int n)
 }
 
 
-int main(int argc, char *argv[])
+static void main_handler(void *arg)
 {
-	int ret, i;
+	int i;
 	uint64_t tsc, tsc_elapsed;
-
-	ret = base_init();
-	if (ret) {
-		log_err("base_init() failed, ret = %d", ret);
-		return 1;
-	}
-	BUG_ON(!base_init_done);
-
-	ret = base_init_thread();
-	if (ret) {
-		log_err("base_init_thread() failed, ret = %d", ret);
-		return 1;
-	}
-	BUG_ON(!thread_init_done);
 
 	log_info("testing BASE smalloc performance");
 
@@ -127,6 +114,22 @@ int main(int argc, char *argv[])
 	slab_print_usage();
 	tcache_print_usage();
 #endif /* DEBUG */
+}
+
+int main(int argc, char *argv[])
+{
+	int ret;
+
+	if (argc < 2) {
+		printf("arg must be config file\n");
+		return -EINVAL;
+	}
+
+	ret = runtime_init(argv[1], main_handler, NULL);
+	if (ret) {
+		printf("failed to start runtime\n");
+		return ret;
+	}
 
 	return 0;
 }
