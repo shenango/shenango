@@ -18,7 +18,7 @@
 
 
 struct mbuf {
-	struct mbuf	*next;	   /* the next mbuf in a chain */
+	struct mbuf	*next;	   /* the next mbuf in the mbufq */
 	unsigned char	*head;	   /* start of the buffer */
 	unsigned char	*data;	   /* current position within the buffer */
 	unsigned int	head_len;  /* length of the entire buffer from @head */

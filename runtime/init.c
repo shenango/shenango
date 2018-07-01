@@ -38,7 +38,7 @@ static const struct init_entry global_init_handlers[] = {
 	/* network stack */
 	GLOBAL_INITIALIZER(net),
 	GLOBAL_INITIALIZER(arp),
-	GLOBAL_INITIALIZER(udp),
+	GLOBAL_INITIALIZER(trans),
 };
 
 #define THREAD_INITIALIZER(name) \

@@ -184,7 +184,6 @@ static void timer_start_locked(struct timer_entry *e, uint64_t deadline_us)
 	e->armed = true;
 }
 
-
 /**
  * timer_start - arms a timer
  * @e: the timer entry to start

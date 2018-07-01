@@ -141,12 +141,12 @@ void net_error(struct mbuf *m, int err)
 
 	/* don't check length because ICMP may not provide the full payload */
 
-	/* so far we only support error handling in UDP */
-	if (iphdr->proto == IPPROTO_UDP)
-		udp_error(m, iphdr, err);
+	/* so far we only support error handling in UDP and TCP */
+	if (iphdr->proto == IPPROTO_UDP || iphdr->proto == IPPROTO_TCP)
+		trans_error(m, err);
 }
 
-static void net_rx_one(struct rx_net_hdr *hdr)
+static struct mbuf *net_rx_one(struct rx_net_hdr *hdr)
 {
 	struct mbuf *m;
 	const struct eth_hdr *llhdr;
@@ -164,7 +164,7 @@ static void net_rx_one(struct rx_net_hdr *hdr)
 			k = getk();
 		}
 		putk();
-		return;
+		return NULL;
 	}
 
 	STAT(RX_PACKETS)++;
@@ -182,7 +182,7 @@ static void net_rx_one(struct rx_net_hdr *hdr)
 	/* handle ARP requests */
 	if (ntoh16(llhdr->type) == ETHTYPE_ARP) {
 		net_rx_arp(m);
-		return;
+		return NULL;
 	}
 
 	/* filter out requests we can't handle */
@@ -218,20 +218,21 @@ static void net_rx_one(struct rx_net_hdr *hdr)
 	switch(iphdr->proto) {
 	case IPPROTO_ICMP:
 		net_rx_icmp(m, iphdr, len);
-		return;
+		break;
 
 	case IPPROTO_UDP:
-		net_rx_udp(m, iphdr, len);
-		return;
+	case IPPROTO_TCP:
+		return m;
 
 	default:
 		goto drop;
 	}
 
-	return;
+	return NULL;
 
 drop:
 	mbuf_drop(m);
+	return NULL;
 }
 
 struct net_rx_closure {
@@ -243,8 +244,9 @@ struct net_rx_closure {
 
 static void net_rx_worker(void *arg)
 {
+	struct mbuf *l4_reqs[MAX_BUDGET];
 	struct net_rx_closure *c = arg;
-	int i;
+	int i, l4idx = 0;
 
 	/* complete TX requests and free packets */
 	for (i = 0; i < c->compl_cnt; i++)
@@ -254,8 +256,14 @@ static void net_rx_worker(void *arg)
 	for (i = 0; i < c->recv_cnt; i++) {
 		if (i + RX_PREFETCH_STRIDE < c->recv_cnt)
 			prefetch(c->recv_reqs[i + RX_PREFETCH_STRIDE]);
-		net_rx_one(c->recv_reqs[i]);
+		l4_reqs[l4idx] = net_rx_one(c->recv_reqs[i]);
+		if (l4_reqs[l4idx] != NULL)
+			l4idx++;
 	}
+
+	/* handle transport protocol layer */
+	if (l4idx)
+		net_rx_trans(l4_reqs, l4idx);
 
 	for (i = 0; i < c->join_cnt; i++)
 		join_kthread(c->join_reqs[i]);
