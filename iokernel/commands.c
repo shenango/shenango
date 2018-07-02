@@ -65,6 +65,8 @@ bool commands_rx(void)
 				IOKERNEL_CMD_BURST_SIZE - n_bufs);
 	}
 
+	STAT_INC(COMMANDS_PULLED, n_bufs);
+
 	pos++;
 	for (i = 0; i < n_bufs; i++)
 		rte_pktmbuf_free(bufs[i]);

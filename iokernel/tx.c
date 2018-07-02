@@ -137,10 +137,13 @@ bool tx_send_completion(void *obj)
 	}
 	p->overflow_queue[p->nr_overflows++] = priv_data->completion_data;
 	log_debug_ratelimited("tx: failed to send completion to runtime");
-	stats[TX_COMPLETION_OVERFLOW]++;
+	STAT_INC(COMPLETION_ENQUEUED, -1);
+	STAT_INC(TX_COMPLETION_OVERFLOW, 1);
+
 
 success:
 	proc_put(p);
+	STAT_INC(COMPLETION_ENQUEUED, 1);
 	return true;
 }
 
@@ -170,6 +173,8 @@ bool tx_drain_completions()
 		drained += drain_overflow_queue(p, IOKERNEL_OVERFLOW_BATCH_DRAIN - drained);
 		pos++;
 	}
+
+	STAT_INC(COMPLETION_DRAINED, drained);
 
 	return drained > 0;
 
@@ -211,7 +216,7 @@ bool tx_burst(void)
 	const struct tx_net_hdr *hdrs[IOKERNEL_TX_BURST_SIZE];
 	static struct rte_mbuf *bufs[IOKERNEL_TX_BURST_SIZE];
 	struct thread *threads[IOKERNEL_TX_BURST_SIZE];
-	int i, j, ret;
+	int i, j, ret, pulltotal = 0;
 	static unsigned int pos = 0, n_pkts = 0, n_bufs = 0;
 	struct thread *t;
 
@@ -230,6 +235,7 @@ bool tx_burst(void)
 		for (j = n_pkts; j < n_pkts + ret; j++)
 			threads[j] = t;
 		n_pkts += ret;
+		pulltotal += ret;
 	}
 
 	if (n_pkts == 0)
@@ -238,6 +244,9 @@ bool tx_burst(void)
 	pos++;
 
 full:
+
+	stats[TX_PULLED] += pulltotal;
+
 	/* allocate mbufs */
 	if (n_pkts - n_bufs > 0) {
 		ret = rte_mempool_get_bulk(tx_mbuf_pool, (void **)&bufs[n_bufs],
@@ -264,6 +273,7 @@ full:
 
 	/* apply back pressure if the NIC TX ring was full */
 	if (unlikely(ret < n_pkts)) {
+		STAT_INC(TX_BACKPRESSURE, n_pkts - ret);
 		n_pkts -= ret;
 		for (i = 0; i < n_pkts; i++)
 			bufs[i] = bufs[ret + i];

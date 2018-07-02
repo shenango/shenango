@@ -678,6 +678,7 @@ void cores_adjust_assignments()
 			rq_tail = load_acquire(&th->q_ptrs->rq_tail);
 			if (rq_tail < th->last_rq_head) {
 				th->last_rq_head = th->q_ptrs->rq_head;
+				STAT_INC(RQ_GRANT, 1);
 				goto request_kthread;
 			}
 			th->last_rq_head = th->q_ptrs->rq_head;
@@ -687,6 +688,7 @@ void cores_adjust_assignments()
 			send_tail = lrpc_poll_send_tail(&th->rxq);
 			if (send_tail < th->last_rxq_send_head) {
 				th->last_rxq_send_head = th->rxq.send_head;
+				STAT_INC(RX_GRANT, 1);
 				goto request_kthread;
 			}
 			th->last_rxq_send_head = th->rxq.send_head;

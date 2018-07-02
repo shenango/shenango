@@ -105,7 +105,7 @@ static void rx_one_pkt(struct rte_mbuf *buf)
 		ret = rte_hash_lookup_data(dp.mac_to_proc,
 				&ptr_dst_addr->addr_bytes[0], &data);
 		if (unlikely(ret < 0)) {
-			stats[RX_UNREGISTERED_MAC]++;
+			STAT_INC(RX_UNREGISTERED_MAC, 1);
 			log_debug_ratelimited("rx: received packet for unregistered MAC");
 			rte_pktmbuf_free(buf);
 			return;
@@ -114,7 +114,7 @@ static void rx_one_pkt(struct rte_mbuf *buf)
 		p = (struct proc *)data;
 		net_hdr = rx_prepend_rx_preamble(buf);
 		if (!rx_send_pkt_to_runtime(p, net_hdr)) {
-			stats[RX_UNICAST_FAIL]++;
+			STAT_INC(RX_UNICAST_FAIL, 1);
 			log_debug_ratelimited("rx: failed to send unicast packet to runtime");
 			rte_pktmbuf_free(buf);
 		}
@@ -132,7 +132,7 @@ static void rx_one_pkt(struct rte_mbuf *buf)
 			if (success) {
 				n_sent++;
 			} else {
-				stats[RX_BROADCAST_FAIL]++;
+				STAT_INC(RX_BROADCAST_FAIL, 1);
 				log_debug_ratelimited("rx: failed to enqueue broadcast "
 					 "packet to runtime");
 			}
@@ -152,7 +152,7 @@ static void rx_one_pkt(struct rte_mbuf *buf)
 		 ptr_dst_addr->addr_bytes[2], ptr_dst_addr->addr_bytes[3],
 		 ptr_dst_addr->addr_bytes[4], ptr_dst_addr->addr_bytes[5]);
 	rte_pktmbuf_free(buf);
-	stats[RX_UNHANDLED]++;
+	STAT_INC(RX_UNHANDLED, 1);
 }
 
 /*
@@ -165,6 +165,7 @@ bool rx_burst(void)
 
 	/* retrieve packets from NIC queue */
 	nb_rx = rte_eth_rx_burst(dp.port, 0, bufs, IOKERNEL_RX_BURST_SIZE);
+	STAT_INC(RX_PULLED, nb_rx);
 	if (nb_rx > 0)
 		log_debug("rx: received %d packets on port %d", nb_rx, dp.port);
 

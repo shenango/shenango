@@ -146,12 +146,13 @@ void dpdk_print_eth_stats()
 	if (ret)
 		log_debug("dpdk: error getting eth stats");
 
-	log_debug("eth stats for port %d at time %"PRIu64, dp.port, microtime());
-	log_debug("RX-packets: %"PRIu64" RX-dropped: %"PRIu64" RX-bytes: %"PRIu64,
+
+	fprintf(stderr, "eth stats for port %d at time %"PRIu64"\n", dp.port, microtime());
+	fprintf(stderr, "RX-packets: %"PRIu64" RX-dropped: %"PRIu64" RX-bytes: %"PRIu64"\n",
 			stats.ipackets, stats.imissed, stats.ibytes);
-	log_debug("TX-packets: %"PRIu64" TX-bytes: %"PRIu64, stats.opackets,
+	fprintf(stderr,"TX-packets: %"PRIu64" TX-bytes: %"PRIu64"\n", stats.opackets,
 			stats.obytes);
-	log_debug("RX-error: %"PRIu64" TX-error: %"PRIu64" RX-mbuf-fail: %"PRIu64,
+	fprintf(stderr,"RX-error: %"PRIu64" TX-error: %"PRIu64" RX-mbuf-fail: %"PRIu64"\n",
 			stats.ierrors, stats.oerrors, stats.rx_nombuf);
 }
 

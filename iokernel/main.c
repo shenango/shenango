@@ -66,7 +66,9 @@ static int run_init_handlers(const char *phase, const struct init_entry *h,
 void dataplane_loop()
 {
 	bool work_done;
-	uint64_t next_log_time;
+#ifdef STATS
+	uint64_t next_log_time = microtime();
+#endif
 	uint64_t now, last_time = microtime();
 
 	/*
@@ -81,7 +83,6 @@ void dataplane_loop()
 	log_info("main: core %u running dataplane. [Ctrl+C to quit]",
 			rte_lcore_id());
 
-	next_log_time = microtime();
 	/* run until quit or killed */
 	for (;;) {
 		work_done = false;
@@ -110,11 +111,15 @@ void dataplane_loop()
 		/* send a burst of egress packets */
 		work_done |= tx_burst();
 
-		if (false && microtime() > next_log_time) {
-			dpdk_print_eth_stats();
+		STAT_INC(BATCH_TOTAL, IOKERNEL_RX_BURST_SIZE);
+
+#ifdef STATS
+		if (microtime() > next_log_time) {
 			print_stats();
+			dpdk_print_eth_stats();
 			next_log_time += LOG_INTERVAL_US;
 		}
+#endif
 	}
 }
 

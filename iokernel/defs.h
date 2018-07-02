@@ -14,6 +14,8 @@
 
 #include "ref.h"
 
+/* #define STATS 1 */
+
 /*
  * Constant limits
  */
@@ -224,13 +226,31 @@ enum {
 	TX_COMPLETION_OVERFLOW,
 	TX_COMPLETION_FAIL,
 
+	RX_PULLED,
+	COMMANDS_PULLED,
+	COMPLETION_DRAINED,
+	COMPLETION_ENQUEUED,
+	BATCH_TOTAL,
+	TX_PULLED,
+	TX_BACKPRESSURE,
+
+	RQ_GRANT,
+	RX_GRANT,
+
+	ADJUSTS,
+
 	NR_STATS,
 
 };
 
 extern uint64_t stats[NR_STATS];
-
 extern void print_stats(void);
+
+#ifdef STATS
+#define STAT_INC(stat_name, amt) do { stats[stat_name] += amt; } while (0);
+#else
+#define STAT_INC(stat_name, amt) ;
+#endif
 
 /*
  * RXQ command steering
