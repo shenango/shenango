@@ -18,11 +18,6 @@
 /* the arity of the heap */
 #define D	4
 
-struct timer_idx {
-	uint64_t		deadline_us;
-	struct timer_entry	*e;
-};
-
 /**
  * is_valid_heap - checks that the timer heap is a valid min heap
  * @heap: the timer heap
@@ -46,19 +41,13 @@ static bool is_valid_heap(struct timer_idx *heap, int n)
 }
 
 /**
- * timer_heap_is_valid_unlocked - checks that this kthread's timer heap is a
- * valid min heap, assumes that the caller does not hold the timer lock
+ * timer_heap_is_valid - checks that this kthread's timer heap is a
+ * valid min heap
  * @k: the kthread
  */
-static bool timer_heap_is_valid_unlocked(struct kthread *k)
+static void assert_timer_heap_is_valid(struct kthread *k)
 {
-	bool res;
-
-	spin_lock_np(&k->timer_lock);
-	res = is_valid_heap(k->timers, k->timern);
-	spin_unlock_np(&k->timer_lock);
-
-	return res;
+	assert(is_valid_heap(k->timers, k->timern));
 }
 
 static void sift_up(struct timer_idx *heap, int i)
@@ -134,8 +123,11 @@ void timer_merge(struct kthread *r)
 	r->timern = 0;
 	spin_unlock(&r->timer_lock);
 
-	/* restore heap order by sifting each non-leaf element downward, starting
-	 * from the bottom of the heap and working upward (runs in linear time) */
+	/*
+         * Restore heap order by sifting each non-leaf element downward,
+         * starting from the bottom of the heap and working upward (runs in
+	 * linear time).
+	 */
 	for (i = k->timern / D; i >= 0; i--)
 		sift_down(k->timers, i, k->timern);
 
@@ -279,17 +271,23 @@ void timer_sleep(uint64_t duration_us)
 	__timer_sleep(microtime() + duration_us);
 }
 
-static void timer_worker(void *arg)
+/**
+ * timer_softirq - handles expired timers
+ * @k: the kthread to check
+ * @budget: the maximum number of timers to handle
+ */
+void timer_softirq(struct kthread *k, unsigned int budget)
 {
-	struct kthread *k = arg;
 	struct timer_entry *e;
 	uint64_t now_us;
 	int i;
 
 	spin_lock_np(&k->timer_lock);
+	assert_timer_heap_is_valid(k);
 
 	now_us = microtime();
-	while (k->timern > 0 && k->timers[0].deadline_us <= now_us) {
+	while (budget-- && k->timern > 0 &&
+	       k->timers[0].deadline_us <= now_us) {
 		i = --k->timern;
 		e = k->timers[0].e;
 		if (i > 0) {
@@ -307,32 +305,6 @@ static void timer_worker(void *arg)
 	}
 
 	spin_unlock_np(&k->timer_lock);
-}
-
-/**
- * timer_run - creates a closure for timer processing
- * @k: the kthread from which to process timeouts
- *
- * Returns a thread that handles timer processing when executed or
- * NULL if no timers have expired.
- */
-thread_t *timer_run(struct kthread *k)
-{
-	thread_t *th;
-	uint64_t now_us = microtime();
-
-	assert(timer_heap_is_valid_unlocked(k));
-
-	/* deliberate race condition */
-	if (k->timern == 0 || k->timers[0].deadline_us > now_us)
-		return NULL;
-
-	th = thread_create(timer_worker, k);
-	if (unlikely(!th))
-		return NULL;
-
-	th->state = THREAD_STATE_RUNNABLE;
-	return th;
 }
 
 /**

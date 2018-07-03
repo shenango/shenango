@@ -32,7 +32,7 @@ static void handle_sigusr1(int s, siginfo_t *si, void *c)
 	if (!preempt_enabled())
 		return;
 
-	thread_yield();
+	thread_yield_kthread();
 
 	/* note: gcc does seem to recompute myk() */
 	if (myk() != k)
@@ -45,7 +45,7 @@ static void handle_sigusr1(int s, siginfo_t *si, void *c)
 void preempt(void)
 {
 	assert(preempt_needed());
-	thread_yield();
+	thread_yield_kthread();
 }
 
 /**

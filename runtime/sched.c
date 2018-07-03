@@ -160,17 +160,10 @@ static bool steal_work(struct kthread *l, struct kthread *r)
 	if (th)
 		goto done;
 
-	/* check for timeouts */
-	th = timer_run(r);
+	/* check for softirqs */
+	th = softirq_run_thread(r, RUNTIME_SOFTIRQ_BUDGET);
 	if (th) {
-		STAT(TIMERS_STOLEN)++;
-		goto done;
-	}
-
-	/* check the network queues */
-	th = net_run(r, RUNTIME_NET_BUDGET);
-	if (th) {
-		STAT(NETS_STOLEN)++;
+		STAT(SOFTIRQS_STOLEN)++;
 		goto done;
 	}
 
@@ -202,16 +195,9 @@ static __noinline struct thread *do_watchdog(struct kthread *l)
 	assert_spin_lock_held(&l->lock);
 
 	/* then check the network queues */
-	th = net_run(l, RUNTIME_NET_BUDGET);
+	th = softirq_run_thread(l, RUNTIME_SOFTIRQ_BUDGET);
 	if (th) {
-		STAT(NETS_LOCAL)++;
-		return th;
-	}
-
-	/* check for timeouts */
-	th = timer_run(l);
-	if (th) {
-		STAT(TIMERS_LOCAL)++;
+		STAT(SOFTIRQS_LOCAL)++;
 		return th;
 	}
 
@@ -246,15 +232,7 @@ static __noreturn void schedule(void)
 	assert(l->parked == false);
 	assert(l->detached == false);
 
-	/* park if we have been preempted */
-	if (unlikely(preempt_needed())) {
-		STAT(SCHED_CYCLES) += rdtsc() - start_tsc;
-		clear_preempt_needed();
-		kthread_park(false);
-		start_tsc = rdtsc();
-	}
-
-	/* if it's been too long, run the net and timer handler */
+	/* if it's been too long, run the softirq handler */
 	if (unlikely(start_tsc - last_watchdog_tsc >
 	             cycles_per_us * RUNTIME_WATCHDOG_US)) {
 		last_watchdog_tsc = start_tsc;
@@ -275,17 +253,10 @@ again:
 	/* reset the local runqueue since it's empty */
 	l->rq_head = l->rq_tail = 0;
 
-	/* then check for local timeouts */
-	th = timer_run(l);
+	/* then check for local softirqs */
+	th = softirq_run_thread(l, RUNTIME_SOFTIRQ_BUDGET);
 	if (th) {
-		STAT(TIMERS_LOCAL)++;
-		goto done;
-	}
-
-	/* then try the local network queues */
-	th = net_run(l, RUNTIME_NET_BUDGET);
-	if (th) {
-		STAT(NETS_LOCAL)++;
+		STAT(SOFTIRQS_LOCAL)++;
 		goto done;
 	}
 
@@ -317,9 +288,9 @@ again:
 	 * If we don't, completions may arrive just after parking.
 	 */
 	if (rxq_spin_us(l, RUNTIME_PARK_POLL_US)) {
-		th = net_run(l, RUNTIME_NET_BUDGET);
+		th = softirq_run_thread(l, RUNTIME_SOFTIRQ_BUDGET);
 		if (th) {
-			STAT(NETS_LOCAL)++;
+			STAT(SOFTIRQS_LOCAL)++;
 			goto done;
 		}
 	}
@@ -494,6 +465,32 @@ void thread_ready(thread_t *th)
 	putk();
 }
 
+static void thread_finish_yield_kthread(unsigned long data)
+{
+	struct kthread *k = myk();
+	thread_t *myth = thread_self();
+
+	assert(myth->state == THREAD_STATE_RUNNING);
+	myth->state = THREAD_STATE_SLEEPING;
+	thread_ready(myth);
+
+	spin_lock(&k->lock);
+	clear_preempt_needed();
+	kthread_park(false);
+	spin_unlock(&k->lock);
+
+	schedule();
+}
+
+/**
+ * thread_yield_kthread - yields the running thread and immediately parks
+ */
+void thread_yield_kthread(void)
+{
+	/* this will switch from the thread stack to the runtime stack */
+	jmp_runtime(thread_finish_yield_kthread, 0);
+}
+
 static void thread_finish_yield(unsigned long data)
 {
 	thread_t *myth = thread_self();
@@ -512,6 +509,9 @@ static void thread_finish_yield(unsigned long data)
  */
 void thread_yield(void)
 {
+	/* check for softirqs */
+	softirq_run(RUNTIME_SOFTIRQ_BUDGET);
+
 	/* this will switch from the thread stack to the runtime stack */
 	jmp_runtime(thread_finish_yield, 0);
 }

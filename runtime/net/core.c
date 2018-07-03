@@ -10,16 +10,12 @@
 #include <base/hash.h>
 #include <base/thread.h>
 #include <asm/chksum.h>
-#include <runtime/thread.h>
 #include <runtime/net.h>
 
 #include "defs.h"
 
 #define IP_ID_SEED	0x42345323
 #define RX_PREFETCH_STRIDE 2
-
-/* the maximum number of packets to process per scheduler invocation */
-#define MAX_BUDGET	128
 
 /* important global state */
 struct net_cfg netcfg __aligned(CACHE_LINE_SIZE);
@@ -235,99 +231,27 @@ drop:
 	return NULL;
 }
 
-struct net_rx_closure {
-	unsigned int recv_cnt, compl_cnt, join_cnt;
-	struct rx_net_hdr *recv_reqs[MAX_BUDGET];
-	struct mbuf *compl_reqs[MAX_BUDGET];
-	struct kthread *join_reqs[MAX_BUDGET];
-};
-
-static void net_rx_worker(void *arg)
+/**
+ * net_rx_softirq - handles ingress packet processing
+ * @hdrs: an array of ingress packet headers
+ * @nr: the size of the @hdrs array
+ */
+void net_rx_softirq(struct rx_net_hdr **hdrs, unsigned int nr)
 {
-	struct mbuf *l4_reqs[MAX_BUDGET];
-	struct net_rx_closure *c = arg;
+	struct mbuf *l4_reqs[SOFTIRQ_MAX_BUDGET];
 	int i, l4idx = 0;
 
-	/* complete TX requests and free packets */
-	for (i = 0; i < c->compl_cnt; i++)
-		mbuf_free(c->compl_reqs[i]);
-
-	/* deliver new RX packets to the runtime */
-	for (i = 0; i < c->recv_cnt; i++) {
-		if (i + RX_PREFETCH_STRIDE < c->recv_cnt)
-			prefetch(c->recv_reqs[i + RX_PREFETCH_STRIDE]);
-		l4_reqs[l4idx] = net_rx_one(c->recv_reqs[i]);
+	for (i = 0; i < nr; i++) {
+		if (i + RX_PREFETCH_STRIDE < nr)
+			prefetch(hdrs[i + RX_PREFETCH_STRIDE]);
+		l4_reqs[l4idx] = net_rx_one(hdrs[i]);
 		if (l4_reqs[l4idx] != NULL)
 			l4idx++;
 	}
 
 	/* handle transport protocol layer */
-	if (l4idx)
+	if (l4idx > 0)
 		net_rx_trans(l4_reqs, l4idx);
-
-	for (i = 0; i < c->join_cnt; i++)
-		join_kthread(c->join_reqs[i]);
-}
-
-/**
- * net_run - creates a closure for network receive processing
- * @k: the kthread from which to take RX queue commands
- * @budget: the maximum number of commands to process
- *
- * Returns a thread that handles receive processing when executed or
- * NULL if no receive processing work is available.
- */
-thread_t *net_run(struct kthread *k, unsigned int budget)
-{
-	thread_t *th;
-	struct net_rx_closure *c;
-	unsigned int recv_cnt = 0, compl_cnt = 0, join_cnt = 0;
-	int budget_left;
-
-	assert_spin_lock_held(&k->lock);
-
-	if (lrpc_empty(&k->rxq))
-		return NULL;
-
-	th = thread_create_with_buf(net_rx_worker, (void **)&c, sizeof(*c));
-	if (unlikely(!th))
-		return NULL;
-
-	budget_left = min(budget, MAX_BUDGET);
-	while (budget_left--) {
-		uint64_t cmd;
-		unsigned long payload;
-
-		if (!lrpc_recv(&k->rxq, &cmd, &payload))
-			break;
-
-		switch (cmd) {
-		case RX_NET_RECV:
-			c->recv_reqs[recv_cnt] = shmptr_to_ptr(&netcfg.rx_region,
-				(shmptr_t)payload, MBUF_DEFAULT_LEN);
-			BUG_ON(c->recv_reqs[recv_cnt] == NULL);
-			recv_cnt++;
-			break;
-
-		case RX_NET_COMPLETE:
-			c->compl_reqs[compl_cnt++] = (struct mbuf *)payload;
-			break;
-
-		case RX_JOIN:
-			c->join_reqs[join_cnt++] = (struct kthread *)payload;
-			break;
-
-		default:
-			log_err_ratelimited("net: invalid RXQ cmd '%ld'", cmd);
-		}
-	}
-
-	assert(recv_cnt + compl_cnt + join_cnt > 0);
-	c->recv_cnt = recv_cnt;
-	c->compl_cnt = compl_cnt;
-	c->join_cnt = join_cnt;
-	th->state = THREAD_STATE_RUNNABLE;
-	return th;
 }
 
 

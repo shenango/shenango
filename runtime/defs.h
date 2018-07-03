@@ -13,6 +13,7 @@
 #include <base/gen.h>
 #include <base/lrpc.h>
 #include <base/thread.h>
+#include <base/time.h>
 #include <net/ethernet.h>
 #include <net/ip.h>
 #include <iokernel/control.h>
@@ -31,7 +32,7 @@
 #define RUNTIME_STACK_SIZE	128 * KB
 #define RUNTIME_GUARD_SIZE	128 * KB
 #define RUNTIME_RQ_SIZE		32
-#define RUNTIME_NET_BUDGET	16
+#define RUNTIME_SOFTIRQ_BUDGET	32
 #define RUNTIME_MAX_TIMERS	4096
 #define RUNTIME_PARK_POLL_US	2
 #define RUNTIME_WATCHDOG_US	50
@@ -245,10 +246,8 @@ enum {
 	STAT_SCHED_CYCLES,
 	STAT_PROGRAM_CYCLES,
 	STAT_THREADS_STOLEN,
-	STAT_NETS_STOLEN,
-	STAT_TIMERS_STOLEN,
-	STAT_NETS_LOCAL,
-	STAT_TIMERS_LOCAL,
+	STAT_SOFTIRQS_STOLEN,
+	STAT_SOFTIRQS_LOCAL,
 	STAT_PARKS,
 	STAT_PREEMPTIONS,
 	STAT_PREEMPTIONS_STOLEN,
@@ -401,6 +400,17 @@ static inline void rcu_recurrent(void)
 
 
 /*
+ * Softirq support
+ */
+
+/* the maximum number of events to handle in a softirq invocation */
+#define SOFTIRQ_MAX_BUDGET	128
+
+extern thread_t *softirq_run_thread(struct kthread *k, unsigned int budget);
+extern void softirq_run(unsigned int budget);
+
+
+/*
  * Network stack
  */
 
@@ -417,9 +427,8 @@ struct net_cfg {
 BUILD_ASSERT(sizeof(struct net_cfg) == CACHE_LINE_SIZE);
 
 extern struct net_cfg netcfg;
-
-extern thread_t *net_run(struct kthread *k, unsigned int budget);
 extern void __net_recurrent(void);
+extern void net_rx_softirq(struct rx_net_hdr **hdrs, unsigned int nr);
 
 /**
  * net_recurrent - flush overflow packets
@@ -440,9 +449,24 @@ static inline void net_recurrent(void)
  * Timer support
  */
 
-extern thread_t *timer_run(struct kthread *k);
+extern void timer_softirq(struct kthread *k, unsigned int budget);
 extern void timer_merge(struct kthread *r);
 extern uint64_t timer_earliest_deadline(void);
+
+struct timer_idx {
+	uint64_t		deadline_us;
+	struct timer_entry	*e;
+};
+
+/**
+ * timer_needed - returns true if pending timers have to be handled
+ * @k: the kthread to check
+ */
+static inline bool timer_needed(struct kthread *k)
+{
+	/* deliberate race condition */
+	return k->timern > 0 && k->timers[0].deadline_us <= microtime();
+}
 
 
 /*
@@ -480,4 +504,5 @@ extern int cfg_load(const char *path);
 /* runtime entry helpers */
 extern void sched_start(void) __noreturn;
 extern int thread_spawn_main(thread_fn_t fn, void *arg);
+extern void thread_yield_kthread();
 extern void join_kthread(struct kthread *k);

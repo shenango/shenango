@@ -47,7 +47,10 @@ static void rcu_start_reclaim(void)
 	assert(rcu_reclaim_in_progress == 0);
 
 	rcu_th = thread_create(rcu_worker, rcu_head);
-	BUG_ON(!rcu_th);
+	WARN_ON_ONCE(rcu_th == NULL);
+	if (unlikely(!rcu_th))
+		return;
+
 	rcu_head = NULL;
 	spin_lock(&klock);
 	if (nrks == 1) {
