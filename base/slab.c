@@ -308,8 +308,8 @@ static void *__slab_node_alloc(struct slab_node *n)
 		hdr = (struct slab_hdr *)n->cur_pg->next;
 		n->cur_pg->next = (void *)hdr->next_hdr;
 	} else {
-		assert(n->pg_off < (n->flags & SLAB_FLAG_LGPAGE) ?
-		       PGSIZE_2MB : PGSIZE_4KB);
+		assert(n->pg_off < ((n->flags & SLAB_FLAG_LGPAGE) ?
+				    PGSIZE_2MB : PGSIZE_4KB));
 		hdr = (struct slab_hdr *)
 			((char *)page_to_addr(n->cur_pg) + n->pg_off);
 		n->pg_off += n->size;

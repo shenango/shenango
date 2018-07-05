@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <base/types.h>
+
 struct netaddr {
 	uint32_t ip;
 	uint16_t port;

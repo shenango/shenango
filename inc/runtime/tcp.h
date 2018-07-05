@@ -4,27 +4,21 @@
 
 #pragma once
 
-#include <base/types.h>
-#include <net/udp.h>
+#include <runtime/net.h>
 #include <sys/uio.h>
-
-struct tcpaddr {
-	uint32_t ip;
-	uint16_t port;
-};
 
 struct tcpqueue;
 typedef struct tcpqueue tcpqueue_t;
 struct tcpconn;
 typedef struct tcpconn tcpconn_t;
 
-extern int tcp_dial(struct tcpaddr laddr, struct tcpaddr raddr,
+extern int tcp_dial(struct netaddr laddr, struct netaddr raddr,
 		    tcpconn_t **c_out);
-extern int tcp_listen(struct tcpaddr laddr, tcpqueue_t **q_out);
+extern int tcp_listen(struct netaddr laddr, tcpqueue_t **q_out);
 extern int tcp_accept(tcpqueue_t *q, tcpconn_t *c);
 extern int tcp_qclose(tcpqueue_t *q);
-extern struct tcpaddr tcp_local_addr(tcpconn_t *c);
-extern struct tcpaddr tcp_remote_addr(tcpconn_t *c);
+extern struct netaddr tcp_local_addr(tcpconn_t *c);
+extern struct netaddr tcp_remote_addr(tcpconn_t *c);
 extern int tcp_set_buffers(tcpconn_t *c, size_t read_len, size_t write_len);
 extern ssize_t tcp_read(udpconn_t *c, void *buf, size_t len);
 extern ssize_t tcp_write(udpconn_t *c, const void *buf, size_t len);
