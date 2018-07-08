@@ -145,12 +145,12 @@ static bool steal_work(struct kthread *l, struct kthread *r)
 		rq_tail = r->rq_tail;
 		for (i = 0; i < avail; i++)
 			l->rq[i] = r->rq[rq_tail++ % RUNTIME_RQ_SIZE];
-		l->rq_head = avail;
-		l->q_ptrs->rq_head += avail;
 		store_release(&r->rq_tail, rq_tail);
-		store_release(&r->q_ptrs->rq_tail, r->q_ptrs->rq_tail + avail);
+		r->q_ptrs->rq_tail += avail;
 		spin_unlock(&r->lock);
 
+		l->rq_head = avail;
+		l->q_ptrs->rq_head += avail;
 		STAT(THREADS_STOLEN) += avail;
 		return true;
 	}
@@ -461,7 +461,7 @@ void thread_ready(thread_t *th)
 
 	k->rq[k->rq_head % RUNTIME_RQ_SIZE] = th;
 	store_release(&k->rq_head, k->rq_head + 1);
-	store_release(&k->q_ptrs->rq_head, k->q_ptrs->rq_head + 1);
+	k->q_ptrs->rq_head++;
 	putk();
 }
 
