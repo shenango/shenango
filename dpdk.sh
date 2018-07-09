@@ -1,0 +1,19 @@
+#!/bin/sh
+
+set -e
+
+# Initialize dpdk module
+git submodule init
+git submodule update --recursive
+
+# Apply driver patches
+patch -p 1 -d dpdk/ < ixgbe.patch
+
+if lspci | grep -q Mellanox; then
+    patch -p 1 -d dpdk/ < mlx.patch
+    sed -i 's/CONFIG_RTE_LIBRTE_MLX4_PMD=n/CONFIG_RTE_LIBRTE_MLX4_PMD=y/g' dpdk/config/common_base
+fi
+
+# Configure/compile dpdk
+make -C dpdk/ config T=x86_64-native-linuxapp-gcc
+make -C dpdk/ -j

@@ -45,13 +45,13 @@
 
 #include "defs.h"
 
-#define RX_RING_SIZE 128
-#define TX_RING_SIZE 128
+#define RX_RING_SIZE 256
+#define TX_RING_SIZE 256
 
 static const struct rte_eth_conf port_conf_default = {
 	.rxmode = {
 		.max_rx_pkt_len = ETHER_MAX_LEN,
-		.hw_ip_checksum = 0,
+		.hw_ip_checksum = 1,
 		.mq_mode = ETH_MQ_RX_RSS,
 	},
 	.rx_adv_conf = {
@@ -76,6 +76,7 @@ static inline int dpdk_port_init(uint8_t port, struct rte_mempool *mbuf_pool)
 	uint16_t q;
 	struct rte_eth_dev_info dev_info;
 	struct rte_eth_txconf *txconf;
+	struct rte_eth_rxconf *rxconf;
 
 	if (port >= rte_eth_dev_count())
 		return -1;
@@ -89,17 +90,22 @@ static inline int dpdk_port_init(uint8_t port, struct rte_mempool *mbuf_pool)
 	if (retval != 0)
 		return retval;
 
+	rte_eth_dev_info_get(0, &dev_info);
+	rxconf = &dev_info.default_rxconf;
+	rxconf->rx_free_thresh = 64;
+
 	/* Allocate and set up 1 RX queue per Ethernet port. */
 	for (q = 0; q < rx_rings; q++) {
 		retval = rte_eth_rx_queue_setup(port, q, nb_rxd,
-				rte_eth_dev_socket_id(port), NULL, mbuf_pool);
+				rte_eth_dev_socket_id(port), rxconf, mbuf_pool);
 		if (retval < 0)
 			return retval;
 	}
 
 	/* Enable TX offloading */
-	rte_eth_dev_info_get(0, &dev_info);
 	txconf = &dev_info.default_txconf;
+	txconf->tx_rs_thresh = 64;
+	txconf->tx_free_thresh = 64;
 #if 0
 	txconf->txq_flags &= ~(ETH_TXQ_FLAGS_NOXSUMUDP |
 			ETH_TXQ_FLAGS_NOXSUMTCP);
