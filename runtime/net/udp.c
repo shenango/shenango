@@ -591,6 +591,7 @@ int udp_create_spawner(struct netaddr laddr, udpspawn_fn_t fn,
 		return -ENOMEM;
 
 	trans_init_3tuple(&s->e, IPPROTO_UDP, &udp_par_ops, laddr);
+	s->fn = fn;
 	ret = trans_table_add(&s->e);
 	if (ret) {
 		sfree(s);
