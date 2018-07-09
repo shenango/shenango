@@ -427,6 +427,15 @@ struct net_cfg {
 BUILD_ASSERT(sizeof(struct net_cfg) == CACHE_LINE_SIZE);
 
 extern struct net_cfg netcfg;
+
+#define MAX_ARP_STATIC_ENTRIES 1024
+struct cfg_arp_static_entry {
+	uint32_t ip;
+	struct eth_addr addr;
+};
+extern int arp_static_count;
+extern struct cfg_arp_static_entry static_entries[MAX_ARP_STATIC_ENTRIES];
+
 extern void __net_recurrent(void);
 extern void net_rx_softirq(struct rx_net_hdr **hdrs, unsigned int nr);
 

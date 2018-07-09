@@ -14,6 +14,8 @@
 
 #include "defs.h"
 
+int arp_static_count = 0;
+struct cfg_arp_static_entry static_entries[MAX_ARP_STATIC_ENTRIES];
 
 /*
  * Configuration Options
@@ -28,6 +30,25 @@ static int str_to_ip(const char *str, uint32_t *addr)
 
 	*addr = MAKE_IP_ADDR(a, b, c, d);
 	return 0;
+}
+
+static int str_to_mac(const char *str, struct eth_addr *addr)
+{
+	int i;
+	static const char *fmts[] = {
+		"%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
+		"%hhx-%hhx-%hhx-%hhx-%hhx-%hhx",
+		"%hhx%hhx%hhx%hhx%hhx%hhx"
+	};
+
+	for (i = 0; i < ARRAY_SIZE(fmts); i++) {
+		if (sscanf(str, fmts[i], &addr->addr[0], &addr->addr[1],
+			   &addr->addr[2], &addr->addr[3], &addr->addr[4],
+			   &addr->addr[5]) == 6) {
+			return 0;
+		}
+	}
+	return -EINVAL;
 }
 
 static int str_to_long(const char *str, long *val)
@@ -135,33 +156,33 @@ static int parse_runtime_guaranteed_kthreads(const char *name, const char *val)
 
 static int parse_mac_address(const char *name, const char *val)
 {
-	int i;
-	struct eth_addr mac;
-
-	static const char *fmts[] = {
-		"%hhx:%hhx:%hhx:%hhx:%hhx:%hhx",
-		"%hhx-%hhx-%hhx-%hhx-%hhx-%hhx",
-		"%hhx%hhx%hhx%hhx%hhx%hhx"
-	};
-
-	for (i = 0; i < ARRAY_SIZE(fmts); i++) {
-		if (sscanf(val, fmts[i], &mac.addr[0], &mac.addr[1],
-			   &mac.addr[2], &mac.addr[3], &mac.addr[4],
-			   &mac.addr[5]) == 6) {
-			if (mac.addr[0] & ETH_ADDR_GROUP ||
-			    !(mac.addr[0] & ETH_ADDR_LOCAL_ADMIN)) {
-				log_err("Invalid mac address");
-				return -EINVAL;
-			}
-			netcfg.mac = mac;
-			return 0;
-		}
-	}
-
-	log_err("Could not parse mac address");
-	return -EINVAL;
+	int ret = str_to_mac(val, &netcfg.mac);
+	if (ret)
+		log_err("Could not parse mac address: %s", val);
+	return ret;
 }
 
+static int parse_static_arp_entry(const char *name, const char *val)
+{
+	int ret;
+
+	ret = str_to_ip(val, &static_entries[arp_static_count].ip);
+	if (ret) {
+		log_err("Could not parse ip: %s", val);
+		return ret;
+	}
+
+	ret = str_to_mac(strtok(NULL, " "),
+			 &static_entries[arp_static_count].addr);
+	if (ret) {
+		log_err("Could not parse mac: %s", val);
+		return ret;
+	}
+
+	arp_static_count++;
+
+	return 0;
+}
 
 /*
  * Parsing Infrastructure
@@ -184,6 +205,7 @@ static const struct cfg_handler cfg_handlers[] = {
 	{ "runtime_spinning_kthreads", parse_runtime_spinning_kthreads, false },
 	{ "runtime_guaranteed_kthreads", parse_runtime_guaranteed_kthreads,
 			false },
+	{ "static_arp", parse_static_arp_entry, false },
 };
 
 /**

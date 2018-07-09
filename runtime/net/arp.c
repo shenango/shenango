@@ -27,6 +27,8 @@ enum {
 	ARP_STATE_VALID,
 	/* the MAC address is probably valid but is being confirmed */
 	ARP_STATE_VALID_BUT_REPROBING,
+	/* Statically configured arp entry */
+	ARP_STATE_STATIC,
 };
 
 /* A single entry in the ARP table. */
@@ -148,6 +150,8 @@ static void arp_age_entry(uint64_t now_us, struct arp_entry *e)
 		e->state = ARP_STATE_VALID_BUT_REPROBING;
 		e->tries_left = ARP_RETRIES;
 		break;
+	case ARP_STATE_STATIC:
+		return;
 
 	default:
 		panic("arp: invalid entry state %d", e->state);
@@ -336,11 +340,22 @@ int arp_lookup(uint32_t daddr, struct eth_addr *dhost_out, struct mbuf *m)
  */
 int arp_init(void)
 {
-	int i;
+	int i, idx;
+	struct arp_entry *e;
 
 	spin_lock_init(&arp_lock);
 	for (i = 0; i < ARP_TABLE_CAPACITY; i++)
 		rcu_hlist_init_head(&arp_tbl[i]);
+
+	for (i = 0; i < arp_static_count; i++) {
+		e = create_entry(static_entries[i].ip);
+		if (!e)
+			return -ENOMEM;
+		idx = hash_ip(static_entries[i].ip);
+		e->eth = static_entries[i].addr;
+		e->state = ARP_STATE_STATIC;
+		rcu_hlist_add_head(&arp_tbl[idx], &e->link);
+	}
 
 	return 0;
 }
