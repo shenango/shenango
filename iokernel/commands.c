@@ -68,7 +68,7 @@ bool commands_rx(void)
 	STAT_INC(COMMANDS_PULLED, n_bufs);
 
 	pos++;
-	/* Return to mempool is fine since we don't have chained buffers */
-	rte_mempool_put_bulk(dp.rx_mbuf_pool, (void * const*)bufs, n_bufs);
+	for (i = 0; i < n_bufs; i++)
+		rte_pktmbuf_free(bufs[i]);
 	return n_bufs > 0;
 }
