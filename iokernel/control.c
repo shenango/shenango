@@ -81,6 +81,7 @@ static struct proc *control_create_proc(mem_key_t key, size_t len, pid_t pid,
 	p->sched_cfg = hdr.sched_cfg;
 	p->thread_count = hdr.thread_count;
 	p->uniqid = rdtsc();
+	p->max_overflows = 0;
 	p->permanent_index = bitmap_find_next_cleared(proc_map, IOKERNEL_MAX_PROC, 0);
 	bitmap_set(proc_map, p->permanent_index);
 	p->mac = mac_template;
