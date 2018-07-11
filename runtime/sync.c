@@ -81,6 +81,144 @@ void mutex_init(mutex_t *m)
 	list_head_init(&m->waiters);
 }
 
+/*
+ * Read-write mutex support
+ */
+
+/**
+ * rwmutex_init - initializes a rwmutex
+ * @m: the rwmutex to initialize
+ */
+void rwmutex_init(rwmutex_t *m)
+{
+	spin_lock_init(&m->waiter_lock);
+	list_head_init(&m->read_waiters);
+	list_head_init(&m->write_waiters);
+	m->count = 0;
+	m->read_waiter_count = 0;
+}
+
+/**
+ * rwmutex_rdlock - acquires a read lock on a rwmutex
+ * @m: the rwmutex to acquire
+ */
+void rwmutex_rdlock(rwmutex_t *m)
+{
+	thread_t *myth;
+
+	spin_lock_np(&m->waiter_lock);
+	myth = thread_self();
+	if (m->count >= 0) {
+		m->count++;
+		spin_unlock_np(&m->waiter_lock);
+		return;
+	}
+	m->read_waiter_count++;
+	list_add_tail(&m->read_waiters, &myth->link);
+	thread_park_and_unlock_np(&m->waiter_lock);
+}
+
+/**
+ * rwmutex_try_rdlock - attempts to acquire a read lock on a rwmutex
+ * @m: the rwmutex to acquire
+ *
+ * Returns true if the acquire was successful.
+ */
+bool rwmutex_try_rdlock(rwmutex_t *m)
+{
+	spin_lock_np(&m->waiter_lock);
+	if (m->count >= 0) {
+		m->count++;
+		spin_unlock_np(&m->waiter_lock);
+		return true;
+	}
+	spin_unlock_np(&m->waiter_lock);
+	return false;
+}
+
+/**
+ * rwmutex_wrlock - acquires a write lock on a rwmutex
+ * @m: the rwmutex to acquire
+ */
+void rwmutex_wrlock(rwmutex_t *m)
+{
+	thread_t *myth;
+
+	spin_lock_np(&m->waiter_lock);
+	myth = thread_self();
+	if (m->count == 0) {
+		m->count = -1;
+		spin_unlock_np(&m->waiter_lock);
+		return;
+	}
+	list_add_tail(&m->write_waiters, &myth->link);
+	thread_park_and_unlock_np(&m->waiter_lock);
+}
+
+/**
+ * rwmutex_try_wrlock - attempts to acquire a write lock on a rwmutex
+ * @m: the rwmutex to acquire
+ *
+ * Returns true if the acquire was successful.
+ */
+bool rwmutex_try_wrlock(rwmutex_t *m)
+{
+	spin_lock_np(&m->waiter_lock);
+	if (m->count == 0) {
+		m->count = -1;
+		spin_unlock_np(&m->waiter_lock);
+		return true;
+	}
+	spin_unlock_np(&m->waiter_lock);
+	return false;
+}
+
+/**
+ * rwmutex_unlock - releases a rwmutex
+ * @m: the rwmutex to release
+ */
+void rwmutex_unlock(rwmutex_t *m)
+{
+	thread_t *th;
+	struct list_head tmp;
+	list_head_init(&tmp);
+
+	spin_lock_np(&m->waiter_lock);
+	assert(m->count != 0);
+	if (m->count < 0)
+		m->count = 0;
+	else
+		m->count--;
+
+	if (m->count == 0 && m->read_waiter_count > 0) {
+		m->count = m->read_waiter_count;
+		m->read_waiter_count = 0;
+		list_append_list(&tmp, &m->read_waiters);
+		spin_unlock_np(&m->waiter_lock);
+		while (true) {
+			th = list_pop(&tmp, thread_t, link);
+			if (!th)
+				break;
+			thread_ready(th);
+		}
+		return;
+	}
+
+	if (m->count == 0) {
+		th = list_pop(&m->write_waiters, thread_t, link);
+		if (!th) {
+			spin_unlock_np(&m->waiter_lock);
+			return;
+		}
+		m->count = -1;
+		spin_unlock_np(&m->waiter_lock);
+		thread_ready(th);
+		return;
+	}
+
+	spin_unlock_np(&m->waiter_lock);
+
+}
 
 /*
  * Condition variable support
@@ -216,4 +354,56 @@ void waitgroup_init(waitgroup_t *wg)
 	spin_lock_init(&wg->lock);
 	list_head_init(&wg->waiters);
 	wg->cnt = 0;
+}
+
+
+/*
+ * Barrier support
+ */
+
+/**
+ * barrier_init - initializes a barrier
+ * @b: the wait group to initialize
+ * @count: number of threads that must wait before releasing
+ */
+void barrier_init(barrier_t *b, int count)
+{
+	spin_lock_init(&b->lock);
+	list_head_init(&b->waiters);
+	b->count = count;
+	b->waiting = 0;
+}
+
+/**
+ * barrier_wait - waits on a barrier
+ * @b: the barrier to wait on
+ *
+ * Returns true if the calling thread releases the barrier
+ */
+bool barrier_wait(barrier_t *b)
+{
+	thread_t *th;
+	struct list_head tmp;
+
+	list_head_init(&tmp);
+
+	spin_lock_np(&b->lock);
+
+	if (++b->waiting >= b->count) {
+		list_append_list(&tmp, &b->waiters);
+		b->waiting = 0;
+		spin_unlock_np(&b->lock);
+		while (true) {
+			th = list_pop(&tmp, thread_t, link);
+			if (!th)
+				break;
+			thread_ready(th);
+		}
+		return true;
+	}
+
+	th = thread_self();
+	list_add_tail(&b->waiters, &th->link);
+	thread_park_and_unlock_np(&b->lock);
+	return false;
 }
