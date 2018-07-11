@@ -1,0 +1,3 @@
+
+To use, compile libshim.a and the target application with it. Link the dynamic loader library (-ldl) and use the linker flag '-Wl,--wrap=main' to wrap main.
+Make sure the application doesn't use static initializers for pthread mutexes etc.
