@@ -2,13 +2,7 @@
 #include <dlfcn.h>
 #include <pthread.h>
 
-#ifdef __cplusplus
-extern "C" {
-#endif
 #include <runtime/sync.h>
-#ifdef __cplusplus
-}
-#endif
 
 BUILD_ASSERT(sizeof(pthread_barrier_t) >= sizeof(barrier_t));
 BUILD_ASSERT(sizeof(pthread_mutex_t) >= sizeof(mutex_t));

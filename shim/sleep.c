@@ -3,15 +3,9 @@
 #include <time.h>
 #include <unistd.h>
 
-#ifdef __cplusplus
-extern "C" {
-#endif
 #include <base/time.h>
 #include <runtime/thread.h>
 #include <runtime/timer.h>
-#ifdef __cplusplus
-}
-#endif
 
 int usleep(useconds_t usec)
 {
@@ -22,7 +16,7 @@ int usleep(useconds_t usec)
 unsigned int sleep(unsigned int seconds)
 {
 	timer_sleep(seconds * ONE_SECOND);
-	return 0;	
+	return 0;
 }
 
 int nanosleep(const struct timespec *req, struct timespec *rem)

@@ -1,13 +1,7 @@
 
 #include <stdio.h>
 
-#ifdef __cplusplus
-extern "C" {
-#endif
 #include <runtime/thread.h>
-#ifdef __cplusplus
-}
-#endif
 
 int __real_main(int, char **);
 

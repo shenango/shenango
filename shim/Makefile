@@ -1,15 +1,15 @@
 INC     = -I../inc
-CXXFLAGS  = -g -Wall -std=gnu11 -D_GNU_SOURCE $(INC) -mssse3
+CFLAGS  = -g -Wall -std=gnu11 -D_GNU_SOURCE $(INC) -mssse3
 LDFLAGS = -T../base/base.ld -no-pie
 LD	= gcc
 CC	= gcc
 AR	= ar
 
 ifneq ($(DEBUG),)
-CXXFLAGS += -DDEBUG -DCCAN_LIST_DEBUG -rdynamic -O0 -ggdb
+CFLAGS += -DDEBUG -DCCAN_LIST_DEBUG -rdynamic -O0 -ggdb
 LDFLAGS += -rdynamic
 else
-CXXFLAGS += -DNDEBUG -O3
+CFLAGS += -DNDEBUG -O3
 endif
 
 # handy for debugging
@@ -37,9 +37,9 @@ endif
 # rule to generate a dep file by using the C preprocessor
 # (see man cpp for details on the -MM and -MT options)
 %.d: %.c
-	@$(CC) $(CXXFLAGS) $< -MM -MT $(@:.d=.o) >$@
+	@$(CC) $(CFLAGS) $< -MM -MT $(@:.d=.o) >$@
 %.o: %.c
-	$(CC) $(CXXFLAGS) -c $< -o $@
+	$(CC) $(CFLAGS) -c $< -o $@
 
 .PHONY: clean
 clean:

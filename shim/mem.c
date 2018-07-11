@@ -2,13 +2,7 @@
 #include <dlfcn.h>
 #include <stdlib.h>
 
-#ifdef __cplusplus
-extern "C" {
-#endif
 #include <runtime/preempt.h>
-#ifdef __cplusplus
-}
-#endif
 
 #define HOOK3(fnname, retType, argType1, argType2, argType3)                   \
 	retType fnname(argType1 __a1, argType2 __a2, argType3 __a3)            \

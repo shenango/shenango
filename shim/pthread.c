@@ -3,15 +3,9 @@
 
 #include <pthread.h>
 
-#ifdef __cplusplus
-extern "C" {
-#endif
 #include <base/lock.h>
 #include <runtime/sync.h>
 #include <runtime/thread.h>
-#ifdef __cplusplus
-}
-#endif
 
 BUILD_ASSERT(sizeof(pthread_t) >= sizeof(uintptr_t));
 
