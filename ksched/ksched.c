@@ -138,7 +138,16 @@ static long ksched_park(void)
 	put_cpu();
 
 	/* put this task to sleep and reschedule so the next task can run */
-	__set_current_state(TASK_UNINTERRUPTIBLE);
+	__set_current_state(TASK_INTERRUPTIBLE);
+	schedule();
+	__set_current_state(TASK_RUNNING);
+	return 0;
+}
+
+static long ksched_start(void)
+{
+	/* put this task to sleep and reschedule so the next task can run */
+	__set_current_state(TASK_INTERRUPTIBLE);
 	schedule();
 	__set_current_state(TASK_RUNNING);
 	return 0;
@@ -149,6 +158,7 @@ static void ksched_ipi(void *unused)
 	struct ksched_percpu *p = this_cpu_ptr(&kp);
 	struct task_struct *t;
 	unsigned long gen;
+
 
 	/* if last_gen is the current gen, ksched_park() beat us here */
 	gen = smp_load_acquire(&p->gen);
@@ -227,6 +237,8 @@ ksched_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 	switch (cmd) {
 	case KSCHED_IOC_PARK:
 		return ksched_park();
+	case KSCHED_IOC_START:
+		return ksched_start();
 	case KSCHED_IOC_WAKE:
 		return ksched_wake((void __user *)arg);
 	default:
@@ -271,7 +283,7 @@ static int __init ksched_init(void)
 		return ret;
 	}
 
-	printk(KERN_INFO "ksched: scheduler interface ready");
+	printk(KERN_INFO "ksched: API V1 ready");
 	return 0;
 }
 
