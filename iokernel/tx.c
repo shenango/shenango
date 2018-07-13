@@ -286,6 +286,18 @@ full:
 }
 
 /*
+ * Zero out private data for a packet
+ */
+
+static void tx_pktmbuf_priv_init(struct rte_mempool *mp, void *opaque,
+				 void *obj, unsigned obj_idx)
+{
+	struct rte_mbuf *buf = obj;
+	struct tx_pktmbuf_priv *data = tx_pktmbuf_get_priv(buf);
+	memset(data, 0, sizeof(*data));
+}
+
+/*
  * Create and initialize a packet mbuf pool for holding struct mbufs and
  * handling completion events. Actual buffer memory is separate, in shared
  * memory.
@@ -329,6 +341,7 @@ static struct rte_mempool *tx_pktmbuf_completion_pool_create(const char *name,
 	}
 
 	rte_mempool_obj_iter(mp, rte_pktmbuf_init, NULL);
+	rte_mempool_obj_iter(mp, tx_pktmbuf_priv_init, NULL);
 
 	return mp;
 }
