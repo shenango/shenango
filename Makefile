@@ -58,6 +58,7 @@ DPDK_LIBS += -Wl,-whole-archive -lrte_mempool_ring -Wl,-no-whole-archive
 DPDK_LIBS += -ldpdk
 DPDK_LIBS += -lrte_eal
 DPDK_LIBS += -lrte_ethdev
+DPDK_LIBS += -lrte_hash
 DPDK_LIBS += -lrte_mbuf
 DPDK_LIBS += -lrte_mempool
 DPDK_LIBS += -lrte_mempool

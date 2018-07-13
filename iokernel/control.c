@@ -31,9 +31,6 @@ struct lrpc_params lrpc_data_to_control_params;
 static struct lrpc_chan_out lrpc_control_to_data;
 static struct lrpc_chan_in lrpc_data_to_control;
 
-static DEFINE_BITMAP(proc_map, IOKERNEL_MAX_PROC);
-static struct eth_addr mac_template;
-
 static struct proc *control_create_proc(mem_key_t key, size_t len, pid_t pid,
 		int *fds, int n_fds)
 {
@@ -80,13 +77,12 @@ static struct proc *control_create_proc(mem_key_t key, size_t len, pid_t pid,
 	p->removed = false;
 	p->sched_cfg = hdr.sched_cfg;
 	p->thread_count = hdr.thread_count;
+	if (eth_addr_is_multicast(&hdr.mac) || eth_addr_is_zero(&hdr.mac))
+		goto fail_free_proc;
+	p->mac = hdr.mac;
+	p->pending_timer = false;
 	p->uniqid = rdtsc();
 	p->max_overflows = 0;
-	p->permanent_index = bitmap_find_next_cleared(proc_map, IOKERNEL_MAX_PROC, 0);
-	bitmap_set(proc_map, p->permanent_index);
-	p->mac = mac_template;
-	p->mac.addr[1] = p->permanent_index & 0xff;
-	p->mac.addr[2] |= p->permanent_index >> 8;
 
 	/* initialize the threads */
 	for (i = 0; i < hdr.thread_count; i++) {
@@ -143,7 +139,6 @@ static struct proc *control_create_proc(mem_key_t key, size_t len, pid_t pid,
 
 fail_free_proc:
 	free(threads);
-	bitmap_clear(proc_map, p->permanent_index);
 fail_free_just_proc:
 	free(p);
 fail_unmap:
@@ -162,9 +157,6 @@ static void control_destroy_proc(struct proc *p)
 		close(p->threads[i].park_efd);
 
 	mem_unmap_shm(p->region.base);
-
-	bitmap_clear(proc_map, p->permanent_index);
-
 	free(p->overflow_queue);
 	free(p);
 }
@@ -277,12 +269,6 @@ static void control_add_client(void)
 	if (!p) {
 		log_err("control: failed to create process '%d'", ucred.pid);
 		goto fail_close_fds;
-	}
-
-	ret = write(fd, &p->mac, sizeof(p->mac));
-	if (ret != sizeof(p->mac)) {
-		log_err("control: error writing to runtime, ret = %ld", ret);
-		goto fail_destroy_proc;
 	}
 
 	if (!lrpc_send(&lrpc_control_to_data, DATAPLANE_ADD_CLIENT,
@@ -477,53 +463,11 @@ fail:
 	return -1;
 }
 
-static int generate_random_mac(struct eth_addr *mac)
-{
-#if 0
-	int fd, ret;
-	fd = open("/dev/urandom", O_RDONLY);
-	if (fd < 0)
-		return errno;
-
-	ret = read(fd, mac, sizeof(*mac));
-	close(fd);
-	if (ret != sizeof(*mac))
-		return errno;
-#endif
-
-	mac->addr[0] &= ~ETH_ADDR_GROUP;
-	mac->addr[0] |= ETH_ADDR_LOCAL_ADMIN;
-
-	/* Reserve second/third bytes for indexing */
-	mac->addr[1] = 0;
-	mac->addr[2] = 0;
-
-	log_info("control: using mac address range "
-		"%02X:%02X:%02X:%02X:%02X:%02X to %02X:%02X:%02X:%02X:%02X:%02X",
-		mac_template.addr[0],  mac_template.addr[1],
-		mac_template.addr[2],  mac_template.addr[3],
-		mac_template.addr[4],  mac_template.addr[5],
-		mac_template.addr[0],  mac_template.addr[1] | 0xff,
-		mac_template.addr[2] | 0x3,  mac_template.addr[3],
-		mac_template.addr[4],  mac_template.addr[5]);
-
-	return 0;
-}
-
 int control_init(void)
 {
 	struct sockaddr_un addr;
 	pthread_t tid;
 	int sfd, ret;
-
-	bitmap_init(proc_map, IOKERNEL_MAX_PROC, false);
-	bitmap_set(proc_map, IOKERNEL_MAX_PROC - 1); // reserve for broadcast
-
-	ret = generate_random_mac(&mac_template);
-	if (ret) {
-		log_err("Could not generate mac [%s]", strerror(ret));
-		return ret;
-	}
 
 	BUILD_ASSERT(strlen(CONTROL_SOCK_PATH) <= sizeof(addr.sun_path) - 1);
 

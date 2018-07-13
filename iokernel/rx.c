@@ -4,6 +4,7 @@
 
 #include <rte_ethdev.h>
 #include <rte_ether.h>
+#include <rte_hash.h>
 #include <rte_mbuf.h>
 #include <rte_mempool.h>
 
@@ -85,7 +86,7 @@ static void rx_one_pkt(struct rte_mbuf *buf)
 	struct ether_hdr *ptr_mac_hdr;
 	struct ether_addr *ptr_dst_addr;
 	struct rx_net_hdr *net_hdr;
-	int i;
+	int i, ret;
 
 	ptr_mac_hdr = rte_pktmbuf_mtod(buf, struct ether_hdr *);
 	ptr_dst_addr = &ptr_mac_hdr->d_addr;
@@ -97,19 +98,20 @@ static void rx_one_pkt(struct rte_mbuf *buf)
 
 	/* handle unicast destinations (send to a single runtime) */
 	if (likely(is_unicast_ether_addr(ptr_dst_addr))) {
+		void *data;
 		struct proc *p;
 
-		/* lookup runtime using bits [9:18] as index */
-		unsigned int idx = ((*(uint64_t*)ptr_dst_addr) >> 8) & 0x3ff;
-		p = dp.idx_to_proc[idx];
-
-		if (unlikely(p == NULL)) {
+		/* lookup runtime by MAC in hash table */
+		ret = rte_hash_lookup_data(dp.mac_to_proc,
+				&ptr_dst_addr->addr_bytes[0], &data);
+		if (unlikely(ret < 0)) {
 			STAT_INC(RX_UNREGISTERED_MAC, 1);
 			log_debug_ratelimited("rx: received packet for unregistered MAC");
 			rte_pktmbuf_free(buf);
 			return;
 		}
 
+		p = (struct proc *)data;
 		net_hdr = rx_prepend_rx_preamble(buf);
 		if (!rx_send_pkt_to_runtime(p, net_hdr)) {
 			STAT_INC(RX_UNICAST_FAIL, 1);

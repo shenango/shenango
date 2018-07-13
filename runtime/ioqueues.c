@@ -35,19 +35,20 @@ unsigned int nrqs = 0;
 
 struct iokernel_control iok;
 
-static int get_rand(void *buf, size_t len)
+static int generate_random_mac(struct eth_addr *mac)
 {
-	int fd;
-	ssize_t ret;
-
+	int fd, ret;
 	fd = open("/dev/urandom", O_RDONLY);
 	if (fd < 0)
-		return -errno;
+		return -1;
 
-	ret = read(fd, buf, len);
+	ret = read(fd, mac, sizeof(*mac));
 	close(fd);
-	if (ret != len)
-		return -errno;
+	if (ret != sizeof(*mac))
+		return -1;
+
+	mac->addr[0] &= ~ETH_ADDR_GROUP;
+	mac->addr[0] |= ETH_ADDR_LOCAL_ADMIN;
 
 	return 0;
 }
@@ -127,9 +128,15 @@ static int ioqueues_shm_setup(unsigned int threads)
 	int i, ret;
 	size_t shm_len;
 
-	ret = get_rand(&iok.key, sizeof(iok.key));
-	if (ret < 0)
-		return ret;
+	if (!netcfg.mac.addr[0]) {
+		ret = generate_random_mac(&netcfg.mac);
+		if (ret < 0)
+			return ret;
+	}
+
+	BUILD_ASSERT(sizeof(netcfg.mac) >= sizeof(mem_key_t));
+	iok.key = *(mem_key_t*)(&netcfg.mac);
+	iok.key = rand_crc32c(iok.key);
 
 	/* map shared memory for control header, command queues, and egress pkts */
 	shm_len = calculate_shm_space(threads);
@@ -232,6 +239,7 @@ int ioqueues_register_iokernel(void)
 	hdr = r->base;
 	hdr->magic = CONTROL_HDR_MAGIC;
 	hdr->thread_count = iok.thread_count;
+	hdr->mac = netcfg.mac;
 
 	hdr->sched_cfg.priority = SCHED_PRIORITY_NORMAL;
 	hdr->sched_cfg.max_cores = iok.thread_count;
@@ -279,12 +287,6 @@ int ioqueues_register_iokernel(void)
 	if (ret < 0) {
 		log_err("register_iokernel: ioqueues_send_fds() failed with ret %d",
 				ret);
-		goto fail_close_fd;
-	}
-
-	ret = read(iok.fd, &netcfg.mac, sizeof(netcfg.mac));
-	if (ret != sizeof(netcfg.mac)) {
-		log_err("register_iokernel: read() failed [%s]", strerror(errno));
 		goto fail_close_fd;
 	}
 

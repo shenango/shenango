@@ -3,7 +3,6 @@
  */
 
 #include <rte_ether.h>
-#include <rte_ethdev.h>
 #include <rte_hash.h>
 #include <rte_jhash.h>
 #include <rte_lcore.h>
@@ -24,14 +23,13 @@ static struct lrpc_chan_in lrpc_control_to_data;
 static void dp_clients_add_client(struct proc *p)
 {
 	int ret;
+
 	p->kill = false;
 	dp.clients[dp.nr_clients++] = p;
-	dp.idx_to_proc[p->permanent_index] = p;
 
-	ret = rte_eth_dev_mac_addr_add(dp.port, (struct ether_addr *)&p->mac, 0);
-	if (unlikely(ret)) {
-		log_err("Failed to add mac, ret = %d", ret);
-	}
+	ret = rte_hash_add_key_data(dp.mac_to_proc, &p->mac.addr[0], p);
+	if (ret < 0)
+		log_err("dp_clients: failed to add MAC to hash table in add_client");
 
 	cores_init_proc(p);
 }
@@ -50,7 +48,7 @@ void proc_release(struct ref *r)
  */
 static void dp_clients_remove_client(struct proc *p)
 {
-	int i;
+	int i, ret;
 
 	for (i = 0; i < dp.nr_clients; i++) {
 		if (dp.clients[i] == p)
@@ -62,12 +60,13 @@ static void dp_clients_remove_client(struct proc *p)
 		return;
 	}
 
-	dp.idx_to_proc[p->permanent_index] = NULL;
-
 	dp.clients[i] = dp.clients[dp.nr_clients - 1];
 	dp.nr_clients--;
 
-	rte_eth_dev_mac_addr_remove(dp.port, (struct ether_addr *)&p->mac);
+	ret = rte_hash_del_key(dp.mac_to_proc, &p->mac.addr[0]);
+	if (ret < 0)
+		log_err("dp_clients: failed to remove MAC from hash table in remove "
+				"client");
 
 	/* TODO: free queued packets/commands? */
 
@@ -113,6 +112,7 @@ void dp_clients_rx_control_lrpcs()
 int dp_clients_init(void)
 {
 	int ret;
+	struct rte_hash_parameters hash_params = { 0 };
 
 	ret = lrpc_init_in(&lrpc_control_to_data,
 			lrpc_control_to_data_params.buffer, CONTROL_DATAPLANE_QUEUE_SIZE,
@@ -131,7 +131,19 @@ int dp_clients_init(void)
 	}
 
 	dp.nr_clients = 0;
-	memset(dp.idx_to_proc, 0, sizeof(dp.idx_to_proc));
+
+	/* initialize the hash table for mapping MACs to runtimes */
+	hash_params.name = "mac_to_proc_hash_table";
+	hash_params.entries = MAC_TO_PROC_ENTRIES;
+	hash_params.key_len = ETHER_ADDR_LEN;
+	hash_params.hash_func = rte_jhash;
+	hash_params.hash_func_init_val = 0;
+	hash_params.socket_id = rte_socket_id();
+	dp.mac_to_proc = rte_hash_create(&hash_params);
+	if (dp.mac_to_proc == NULL) {
+		log_err("dp_clients: failed to create MAC to proc hash table");
+		return -1;
+	}
 
 	return 0;
 }
