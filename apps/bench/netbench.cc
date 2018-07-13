@@ -57,7 +57,10 @@ void ServerWorker(rt::UdpConn *c) {
     }
 
     // Determine if the connection is being killed.
-    if (unlikely(p.tag == kKill)) break;
+    if (unlikely(p.tag == kKill)) {
+      c->Shutdown();
+      break;
+    }
 
     // Perform fake work if requested.
     if (p.workn != 0) w->Work(p.workn * 82.0);
@@ -69,9 +72,6 @@ void ServerWorker(rt::UdpConn *c) {
       panic("udp write failed, ret = %ld", sret);
     }
   }
-
-  c->Shutdown();
-
 }
 
 void ServerHandler(void *arg) {
