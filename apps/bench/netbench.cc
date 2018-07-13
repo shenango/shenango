@@ -69,6 +69,9 @@ void ServerWorker(rt::UdpConn *c) {
       panic("udp write failed, ret = %ld", sret);
     }
   }
+
+  c->Shutdown();
+
 }
 
 void ServerHandler(void *arg) {
@@ -98,7 +101,7 @@ void ServerHandler(void *arg) {
       std::vector<std::unique_ptr<rt::UdpConn>> conns;
       for (int i = 0; i < req.nports; ++i) {
         std::unique_ptr<rt::UdpConn> cin(rt::UdpConn::Dial({0, 0}, raddr));
-	if (unlikely(c == nullptr)) panic("couldn't dial data connection");
+	if (unlikely(cin == nullptr)) panic("couldn't dial data connection");
 	resp.ports[i] = cin->LocalAddr().port;
         threads.emplace_back(rt::Thread(std::bind(ServerWorker, cin.get())));
         conns.emplace_back(std::move(cin));
