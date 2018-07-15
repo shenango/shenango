@@ -36,12 +36,9 @@ fn smalloc_bench(samples: u32, ptrs: &mut [*mut c_void]) {
 }
 
 
-fn main() {
+fn main_handler() {
     let mut tsc;
     let mut tsc_elapsed;
-
-    shenango::base_init().unwrap();
-    shenango::base_init_thread().unwrap();
 
     let mut ptrs = vec![ptr::null_mut(); N];
 
@@ -121,4 +118,10 @@ fn main() {
 
         i *= 2;
     }
+}
+
+fn main() {
+    let args: Vec<_> = ::std::env::args().collect();
+    assert!(args.len() >= 2, "arg must be config file");
+    shenango::runtime_init(args[1].clone(), main_handler).unwrap();
 }

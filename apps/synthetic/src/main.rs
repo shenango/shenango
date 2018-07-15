@@ -226,7 +226,7 @@ fn run_client(
                 match socket.recv(&mut recv_buf[..]) {
                     Ok(len) => {
                         if len == 0 {
-                            continue;
+                            break; // SHUTDOWN
                         }
                         let idx = match protocol {
                             Protocol::Memcached => memcached::parse_response(&recv_buf[..len]),
@@ -240,10 +240,7 @@ fn run_client(
                         receive_times[idx.unwrap() as usize] = Some(start.elapsed());
                     }
                     Err(e) => {
-                        match e.raw_os_error() {
-                            Some(-108) => {} // -ESHUTDOWN
-                            _ => println!("Receive thread: {}", e),
-                        }
+                        println!("Receive thread: {}", e);
                         break;
                     }
                 }
@@ -281,7 +278,7 @@ fn run_client(
                 packet.actual_start = Some(start.elapsed());
                 if let Err(e) = socket2.send(&payload[..]) {
                     match e.raw_os_error() {
-                        Some(-108) => {}
+                        Some(-32) => {}
                         _ => println!("Send thread: {}", e)
                     }
                     break;
