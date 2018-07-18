@@ -21,8 +21,8 @@
  */
 #define IOKERNEL_MAX_PROC		1024
 #define IOKERNEL_NUM_MBUFS		8191
-#define IOKERNEL_NUM_COMPLETIONS		32767
-#define IOKERNEL_OVERFLOW_BATCH_DRAIN		64
+#define IOKERNEL_NUM_COMPLETIONS	32767
+#define IOKERNEL_OVERFLOW_BATCH_DRAIN	64
 #define IOKERNEL_TX_BURST_SIZE		64
 #define IOKERNEL_CMD_BURST_SIZE		64
 #define IOKERNEL_RX_BURST_SIZE		64
@@ -46,7 +46,7 @@ struct thread {
 	int32_t			park_efd;
 	struct q_ptrs		*q_ptrs;
 	uint32_t		last_rq_head;
-	uint32_t		last_rxq_send_head;
+	uint32_t		last_rxq_head;
 	/* current or most recent core this thread ran on, depending on whether
 	 * this thread is parked or not */
 	unsigned int		core;

@@ -130,3 +130,29 @@
 #define KB	(1024)
 #define MB	(1024 * KB)
 #define GB	(1024 * MB)
+
+/**
+ * wraps_before - a < b ?
+ *
+ * This comparison is safe against unsigned wrap around.
+ */
+static inline bool wraps_before(uint32_t a, uint32_t b)
+{
+        return (int32_t)(a - b) < 0;
+}
+
+/**
+ * wraps_after - b < a ?
+ *
+ * This comparison is safe against unsigned wrap around.
+ */
+static inline bool wraps_after(uint32_t a, uint32_t b)
+{
+        return (int32_t)(b - a) < 0;
+}
+
+/**
+ * swapvars - swaps the contents of two values
+ */
+#define swapvars(a, b) \
+	do { typeof(a) _t = (a); (a) = (b); (b) = _t; } while(0)

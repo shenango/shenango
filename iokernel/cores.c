@@ -647,62 +647,76 @@ void cores_free_proc(struct proc *p)
 		cores_park_kthread(&p->threads[i], true);
 }
 
+static bool cores_is_proc_congested(struct proc *p)
+{
+	struct thread *th;
+	uint32_t rq_tail, rxq_tail, last_rq_head, last_rxq_head;
+	bool congested = false;
+	int i;
+
+	for (i = 0; i < p->active_thread_count; i++) {
+		th = p->active_threads[i];
+
+		/* update the queue positions */
+		rq_tail = load_acquire(&th->q_ptrs->rq_tail);
+		rxq_tail = lrpc_poll_send_tail(&th->rxq);
+		last_rq_head = th->last_rq_head;
+		last_rxq_head = th->last_rxq_head;
+		th->last_rq_head = ACCESS_ONCE(th->q_ptrs->rq_head);
+		th->last_rxq_head = ACCESS_ONCE(th->rxq.send_head);
+
+		/* if one prior queue was congested, no need to find more */
+		if (congested)
+			continue;
+
+		/* if the thread just woke up, give it a pass this round */
+		if (th->waking) {
+			th->waking = false;
+			continue;
+		}
+
+		/* check if the runqueue is congested */
+		if (wraps_before(rq_tail, last_rq_head)) {
+			STAT_INC(RQ_GRANT, 1);
+			congested = true;
+			continue;
+		}
+
+		/* check if the RX queue is congested */
+		if (wraps_before(rxq_tail, last_rxq_head)) {
+			STAT_INC(RX_GRANT, 1);
+			congested = true;
+			continue;
+		}
+
+		/* TODO: check for timers */
+	}
+
+	return congested;
+}
+
 /*
  * Rebalances the allocation of cores to runtimes. Grants more cores to
  * runtimes that would benefit from them.
  */
-void cores_adjust_assignments()
+void cores_adjust_assignments(void)
 {
 	struct proc *p, *next;
-	struct thread *th;
-	uint32_t rq_tail, send_tail;
-	int i, j;
+	int i;
 
 	/* determine which procs need more cores to meet their guarantees, and
 	   which procs want more burstable cores */
 	for (i = 0; i < dp.nr_clients; i++) {
 		p = dp.clients[i];
 		proc_clear_overloaded(p);
+		if (!cores_is_proc_congested(p))
+			continue;
 
-		for (j = 0; j < p->active_thread_count; j++) {
-			th = p->active_threads[j];
-
-			/* if the thread just woke up, skip this round */
-			if (th->waking) {
-				th->waking = false;
-				continue;
-			}
-
-			/* check if runqueue still holds threads that were queued last time
-			 * we checked */
-			rq_tail = load_acquire(&th->q_ptrs->rq_tail);
-			if (rq_tail < th->last_rq_head) {
-				th->last_rq_head = th->q_ptrs->rq_head;
-				STAT_INC(RQ_GRANT, 1);
-				goto request_kthread;
-			}
-			th->last_rq_head = th->q_ptrs->rq_head;
-
-			/* check if rx queue still holds packets that were queued last time
-			 * we checked */
-			send_tail = lrpc_poll_send_tail(&th->rxq);
-			if (send_tail < th->last_rxq_send_head) {
-				th->last_rxq_send_head = th->rxq.send_head;
-				STAT_INC(RX_GRANT, 1);
-				goto request_kthread;
-			}
-			th->last_rxq_send_head = th->rxq.send_head;
-			/* TODO: check on timers */
-
-			continue; /* no need to wake a kthread */
-
-		request_kthread:
-			if (p->active_thread_count < p->sched_cfg.guaranteed_cores)
-				cores_add_core(p);
-			else
-				proc_set_overloaded(p);
-			break;
-		}
+		/* the proc is congested, add cores if possible */
+		if (p->active_thread_count < p->sched_cfg.guaranteed_cores)
+			cores_add_core(p);
+		else
+			proc_set_overloaded(p);
 	}
 
 	/* grant cores to procs that are bursting until we run out of cores */
