@@ -3,7 +3,9 @@
  */
 
 #include <base/stddef.h>
+#include <base/kref.h>
 #include <base/list.h>
+#include <runtime/smalloc.h>
 #include <runtime/sync.h>
 #include <runtime/thread.h>
 #include <runtime/tcp.h>
@@ -11,15 +13,10 @@
 #include "tcp.h"
 #include "defs.h"
 
-struct tcpqueue {
-	struct trans_entry	e;
-	spinlock_t		lock;
-	struct list_head	waiters;
-};
-
 struct tcpconn {
 	struct trans_entry	e;
 	struct tcp_pcb		pcb;
+	struct list_node	link;
 	spinlock_t		lock;
 
 	/* mbufs waiting to be resequenced */
@@ -38,6 +35,15 @@ struct tcpconn {
 	struct list_head	outq_waiters;
 };
 
+static void tcp_conn_init(tcpconn_t *c)
+{
+	spin_lock_init(&c->lock);
+}
+
+
+/*
+ * Support for ingress TCP handling
+ */
 
 /* handles ingress packets for TCP sockets */
 static void tcp_recv(struct trans_entry *e, struct mbuf *m)
@@ -45,17 +51,26 @@ static void tcp_recv(struct trans_entry *e, struct mbuf *m)
 
 }
 
-int tcp_dial(struct netaddr laddr, struct netaddr raddr, tcpconn_t **c_out)
-{
-	return -ENOTSUP;
-}
+
+/*
+ * Support for accepting new connections
+ */
+
+struct tcpqueue {
+	struct trans_entry	e;
+	struct kref		ref;
+
+	mutex_t			m;
+	condvar_t		cv;
+	struct list_head	conns;
+};
 
 int tcp_listen(struct netaddr laddr, tcpqueue_t **q_out)
 {
 	return -ENOTSUP;
 }
 
-int tcp_accept(tcpqueue_t *q, tcpconn_t *c)
+int tcp_accept(tcpqueue_t *q, tcpconn_t **c_out)
 {
 	return -ENOTSUP;
 }
@@ -65,16 +80,24 @@ int tcp_qclose(tcpqueue_t *q)
 	return -ENOTSUP;
 }
 
+
+/*
+ * Support for the TCP socket API
+ */
+
+int tcp_dial(struct netaddr laddr, struct netaddr raddr, tcpconn_t **c_out)
+{
+	return -ENOTSUP;
+}
+
 struct netaddr tcp_local_addr(tcpconn_t *c)
 {
-	struct netaddr addr = {0, 0};
-	return addr;
+	return c->e.laddr;
 }
 
 struct netaddr tcp_remote_addr(tcpconn_t *c)
 {
-	struct netaddr addr = {0, 0};
-	return addr;
+	return c->e.raddr;
 }
 
 int tcp_set_buffers(tcpconn_t *c, size_t read_len, size_t write_len)

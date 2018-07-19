@@ -15,7 +15,7 @@ typedef struct tcpconn tcpconn_t;
 extern int tcp_dial(struct netaddr laddr, struct netaddr raddr,
 		    tcpconn_t **c_out);
 extern int tcp_listen(struct netaddr laddr, tcpqueue_t **q_out);
-extern int tcp_accept(tcpqueue_t *q, tcpconn_t *c);
+extern int tcp_accept(tcpqueue_t *q, tcpconn_t **c_out);
 extern int tcp_qclose(tcpqueue_t *q);
 extern struct netaddr tcp_local_addr(tcpconn_t *c);
 extern struct netaddr tcp_remote_addr(tcpconn_t *c);
