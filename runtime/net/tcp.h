@@ -39,22 +39,3 @@ struct tcp_pcb {
 	uint32_t	irs;		/* initial receive sequence number */
 
 };
-
-/* a < b ? */
-static inline bool seq_before(uint32_t a, uint32_t b)
-{
-	return (int32_t)(a - b) < 0;
-}
-
-/* b < a ? */
-static inline bool seq_after(uint32_t a, uint32_t b)
-{
-	return (int32_t)(b - a) < 0;
-}
-
-/* a <= b <= c ? */
-static inline bool seq_between(uint32_t a, uint32_t b, uint32_t c)
-{
-	return c - b >= a - b;
-}
-

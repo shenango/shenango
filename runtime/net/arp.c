@@ -150,6 +150,7 @@ static void arp_age_entry(uint64_t now_us, struct arp_entry *e)
 		e->state = ARP_STATE_VALID_BUT_REPROBING;
 		e->tries_left = ARP_RETRIES;
 		break;
+
 	case ARP_STATE_STATIC:
 		return;
 
