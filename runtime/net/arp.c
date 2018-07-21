@@ -10,6 +10,7 @@
 #include <net/arp.h>
 #include <runtime/rculist.h>
 #include <runtime/timer.h>
+#include <runtime/smalloc.h>
 #include <runtime/sync.h>
 
 #include "defs.h"
@@ -72,7 +73,7 @@ static struct arp_entry *lookup_entry(int idx, uint32_t daddr)
 static void release_entry(struct rcu_head *h)
 {
 	struct arp_entry *e = container_of(h, struct arp_entry, rcuh);
-	free(e);
+	sfree(e);
 }
 
 static void delete_entry(struct arp_entry *e)
@@ -91,7 +92,7 @@ static void delete_entry(struct arp_entry *e)
 
 static struct arp_entry *create_entry(uint32_t daddr)
 {
-	struct arp_entry *e = malloc(sizeof(*e));
+	struct arp_entry *e = smalloc(sizeof(*e));
 	if (!e)
 		return NULL;
 

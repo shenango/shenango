@@ -446,50 +446,21 @@ ssize_t udp_write(udpconn_t *c, const void *buf, size_t len)
 	return udp_write_to(c, buf, len, NULL);
 }
 
-/**
- * udp_shutdown - disables a UDP socket
- * @c: the socket to disable
- *
- * All blocking requests on the socket will return and future ingress and
- * egress packets will be aborted.
- */
-void udp_shutdown(udpconn_t *c)
+void __udp_shutdown(udpconn_t *c)
 {
-	struct list_head tmp;
-	struct mbufq q;
-	thread_t *th;
-
-	list_head_init(&tmp);
-	mbufq_init(&q);
-
+	spin_lock_np(&c->inq_lock);
+	spin_lock_np(&c->outq_lock);
 	BUG_ON(c->shutdown);
 	c->shutdown = true;
+	spin_unlock_np(&c->outq_lock);
+	spin_unlock_np(&c->inq_lock);
 
 	/* prevent ingress receive and error dispatch (after RCU period) */
 	trans_table_remove(&c->e);
 
-	/* drain ingress */
-	spin_lock_np(&c->inq_lock);
-	list_append_list(&tmp, &c->inq_waiters);
-	mbufq_merge_to_tail(&q, &c->inq);
-	spin_unlock_np(&c->inq_lock);
-
-	/* drain egress */
-	spin_lock_np(&c->outq_lock);
-	list_append_list(&tmp, &c->outq_waiters);
-	spin_unlock_np(&c->outq_lock);
-
-	/* wake all blocked threads */
-	while (true) {
-		th = list_pop(&tmp, thread_t, link);
-		if (!th)
-			break;
-		thread_ready(th);
-	}
-
 	/* free all in-flight mbufs */
 	while (true) {
-		struct mbuf *m = mbufq_pop_head(&q);
+		struct mbuf *m = mbufq_pop_head(&c->inq);
 		if (!m)
 			break;
 		mbuf_free(m);
@@ -497,19 +468,47 @@ void udp_shutdown(udpconn_t *c)
 }
 
 /**
+ * udp_shutdown - disables a UDP socket
+ * @c: the socket to disable
+ *
+ * All blocking requests on the socket will return a failure.
+ */
+void udp_shutdown(udpconn_t *c)
+{
+	/* shutdown the UDP socket */
+	__udp_shutdown(c);
+
+	/* wake all blocked threads */
+	while (true) {
+		thread_t *th = list_pop(&c->inq_waiters, thread_t, link);
+		if (!th)
+			break;
+		thread_ready(th);
+	}
+	while (true) {
+		thread_t *th = list_pop(&c->outq_waiters, thread_t, link);
+		if (!th)
+			break;
+		thread_ready(th);
+	}
+}
+
+/**
  * udp_close - frees a UDP socket
  * @c: the socket to free
  *
- * If the socket is not shutdown, this function will first call udp_shutdown().
- * WARNING: Do not reference the connection after calling this function, as its
- * backing memory will be freed.
+ * WARNING: Only the last reference can safely call this method. Call
+ * udp_shutdown() first if any threads are sleeping on the socket.
  */
 void udp_close(udpconn_t *c)
 {
 	bool free_conn;
 
 	if (!c->shutdown)
-		udp_shutdown(c);
+		__udp_shutdown(c);
+
+	BUG_ON(!list_empty(&c->inq_waiters));
+	BUG_ON(!list_empty(&c->outq_waiters));
 
 	spin_lock_np(&c->outq_lock);
 	free_conn = c->outq_len == 0;

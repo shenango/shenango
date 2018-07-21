@@ -130,6 +130,7 @@ static inline void spin_unlock_np(spinlock_t *l)
 	preempt_enable();
 }
 
+
 /*
  * Barrier support
  */
@@ -146,6 +147,7 @@ typedef struct barrier barrier_t;
 extern void barrier_init(barrier_t *b, int count);
 extern bool barrier_wait(barrier_t *b);
 
+
 /*
  * Read-write mutex support
  */
@@ -155,7 +157,7 @@ struct rwmutex {
 	int			count;
 	struct list_head	read_waiters;
 	struct list_head	write_waiters;
-	int 		read_waiter_count;
+	int			read_waiter_count;
 };
 
 typedef struct rwmutex rwmutex_t;
