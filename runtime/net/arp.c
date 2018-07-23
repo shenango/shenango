@@ -342,22 +342,11 @@ int arp_lookup(uint32_t daddr, struct eth_addr *dhost_out, struct mbuf *m)
  */
 int arp_init(void)
 {
-	int i, idx;
-	struct arp_entry *e;
+	int i;
 
 	spin_lock_init(&arp_lock);
 	for (i = 0; i < ARP_TABLE_CAPACITY; i++)
 		rcu_hlist_init_head(&arp_tbl[i]);
-
-	for (i = 0; i < arp_static_count; i++) {
-		e = create_entry(static_entries[i].ip);
-		if (!e)
-			return -ENOMEM;
-		idx = hash_ip(static_entries[i].ip);
-		e->eth = static_entries[i].addr;
-		e->state = ARP_STATE_STATIC;
-		rcu_hlist_add_head(&arp_tbl[idx], &e->link);
-	}
 
 	return 0;
 }
@@ -369,5 +358,22 @@ int arp_init(void)
  */
 int arp_init_late(void)
 {
+	int i, idx;
+	struct arp_entry *e;
+
+	spin_lock_np(&arp_lock);
+
+	for (i = 0; i < arp_static_count; i++) {
+		e = create_entry(static_entries[i].ip);
+		if (!e)
+			return -ENOMEM;
+		idx = hash_ip(static_entries[i].ip);
+		e->eth = static_entries[i].addr;
+		e->state = ARP_STATE_STATIC;
+		rcu_hlist_add_head(&arp_tbl[idx], &e->link);
+	}
+
+	spin_unlock_np(&arp_lock);
+
 	return thread_spawn(arp_worker, NULL);
 }
