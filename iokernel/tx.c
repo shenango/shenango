@@ -171,8 +171,9 @@ bool tx_drain_completions()
 	for (i = 0; i < dp.nr_clients && drained < IOKERNEL_OVERFLOW_BATCH_DRAIN; i++) {
 		p = dp.clients[(pos + i) % dp.nr_clients];
 		drained += drain_overflow_queue(p, IOKERNEL_OVERFLOW_BATCH_DRAIN - drained);
-		pos++;
 	}
+
+	pos++;
 
 	STAT_INC(COMPLETION_DRAINED, drained);
 
