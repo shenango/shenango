@@ -290,8 +290,8 @@ ssize_t udp_read_from(udpconn_t *c, void *buf, size_t len,
 		spin_lock_np(&c->inq_lock);
 	}
 
-	/* is the socket drained and shutdown? */
-	if (mbufq_empty(&c->inq) && c->shutdown) {
+	/* is the socket shutdown? */
+	if (c->shutdown) {
 		spin_unlock_np(&c->inq_lock);
 		return 0;
 	}
