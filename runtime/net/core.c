@@ -358,27 +358,11 @@ int net_tx_eth(struct mbuf *m, uint16_t type, struct eth_addr dhost)
 	return 0;
 }
 
-/**
- * net_tx_ip - transmits an IP packet
- * @m: the mbuf to transmit
- * @proto: the transport protocol
- * @daddr: the destination IP address (in native byte order)
- *
- * The payload must start with the transport (L4) header. The IPv4 (L3) and
- * ethernet (L2) headers will be prepended by this function.
- *
- * @m must have been allocated with net_tx_alloc_mbuf().
- *
- * TODO: Support "don't fragment" (DF) flag?
- *
- * Returns 0 if successful. If successful, the mbuf will be freed when the
- * transmit completes. Otherwise, the mbuf still belongs to the caller.
- */
-int net_tx_ip(struct mbuf *m, uint8_t proto, uint32_t daddr)
+static void net_push_iphdr(struct mbuf *m, uint8_t proto, uint32_t daddr)
 {
-	struct eth_addr dhost;
 	struct ip_hdr *iphdr;
-	int ret;
+
+	/* TODO: Support "don't fragment" (DF) flag? */
 
 	/* populate IP header */
 	iphdr = mbuf_push_hdr(m, *iphdr);
@@ -399,13 +383,43 @@ int net_tx_ip(struct mbuf *m, uint8_t proto, uint32_t daddr)
 
 	/* calculate IP checksum */
 	iphdr->chksum = chksum_internet((void *)iphdr, sizeof(*iphdr));
+}
+
+static uint32_t net_get_ip_route(uint32_t daddr)
+{
+	/* simple IP routing */
+	if ((daddr & netcfg.netmask) != (netcfg.addr & netcfg.netmask))
+		daddr = netcfg.gateway;
+	return daddr;
+}
+
+/**
+ * net_tx_ip - transmits an IP packet
+ * @m: the mbuf to transmit
+ * @proto: the transport protocol
+ * @daddr: the destination IP address (in native byte order)
+ *
+ * The payload must start with the transport (L4) header. The IPv4 (L3) and
+ * ethernet (L2) headers will be prepended by this function.
+ *
+ * @m must have been allocated with net_tx_alloc_mbuf().
+ *
+ * Returns 0 if successful. If successful, the mbuf will be freed when the
+ * transmit completes. Otherwise, the mbuf still belongs to the caller.
+ */
+int net_tx_ip(struct mbuf *m, uint8_t proto, uint32_t daddr)
+{
+	struct eth_addr dhost;
+	int ret;
+
+	/* prepend the IP header */
+	net_push_iphdr(m, proto, daddr);
 
 	/* ask NIC to calculate IP checksum */
 	m->txflags |= OLFLAG_IP_CHKSUM | OLFLAG_IPV4;
 
-	/* simple IP routing */
-	if ((daddr & netcfg.netmask) != (netcfg.addr & netcfg.netmask))
-		daddr = netcfg.gateway;
+	/* apply IP routing */
+	daddr = net_get_ip_route(daddr);
 
 	/* need to use ARP to resolve dhost */
 	ret = arp_lookup(daddr, &dhost, m);
@@ -415,13 +429,72 @@ int net_tx_ip(struct mbuf *m, uint8_t proto, uint32_t daddr)
 			return 0;
 		} else {
 			/* An unrecoverable error occurred */
-			mbuf_pull_hdr(m, *iphdr);
+			mbuf_pull_hdr(m, struct ip_hdr);
 			return ret;
 		}
 	}
 
 	ret = net_tx_eth(m, ETHTYPE_IP, dhost);
 	assert(!ret); /* can't fail as implemented so far */
+	return 0;
+}
+
+/**
+ * net_tx_ip_burst - transmits a burst of IP packets
+ * @ms: an array of mbuf pointers to transmit
+ * @n: the number of mbufs in @ms
+ * @proto: the transport protocol
+ * @daddr: the destination IP address (in native byte order)
+ *
+ * The payload must start with the transport (L4) header. The IPv4 (L3) and
+ * ethernet (L2) headers will be prepended by this function.
+ *
+ * @ms must have been allocated with net_tx_alloc_mbuf().
+ *
+ * Returns 0 if successful. If successful, the mbuf will be freed when the
+ * transmit completes. Otherwise, the mbuf still belongs to the caller. If
+ * ARP doesn't have a cached entry, only the first packet will be transmitted
+ * when the ARP request resolves.
+ */
+int net_tx_ip_burst(struct mbuf **ms, int n, uint8_t proto, uint32_t daddr)
+{
+	struct eth_addr dhost;
+	int ret, i;
+
+	assert(n > 0);
+
+	/* prepare the mbufs */
+	for (i = 0; i < n; i++) {
+		/* prepend the IP header */
+		net_push_iphdr(ms[i], proto, daddr);
+
+		/* ask NIC to calculate IP checksum */
+		ms[i]->txflags |= OLFLAG_IP_CHKSUM | OLFLAG_IPV4;
+	}
+
+	/* apply IP routing */
+	daddr = net_get_ip_route(daddr);
+
+	/* use ARP to resolve dhost */
+	ret = arp_lookup(daddr, &dhost, ms[0]);
+	if (unlikely(ret)) {
+		if (ret == -EINPROGRESS) {
+			/* ARP code now owns the first mbuf */
+			return 0;
+		} else {
+			/* An unrecoverable error occurred */
+			for (i = 0; i < n; i++)
+				mbuf_pull_hdr(ms[i], struct ip_hdr);
+			return ret;
+		}
+	}
+
+	/* finally, transmit the packets */
+	for (i = 0; i < n; i++) {
+		ret = net_tx_eth(ms[i], ETHTYPE_IP, dhost);
+		assert(!ret); /* can't fail as implemented so far */
+	}
+
 	return 0;
 }
 
