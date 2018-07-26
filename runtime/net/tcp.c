@@ -136,7 +136,7 @@ static int tcp_tx_ctl(tcpconn_t *c, uint8_t flags)
  * Connection initialization
  */
 
-static tcpconn_t *tcp_conn_alloc(void)
+static tcpconn_t *tcp_conn_alloc(int state)
 {
 	tcpconn_t *c;
 
@@ -159,6 +159,7 @@ static tcpconn_t *tcp_conn_alloc(void)
 	mbufq_init(&c->outq);
 
 	/* initialize egress half of PCB */
+	c->pcb.state = state;
 	c->pcb.iss = rand_crc32c(0xDEADBEEF); /* TODO: not secure */
 	c->pcb.snd_nxt = c->pcb.iss;
 	c->pcb.snd_una = c->pcb.iss;
@@ -242,10 +243,9 @@ static void tcp_queue_recv(struct trans_entry *e, struct mbuf *m)
 		goto done;
 
 	/* we have a valid SYN packet, initialize a new connection */
-	c = tcp_conn_alloc();
+	c = tcp_conn_alloc(TCP_STATE_SYN_RECEIVED);
 	if (unlikely(!c))
 		goto done;
-	c->pcb.state = TCP_STATE_SYN_RECEIVED;
 	c->pcb.irs = ntoh32(tcphdr->seq);
 	c->pcb.rcv_nxt = c->pcb.irs + 1;
 
@@ -434,24 +434,61 @@ void tcp_qclose(tcpqueue_t *q)
  * Support for the TCP socket API
  */
 
+/**
+ * tcp_dial - opens a TCP connection, creating a new socket
+ * @laddr: the local address
+ * @raddr: the remote address
+ * @c_out: a pointer to store the new connection
+ *
+ * Returns 0 if successful, otherwise fail.
+ */
 int tcp_dial(struct netaddr laddr, struct netaddr raddr, tcpconn_t **c_out)
 {
-	return -ENOTSUP;
+	tcpconn_t *c;
+	int ret;
+
+	/* create and initialize a connection */
+	c = tcp_conn_alloc(TCP_STATE_SYN_SENT);
+	if (unlikely(!c))
+		return -ENOMEM;
+
+	/*
+	 * Attach the connection to the transport layer. From this point onward
+	 * ingress packets can be dispatched to the connection.
+	 */
+	ret = tcp_conn_attach(c, laddr, raddr);
+	if (unlikely(!ret)) {
+		sfree(c);
+		return ret;
+	}
+
+	/* finally, send a SYN to the remote host */
+	ret = tcp_tx_ctl(c, TCP_SYN);
+	if (unlikely(!ret)) {
+		tcp_conn_destroy(c);
+		return ret;
+	}
+
+	*c_out = c;
+	return 0;
 }
 
+/**
+ * tcp_local_addr - gets the local address of a TCP connection
+ * @c: the TCP connection
+ */
 struct netaddr tcp_local_addr(tcpconn_t *c)
 {
 	return c->e.laddr;
 }
 
+/**
+ * tcp_remote_addr - gets the remote address of a TCP connection
+ * @c: the TCP connection
+ */
 struct netaddr tcp_remote_addr(tcpconn_t *c)
 {
 	return c->e.raddr;
-}
-
-int tcp_set_buffers(tcpconn_t *c, size_t read_len, size_t write_len)
-{
-	return -ENOTSUP;
 }
 
 ssize_t tcp_read(tcpconn_t *c, void *buf, size_t len)

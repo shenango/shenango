@@ -20,7 +20,6 @@ extern void tcp_qshutdown(tcpqueue_t *q);
 extern void tcp_qclose(tcpqueue_t *q);
 extern struct netaddr tcp_local_addr(tcpconn_t *c);
 extern struct netaddr tcp_remote_addr(tcpconn_t *c);
-extern int tcp_set_buffers(tcpconn_t *c, size_t read_len, size_t write_len);
 extern ssize_t tcp_read(tcpconn_t *c, void *buf, size_t len);
 extern ssize_t tcp_write(tcpconn_t *c, const void *buf, size_t len);
 extern ssize_t tcp_readv(const struct iovec *iov, int iovcnt);
