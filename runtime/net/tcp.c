@@ -16,6 +16,17 @@
 #include "tcp.h"
 #include "defs.h"
 
+static void mbufq_release(struct mbufq *q)
+{
+	struct mbuf *m;
+	while (true) {
+		m = mbufq_pop_head(q);
+		if (!m)
+			break;
+		mbuf_free(m);
+	}
+}
+
 #define TCP_MSS	(ETH_MTU - sizeof(struct ip_hdr) - sizeof(struct tcp_hdr))
 #define TCP_WIN	((32768 / TCP_MSS) * TCP_MSS)
 
@@ -166,9 +177,19 @@ static int tcp_conn_attach(tcpconn_t *c, struct netaddr laddr,
 	return trans_table_add(&c->e);
 }
 
+static void tcp_conn_release(struct rcu_head *h)
+{
+	tcpconn_t *c = container_of(h, tcpconn_t, e.rcu);
+	mbufq_release(&c->ooo_rxq);
+	mbufq_release(&c->inq);
+	mbufq_release(&c->outq);
+	sfree(c);
+}
+
 static void tcp_conn_destroy(tcpconn_t *c)
 {
-	/* TODO: implement this */
+	trans_table_remove(&c->e);
+	rcu_free(&c->e.rcu, tcp_conn_release);
 }
 
 
@@ -233,7 +254,7 @@ static void tcp_queue_recv(struct trans_entry *e, struct mbuf *m)
 	 * ingress packets can be dispatched to the connection.
 	 */
 	ret = tcp_conn_attach(c, laddr, raddr);
-	if (!ret) {
+	if (unlikely(!ret)) {
 		sfree(c);
 		goto done;
 	}
@@ -254,6 +275,7 @@ static void tcp_queue_recv(struct trans_entry *e, struct mbuf *m)
 	}
 	list_add_tail(&q->conns, &c->link);
 	th = list_pop(&q->waiters, thread_t, link);
+	q->backlog--;
 	spin_unlock_np(&q->l);
 	if (th)
 		thread_ready(th);
@@ -376,7 +398,7 @@ void tcp_qshutdown(tcpqueue_t *q)
 	}
 }
 
-static void tcp_release_queue(struct rcu_head *h)
+static void tcp_queue_release(struct rcu_head *h)
 {
 	tcpqueue_t *q = container_of(h, tcpqueue_t, e.rcu);
 	sfree(q);
@@ -404,7 +426,7 @@ void tcp_qclose(tcpqueue_t *q)
 		tcp_conn_destroy(c);
 	}
 
-	rcu_free(&q->e.rcu, tcp_release_queue);
+	rcu_free(&q->e.rcu, tcp_queue_release);
 }
 
 
