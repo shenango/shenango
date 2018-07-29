@@ -23,8 +23,12 @@ static void softirq_fn(void *arg)
 	int i;
 
 	/* complete TX requests and free packets */
-	for (i = 0; i < w->compl_cnt; i++)
-		mbuf_free(w->compl_reqs[i]);
+	for (i = 0; i < w->compl_cnt; i++) {
+		if (kref_released(&w->compl_reqs[i]->ref))
+			mbuf_free(w->compl_reqs[i]);
+		else
+			mbuf_rput(w->compl_reqs[i]);
+	}
 
 	/* deliver new RX packets to the runtime */
 	net_rx_softirq(w->recv_reqs, w->recv_cnt);

@@ -13,6 +13,7 @@
 #include <runtime/udp.h>
 
 #include "defs.h"
+#include "waitq.h"
 
 #define UDP_IN_DEFAULT_CAP	512
 #define UDP_OUT_DEFAULT_CAP	2048
@@ -47,7 +48,7 @@ struct udpconn {
 	int			inq_cap;
 	int			inq_len;
 	int			inq_err;
-	struct list_head	inq_waiters;
+	waitq_t			inq_wq;
 	struct mbufq		inq;
 
 	/* egress support */
@@ -55,7 +56,7 @@ struct udpconn {
 	bool			outq_free;
 	int			outq_cap;
 	int			outq_len;
-	struct list_head	outq_waiters;
+	waitq_t			outq_wq;
 };
 
 /* handles ingress packets for UDP sockets */
@@ -82,33 +83,22 @@ static void udp_conn_recv(struct trans_entry *e, struct mbuf *m)
 	c->inq_len++;
 
 	/* wake up a waiter */
-	th = list_pop(&c->inq_waiters, thread_t, link);
+	th = waitq_signal(&c->inq_wq, &c->inq_lock);
 	spin_unlock_np(&c->inq_lock);
 
-	if (th)
-		thread_ready(th);
+	waitq_signal_finish(th);
 }
 
 /* handles network errors for UDP sockets */
 static void udp_conn_err(struct trans_entry *e, int err)
 {
 	udpconn_t *c = container_of(e, udpconn_t, e);
-	thread_t *th;
-	struct list_head tmp;
-
-	list_head_init(&tmp);
 
 	spin_lock_np(&c->inq_lock);
 	c->inq_err = err;
-	list_append_list(&tmp, &c->inq_waiters);
 	spin_unlock_np(&c->inq_lock);
 
-	while (true) {
-		th = list_pop(&tmp, thread_t, link);
-		if (!th)
-			break;
-		thread_ready(th);
-	}
+	waitq_release(&c->inq_wq);
 }
 
 /* operations for UDP sockets */
@@ -126,7 +116,7 @@ static void udp_init_conn(udpconn_t *c)
 	c->inq_cap = UDP_IN_DEFAULT_CAP;
 	c->inq_len = 0;
 	c->inq_err = 0;
-	list_head_init(&c->inq_waiters);
+	waitq_init(&c->inq_wq);
 	mbufq_init(&c->inq);
 
 	/* initialize egress fields */
@@ -134,7 +124,7 @@ static void udp_init_conn(udpconn_t *c)
 	c->outq_free = false;
 	c->outq_cap = UDP_OUT_DEFAULT_CAP;
 	c->outq_len = 0;
-	list_head_init(&c->outq_waiters);
+	waitq_init(&c->outq_wq);
 }
 
 static void udp_finish_release_conn(struct rcu_head *h)
@@ -145,7 +135,7 @@ static void udp_finish_release_conn(struct rcu_head *h)
 
 static void udp_release_conn(udpconn_t *c)
 {
-	assert(list_empty(&c->inq_waiters) && list_empty(&c->outq_waiters));
+	assert(waitq_empty(&c->inq_wq) && waitq_empty(&c->outq_wq));
 	assert(mbufq_empty(&c->inq));
 	rcu_free(&c->e.rcu, udp_finish_release_conn);
 }
@@ -284,11 +274,8 @@ ssize_t udp_read_from(udpconn_t *c, void *buf, size_t len,
 	spin_lock_np(&c->inq_lock);
 
 	/* block until there is an actionable event */
-	while (mbufq_empty(&c->inq) && !c->inq_err && !c->shutdown) {
-		list_add_tail(&c->inq_waiters, &thread_self()->link);
-		thread_park_and_unlock_np(&c->inq_lock);
-		spin_lock_np(&c->inq_lock);
-	}
+	while (mbufq_empty(&c->inq) && !c->inq_err && !c->shutdown)
+		waitq_wait(&c->inq_wq, &c->inq_lock);
 
 	/* is the socket drained and shutdown? */
 	if (mbufq_empty(&c->inq) && c->shutdown) {
@@ -323,19 +310,19 @@ ssize_t udp_read_from(udpconn_t *c, void *buf, size_t len,
 	return ret;
 }
 
-static void udp_tx_release_mbuf(struct mbuf *m)
+static void udp_tx_release_mbuf(struct kref *r)
 {
+	struct mbuf *m = container_of(r, struct mbuf, ref);
 	udpconn_t *c = (udpconn_t *)m->release_data;
 	thread_t *th;
 	bool free_conn;
 
 	spin_lock_np(&c->outq_lock);
 	c->outq_len--;
-	th = list_pop(&c->outq_waiters, thread_t, link);
 	free_conn = (c->outq_free && c->outq_len == 0);
+	th = waitq_signal(&c->outq_wq, &c->outq_lock);
 	spin_unlock_np(&c->outq_lock);
-	if (th)
-		thread_ready(th);
+	waitq_signal_finish(th);
 
 	net_tx_release_mbuf(m);
 	if (free_conn)
@@ -376,11 +363,8 @@ ssize_t udp_write_to(udpconn_t *c, const void *buf, size_t len,
 	spin_lock_np(&c->outq_lock);
 
 	/* block until there is an actionable event */
-	while (c->outq_len >= c->outq_cap && !c->shutdown) {
-		list_add_tail(&c->outq_waiters, &thread_self()->link);
-		thread_park_and_unlock_np(&c->outq_lock);
-		spin_lock_np(&c->outq_lock);
-	}
+	while (c->outq_len >= c->outq_cap && !c->shutdown)
+		waitq_wait(&c->outq_wq, &c->outq_lock);
 
 	/* is the socket shutdown? */
 	if (c->shutdown) {
@@ -471,18 +455,8 @@ void udp_shutdown(udpconn_t *c)
 	__udp_shutdown(c);
 
 	/* wake all blocked threads */
-	while (true) {
-		thread_t *th = list_pop(&c->inq_waiters, thread_t, link);
-		if (!th)
-			break;
-		thread_ready(th);
-	}
-	while (true) {
-		thread_t *th = list_pop(&c->outq_waiters, thread_t, link);
-		if (!th)
-			break;
-		thread_ready(th);
-	}
+	waitq_release(&c->inq_wq);
+	waitq_release(&c->outq_wq);
 }
 
 /**
@@ -499,8 +473,8 @@ void udp_close(udpconn_t *c)
 	if (!c->shutdown)
 		__udp_shutdown(c);
 
-	BUG_ON(!list_empty(&c->inq_waiters));
-	BUG_ON(!list_empty(&c->outq_waiters));
+	BUG_ON(!waitq_empty(&c->inq_wq));
+	BUG_ON(!waitq_empty(&c->outq_wq));
 
 	/* free all in-flight mbufs */
 	while (true) {

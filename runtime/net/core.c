@@ -72,8 +72,9 @@ void __noinline __net_recurrent(void)
  * RX Networking Functions
  */
 
-static void net_rx_release_mbuf(struct mbuf *m)
+static void net_rx_release_mbuf(struct kref *r)
 {
+	struct mbuf *m = container_of(r, struct mbuf, ref);
 	struct rx_net_hdr *hdr = container_of((void *)m->head,
 					      struct rx_net_hdr, payload);
 	struct kthread *k = getk();
@@ -274,6 +275,12 @@ void net_tx_release_mbuf(struct mbuf *m)
 	preempt_enable();
 }
 
+static void net_tx_release_mbuf_ref(struct kref *r)
+{
+	struct mbuf *m = container_of(r, struct mbuf, ref);
+	net_tx_release_mbuf(m);
+}
+
 /**
  * net_tx_alloc_mbuf - allocates an mbuf for transmitting.
  *
@@ -303,7 +310,7 @@ struct mbuf *net_tx_alloc_mbuf(void)
 	m->csum_type = CHECKSUM_TYPE_NEEDED;
 	m->txflags = 0;
 	m->release_data = 0;
-	m->release = net_tx_release_mbuf;
+	m->release = net_tx_release_mbuf_ref;
 	return m;
 }
 
@@ -451,9 +458,9 @@ int net_tx_ip(struct mbuf *m, uint8_t proto, uint32_t daddr)
  *
  * @ms must have been allocated with net_tx_alloc_mbuf().
  *
- * Returns 0 if successful. If successful, the mbuf will be freed when the
- * transmit completes. Otherwise, the mbuf still belongs to the caller. If
- * ARP doesn't have a cached entry, only the first packet will be transmitted
+ * Returns 0 if successful. If successful, the mbufs will be freed when the
+ * transmit completes. Otherwise, the mbufs still belongs to the caller. If
+ * ARP doesn't have a cached entry, only the first mbuf will be transmitted
  * when the ARP request resolves.
  */
 int net_tx_ip_burst(struct mbuf **ms, int n, uint8_t proto, uint32_t daddr)

@@ -80,6 +80,21 @@ static inline bool mbufq_empty(struct mbufq *q)
 }
 
 /**
+ * mbufq_release - frees all the mbufs in the queue
+ * @q: the queue to release
+ */
+static inline void mbufq_release(struct mbufq *q)
+{
+	struct mbuf *m;
+	while (true) {
+		m = mbufq_pop_head(q);
+		if (!m)
+			break;
+		mbuf_free(m);
+	}
+}
+
+/**
  * mbufq_init - initializes a queue
  * @q: the mbuf queue to initialize
  */

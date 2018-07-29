@@ -25,6 +25,17 @@ kref_init(struct kref *ref)
 }
 
 /**
+ * kref_initn - initializes the reference count to @n
+ * @ref: the kref
+ * @n: the initial reference count
+ */
+static inline void
+kref_initn(struct kref *ref, int n)
+{
+	atomic_write(&ref->cnt, n);
+}
+
+/**
  * kref_get - atomically increments the reference count
  * @ref: the kref
  */

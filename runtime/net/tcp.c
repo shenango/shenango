@@ -5,49 +5,12 @@
 #include <string.h>
 
 #include <base/stddef.h>
-#include <base/kref.h>
-#include <base/list.h>
 #include <base/hash.h>
 #include <runtime/smalloc.h>
-#include <runtime/sync.h>
 #include <runtime/thread.h>
 #include <runtime/tcp.h>
 
 #include "tcp.h"
-#include "defs.h"
-
-static void mbufq_release(struct mbufq *q)
-{
-	struct mbuf *m;
-	while (true) {
-		m = mbufq_pop_head(q);
-		if (!m)
-			break;
-		mbuf_free(m);
-	}
-}
-
-#define TCP_MSS	(ETH_MTU - sizeof(struct ip_hdr) - sizeof(struct tcp_hdr))
-#define TCP_WIN	((32768 / TCP_MSS) * TCP_MSS)
-
-struct tcpconn {
-	struct trans_entry	e;
-	struct tcp_pcb		pcb;
-	struct list_node	link;
-	spinlock_t		lock;
-
-	/* mbufs waiting to be resequenced */
-	struct mbufq		ooo_rxq;
-
-	/* ingress queue */
-	int			inq_err;
-	struct list_head	inq_waiters;
-	struct mbufq		inq;
-
-	/* egress queue */
-	struct list_head	outq_waiters;
-	struct mbufq		outq;
-};
 
 
 /*
@@ -74,69 +37,16 @@ const struct trans_ops tcp_conn_ops = {
 
 
 /*
- * Egress path
- */
-
-static struct mbuf *
-tcp_tx_alloc_pkt(uint16_t sport, uint16_t dport, uint32_t seq, uint32_t ack,
-		 uint8_t flags, uint16_t win)
-{
-	struct tcp_hdr *tcphdr;
-	struct mbuf *m;
-
-	m = net_tx_alloc_mbuf();
-	if (!m)
-		return NULL;
-
-	/* write the tcp header */
-	tcphdr = mbuf_push_hdr(m, *tcphdr);
-	tcphdr->sport = hton16(sport);
-	tcphdr->dport = hton16(dport);
-	tcphdr->seq = hton32(seq);
-	tcphdr->ack = hton32(ack);
-	tcphdr->off = 5;
-	tcphdr->flags = flags;
-	tcphdr->win = hton16(win);
-	return m;
-}
-
-static int
-tcp_tx_raw_rst(struct netaddr laddr, struct netaddr raddr, tcp_seq seq)
-{
-	struct mbuf *m;
-
-	m = tcp_tx_alloc_pkt(laddr.port, raddr.port, seq, 0, TCP_RST, 0);
-	if (unlikely(!m))
-		return -ENOMEM;
-
-	return net_tx_ip(m, IPPROTO_TCP, raddr.ip);
-}
-
-static int tcp_tx_ctl(tcpconn_t *c, uint8_t flags)
-{
-	struct mbuf *m;
-
-	spin_lock_np(&c->lock);
-	m = tcp_tx_alloc_pkt(c->e.laddr.port, c->e.raddr.port,
-			     c->pcb.snd_nxt++, c->pcb.rcv_nxt,
-			     flags, c->pcb.rcv_wnd);
-	if (unlikely(!m)) {
-		spin_unlock_np(&c->lock);
-		return -ENOMEM;
-	}
-	if (!(flags & TCP_RST))
-		mbufq_push_tail(&c->outq, m);
-	spin_unlock_np(&c->lock);
-
-	return net_tx_ip(m, IPPROTO_TCP, c->e.raddr.ip);
-}
-
-
-/*
  * Connection initialization
  */
 
-static tcpconn_t *tcp_conn_alloc(int state)
+/**
+ * tcp_conn_alloc - allocates a TCP connection struct
+ * @state: the initial PCB state of the connection
+ *
+ * Returns a connection, or NULL if out of memory.
+ */
+tcpconn_t *tcp_conn_alloc(int state)
 {
 	tcpconn_t *c;
 
@@ -147,16 +57,20 @@ static tcpconn_t *tcp_conn_alloc(int state)
 	/* general fields */
 	memset(&c->pcb, 0, sizeof(c->pcb));
 	spin_lock_init(&c->lock);
-	mbufq_init(&c->ooo_rxq);
 
 	/* ingress fields */
-	c->inq_err = 0;
-	list_head_init(&c->inq_waiters);
-	mbufq_init(&c->inq);
+	c->rx_err = 0;
+	waitq_init(&c->rx_wq);
+	mbufq_init(&c->rxq_ooo);
+	mbufq_init(&c->rxq);
 
 	/* egress fields */
-	list_head_init(&c->outq_waiters);
-	mbufq_init(&c->outq);
+	c->tx_exclusive = false;
+	waitq_init(&c->tx_wq);
+	c->tx_last_ack = 0;
+	c->tx_last_win = 0;
+	c->tx_pending = NULL;
+	mbufq_init(&c->txq);
 
 	/* initialize egress half of PCB */
 	c->pcb.state = state;
@@ -168,8 +82,16 @@ static tcpconn_t *tcp_conn_alloc(int state)
 	return c;
 }
 
-static int tcp_conn_attach(tcpconn_t *c, struct netaddr laddr,
-			   struct netaddr raddr)
+/**
+ * tcp_conn_attach - attaches a connection to the transport layer
+ * @c: the connection to attach
+ * @laddr: the local network address
+ * @raddr: the remote network address
+ *
+ * After calling this function, if successful, ingress packets and errors will
+ * be delivered.
+ */
+int tcp_conn_attach(tcpconn_t *c, struct netaddr laddr, struct netaddr raddr)
 {
 	/* register the connection with the transport layer */
 	trans_init_5tuple(&c->e, IPPROTO_TCP, &tcp_conn_ops, laddr, raddr);
@@ -181,13 +103,17 @@ static int tcp_conn_attach(tcpconn_t *c, struct netaddr laddr,
 static void tcp_conn_release(struct rcu_head *h)
 {
 	tcpconn_t *c = container_of(h, tcpconn_t, e.rcu);
-	mbufq_release(&c->ooo_rxq);
-	mbufq_release(&c->inq);
-	mbufq_release(&c->outq);
+	mbufq_release(&c->rxq_ooo);
+	mbufq_release(&c->rxq);
+	mbufq_release(&c->txq);
 	sfree(c);
 }
 
-static void tcp_conn_destroy(tcpconn_t *c)
+/**
+ * tcp_conn_destroy - tears down a frees a TCP connection
+ * @c: the connection to destroy
+ */
+void tcp_conn_destroy(tcpconn_t *c)
 {
 	trans_table_remove(&c->e);
 	rcu_free(&c->e.rcu, tcp_conn_release);
@@ -201,7 +127,7 @@ static void tcp_conn_destroy(tcpconn_t *c)
 struct tcpqueue {
 	struct trans_entry	e;
 	spinlock_t		l;
-	struct list_head	waiters;
+	waitq_t			wq;
 	struct list_head	conns;
 	int			backlog;
 	bool			shutdown;
@@ -242,10 +168,19 @@ static void tcp_queue_recv(struct trans_entry *e, struct mbuf *m)
 	if (ntoh16(iphdr->len) - sizeof(*iphdr) != sizeof(*tcphdr))
 		goto done;
 
+	/* make sure the connection queue isn't full */
+	spin_lock_np(&q->l);
+	if (unlikely(q->backlog == 0 || q->shutdown)) {
+		spin_unlock_np(&q->l);
+		goto done;
+	}
+	q->backlog--;
+	spin_unlock_np(&q->l);
+
 	/* we have a valid SYN packet, initialize a new connection */
 	c = tcp_conn_alloc(TCP_STATE_SYN_RECEIVED);
 	if (unlikely(!c))
-		goto done;
+		goto give_back;
 	c->pcb.irs = ntoh32(tcphdr->seq);
 	c->pcb.rcv_nxt = c->pcb.irs + 1;
 
@@ -256,7 +191,7 @@ static void tcp_queue_recv(struct trans_entry *e, struct mbuf *m)
 	ret = tcp_conn_attach(c, laddr, raddr);
 	if (unlikely(!ret)) {
 		sfree(c);
-		goto done;
+		goto give_back;
 	}
 
 	/* finally, send a SYN/ACK to the remote host */
@@ -268,18 +203,16 @@ static void tcp_queue_recv(struct trans_entry *e, struct mbuf *m)
 
 	/* wake a thread to accept the connection */
 	spin_lock_np(&q->l);
-	if (unlikely(q->backlog == 0 || q->shutdown)) {
-		spin_unlock_np(&q->l);
-		tcp_conn_destroy(c);
-		goto done;
-	}
 	list_add_tail(&q->conns, &c->link);
-	th = list_pop(&q->waiters, thread_t, link);
-	q->backlog--;
+	th = waitq_signal(&q->wq, &q->l);
 	spin_unlock_np(&q->l);
-	if (th)
-		thread_ready(th);
+	waitq_signal_finish(th);
+	goto done;
 
+give_back:
+	spin_lock_np(&q->l);
+	q->backlog++;
+	spin_unlock_np(&q->l);
 done:
 	mbuf_free(m);
 }
@@ -317,7 +250,7 @@ int tcp_listen(struct netaddr laddr, int backlog, tcpqueue_t **q_out)
 
 	trans_init_3tuple(&q->e, IPPROTO_TCP, &tcp_queue_ops, laddr);
 	spin_lock_init(&q->l);
-	list_head_init(&q->waiters);
+	waitq_init(&q->wq);
 	list_head_init(&q->conns);
 	q->backlog = backlog;
 	q->shutdown = false;
@@ -344,13 +277,10 @@ int tcp_accept(tcpqueue_t *q, tcpconn_t **c_out)
 	tcpconn_t *c;
 
 	spin_lock_np(&q->l);
-	while (list_empty(&q->conns) && !q->shutdown) {
-		list_add_tail(&q->waiters, &thread_self()->link);
-		thread_park_and_unlock_np(&q->l);
-		spin_lock_np(&q->l);
-	}
+	while (list_empty(&q->conns) && !q->shutdown)
+		waitq_wait(&q->wq, &q->l);
 
-	/* was the queue drained ande shutdown? */
+	/* was the queue drained and shutdown? */
 	if (list_empty(&q->conns) && q->shutdown) {
 		spin_unlock_np(&q->l);
 		return -EPIPE;
@@ -390,12 +320,7 @@ void tcp_qshutdown(tcpqueue_t *q)
 	__tcp_qshutdown(q);
 
 	/* wake up all pending threads */
-	while (true) {
-		thread_t *th = list_pop(&q->waiters, thread_t, link);
-		if (!th)
-			break;
-		thread_ready(th);
-	}
+	waitq_release(&q->wq);
 }
 
 static void tcp_queue_release(struct rcu_head *h)
@@ -418,7 +343,7 @@ void tcp_qclose(tcpqueue_t *q)
 	if (!q->shutdown)
 		__tcp_qshutdown(q);
 
-	BUG_ON(!list_empty(&q->waiters));
+	BUG_ON(!waitq_empty(&q->wq));
 
 	/* free all pending connections */
 	list_for_each_safe(&q->conns, c, nextc, link) {
