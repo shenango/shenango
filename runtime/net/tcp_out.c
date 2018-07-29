@@ -87,10 +87,12 @@ int tcp_tx_ctl(tcpconn_t *c, uint8_t flags)
 		mbuf_free(m);
 		return -EAGAIN;
 	}
+	m->seg = c->pcb.snd_nxt;
 	tcphdr->seq = hton32(c->pcb.snd_nxt++);
 	mbufq_push_tail(&c->rxq, m);
 	spin_unlock_np(&c->lock);
 
+	m->timestamp = microtime();
 	ret = net_tx_ip(m, IPPROTO_TCP, c->e.raddr.ip);
 	if (unlikely(ret))
 		mbuf_rput(m);

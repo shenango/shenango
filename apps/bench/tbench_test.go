@@ -50,27 +50,27 @@ func BenchmarkCondvarPingPong(b *testing.B) {
 	dir := bool(false)
 
 	go func() {
+		m.Lock()
 		for i := 0; i < b.N / 2; i++ {
-			m.Lock()
 			for dir {
 				cv.Wait()
 			}
 			dir = true
 			cv.Signal()
-			m.Unlock()
 		}
+		m.Unlock()
 		c <- 1
 	}()
 
+	m.Lock()
 	for i := 0; i < b.N / 2; i++ {
-		m.Lock()
 		for !dir {
 			cv.Wait()
 		}
 		dir = false
 		cv.Signal()
-		m.Unlock()
 	}
+	m.Unlock()
 
 	<-c
 }

@@ -44,8 +44,8 @@ void BenchCondvarPingPong() {
   bool dir = false; // shared and protected by @m.
 
   auto th = rt::Thread([&](){
+    rt::ScopedLock<rt::Mutex> l(&m);
     for (int i = 0; i < kMeasureRounds / 2; ++i) {
-      rt::ScopedLock<rt::Mutex> l(&m);
       while (dir)
         cv.Wait(&m);
       dir = true;
@@ -53,8 +53,8 @@ void BenchCondvarPingPong() {
     }
   });
 
+  rt::ScopedLock<rt::Mutex> l(&m);
   for (int i = 0; i < kMeasureRounds / 2; ++i) {
-    rt::ScopedLock<rt::Mutex> l(&m);
     while (!dir)
       cv.Wait(&m);
     dir = false;

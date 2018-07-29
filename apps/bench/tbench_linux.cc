@@ -44,8 +44,8 @@ void BenchCondvarPingPong() {
   bool dir = false; // shared and protected by @m.
 
   auto th = std::thread([&](){
+    std::unique_lock<std::mutex> l(m);
     for (int i = 0; i < kMeasureRounds / 2; ++i) {
-      std::unique_lock<std::mutex> l(m);
       while (dir)
         cv.wait(l);
       dir = true;
@@ -53,8 +53,8 @@ void BenchCondvarPingPong() {
     }
   });
 
+  std::unique_lock<std::mutex> l(m);
   for (int i = 0; i < kMeasureRounds / 2; ++i) {
-    std::unique_lock<std::mutex> l(m);
     while (!dir)
       cv.wait(l);
     dir = false;
