@@ -1,3 +1,7 @@
+/*
+ * tcp_out.c - the egress datapath for TCP
+ */
+
 #include <string.h>
 
 #include <base/stddef.h>
@@ -64,11 +68,12 @@ int tcp_tx_raw_rst(struct netaddr laddr, struct netaddr raddr, tcp_seq seq)
  * tcp_tx_ctl - sends a control message without data
  * @c: the TCP connection
  * @flags: the control flags (e.g. TCP_ACK, etc.)
+ * @retransmit: should the control message be retransmitted?
  *
  * Returns 0 if successful, -ENOMEM if out memory, and -EAGAIN if another
  * thread has transmit exclusive rights on the connection.
  */
-int tcp_tx_ctl(tcpconn_t *c, uint8_t flags)
+int tcp_tx_ctl(tcpconn_t *c, uint8_t flags, bool retransmit)
 {
 	struct tcp_hdr *tcphdr;
 	struct mbuf *m;
@@ -78,7 +83,7 @@ int tcp_tx_ctl(tcpconn_t *c, uint8_t flags)
 	if (unlikely(!m))
 		return -ENOMEM;
 
-	kref_initn(&m->ref, 2);
+	kref_initn(&m->ref, retransmit ? 2 : 1);
 	tcphdr = tcp_push_tcphdr(m, c, flags);
 
 	spin_lock_np(&c->lock);
@@ -88,8 +93,11 @@ int tcp_tx_ctl(tcpconn_t *c, uint8_t flags)
 		return -EAGAIN;
 	}
 	m->seg = c->pcb.snd_nxt;
-	tcphdr->seq = hton32(c->pcb.snd_nxt++);
-	mbufq_push_tail(&c->rxq, m);
+	tcphdr->seq = hton32(c->pcb.snd_nxt);
+	if (retransmit) {
+		c->pcb.snd_nxt++;
+		mbufq_push_tail(&c->rxq, m);
+	}
 	spin_unlock_np(&c->lock);
 
 	m->timestamp = microtime();

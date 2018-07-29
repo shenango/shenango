@@ -12,17 +12,6 @@
 
 #include "tcp.h"
 
-
-/*
- * Ingress path
- */
-
-/* handles ingress packets for TCP sockets */
-static void tcp_conn_recv(struct trans_entry *e, struct mbuf *m)
-{
-
-}
-
 /* handles network errors for TCP sockets */
 static void tcp_conn_err(struct trans_entry *e, int err)
 {
@@ -31,7 +20,7 @@ static void tcp_conn_err(struct trans_entry *e, int err)
 
 /* operations for TCP sockets */
 const struct trans_ops tcp_conn_ops = {
-	.recv = tcp_conn_recv,
+	.recv = tcp_rx_conn,
 	.err = tcp_conn_err,
 };
 
@@ -136,37 +125,8 @@ struct tcpqueue {
 static void tcp_queue_recv(struct trans_entry *e, struct mbuf *m)
 {
 	tcpqueue_t *q = container_of(e, tcpqueue_t, e);
-	struct netaddr laddr, raddr;
-	const struct ip_hdr *iphdr;
-	const struct tcp_hdr *tcphdr;
 	tcpconn_t *c;
 	thread_t *th;
-	int ret;
-
-	/* find header offsets */
-	iphdr = mbuf_network_hdr(m, *iphdr);
-	tcphdr = mbuf_pull_hdr_or_null(m, *tcphdr);
-	if (unlikely(!tcphdr))
-		goto done;
-
-	/* calculate local and remote network addresses */
-	laddr = q->e.laddr;
-	raddr.ip = ntoh32(iphdr->saddr);
-	raddr.port = ntoh16(tcphdr->sport);
-
-	/* do exactly what RFC 793 says */
-	if ((tcphdr->flags & TCP_RST) > 0)
-		goto done;
-	if ((tcphdr->flags & TCP_ACK) > 0) {
-		tcp_tx_raw_rst(laddr, raddr, ntoh32(tcphdr->ack));
-		goto done;
-	}
-	if ((tcphdr->flags & TCP_SYN) == 0)
-		goto done;
-
-	/* TODO: the spec requires us to enqueue but not post any data */
-	if (ntoh16(iphdr->len) - sizeof(*iphdr) != sizeof(*tcphdr))
-		goto done;
 
 	/* make sure the connection queue isn't full */
 	spin_lock_np(&q->l);
@@ -177,27 +137,12 @@ static void tcp_queue_recv(struct trans_entry *e, struct mbuf *m)
 	q->backlog--;
 	spin_unlock_np(&q->l);
 
-	/* we have a valid SYN packet, initialize a new connection */
-	c = tcp_conn_alloc(TCP_STATE_SYN_RECEIVED);
-	if (unlikely(!c))
-		goto give_back;
-	c->pcb.irs = ntoh32(tcphdr->seq);
-	c->pcb.rcv_nxt = c->pcb.irs + 1;
-
-	/*
-	 * Attach the connection to the transport layer. From this point onward
-	 * ingress packets can be dispatched to the connection.
-	 */
-	ret = tcp_conn_attach(c, laddr, raddr);
-	if (unlikely(!ret)) {
-		sfree(c);
-		goto give_back;
-	}
-
-	/* finally, send a SYN/ACK to the remote host */
-	ret = tcp_tx_ctl(c, TCP_SYN | TCP_ACK);
-	if (unlikely(!ret)) {
-		tcp_conn_destroy(c);
+	/* create a new connection */
+	c = tcp_rx_listener(e->laddr, m);
+	if (!c) {
+		spin_lock_np(&q->l);
+		q->backlog++;
+		spin_unlock_np(&q->l);
 		goto done;
 	}
 
@@ -207,12 +152,7 @@ static void tcp_queue_recv(struct trans_entry *e, struct mbuf *m)
 	th = waitq_signal(&q->wq, &q->l);
 	spin_unlock_np(&q->l);
 	waitq_signal_finish(th);
-	goto done;
 
-give_back:
-	spin_lock_np(&q->l);
-	q->backlog++;
-	spin_unlock_np(&q->l);
 done:
 	mbuf_free(m);
 }
@@ -388,7 +328,7 @@ int tcp_dial(struct netaddr laddr, struct netaddr raddr, tcpconn_t **c_out)
 	}
 
 	/* finally, send a SYN to the remote host */
-	ret = tcp_tx_ctl(c, TCP_SYN);
+	ret = tcp_tx_ctl(c, TCP_SYN, true);
 	if (unlikely(!ret)) {
 		tcp_conn_destroy(c);
 		return ret;

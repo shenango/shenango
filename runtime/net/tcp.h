@@ -78,10 +78,18 @@ extern void tcp_conn_destroy(tcpconn_t *c);
 
 
 /*
+ * ingress path
+ */
+
+extern void tcp_rx_conn(struct trans_entry *e, struct mbuf *m);
+extern tcpconn_t *tcp_rx_listener(struct netaddr laddr, struct mbuf *m);
+
+
+/*
  * egress path
  */
 
 extern int tcp_tx_raw_rst(struct netaddr laddr, struct netaddr raddr,
 			  tcp_seq seq);
-extern int tcp_tx_ctl(tcpconn_t *c, uint8_t flags);
+extern int tcp_tx_ctl(tcpconn_t *c, uint8_t flags, bool retransmit);
 extern ssize_t tcp_tx_iov(tcpconn_t *c, const struct iovec *iov, int iovcnt);
