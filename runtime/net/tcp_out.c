@@ -87,6 +87,7 @@ int tcp_tx_ctl(tcpconn_t *c, uint8_t flags, bool retransmit)
 	tcphdr = tcp_push_tcphdr(m, c, flags);
 
 	spin_lock_np(&c->lock);
+	assert(!c->tx_pending);
 	if (c->tx_exclusive) {
 		spin_unlock_np(&c->lock);
 		mbuf_free(m);
@@ -96,7 +97,7 @@ int tcp_tx_ctl(tcpconn_t *c, uint8_t flags, bool retransmit)
 	tcphdr->seq = hton32(c->pcb.snd_nxt);
 	if (retransmit) {
 		c->pcb.snd_nxt++;
-		mbufq_push_tail(&c->rxq, m);
+		mbufq_push_tail(&c->txq, m);
 	}
 	spin_unlock_np(&c->lock);
 
@@ -115,7 +116,8 @@ int tcp_tx_ctl(tcpconn_t *c, uint8_t flags, bool retransmit)
  * @push: indicates the data is ready for consumption by the receiver
  *
  * If @push is false, the implementation may buffer some or all of the data for
- * future transmission.
+ * future transmission. tcp_tx_buf() must be called with @push equal to true
+ * before dropping TX exclusive on the socket.
  *
  * WARNING: The caller is responsible for respecting the TCP window size limit.
  *
@@ -129,7 +131,6 @@ ssize_t tcp_tx_buf(tcpconn_t *c, const void *buf, size_t len, bool push)
 	const char *end = pos + len;
 	ssize_t ret = 0;
 	size_t seglen;
-	uint8_t flags = TCP_ACK;
 
 	assert(c->pcb.state == TCP_STATE_SYN_SENT ||
 	       c->pcb.state == TCP_STATE_SYN_RECEIVED ||
@@ -148,6 +149,8 @@ ssize_t tcp_tx_buf(tcpconn_t *c, const void *buf, size_t len, bool push)
 			seglen = min(end - pos, TCP_MSS - mbuf_length(m) +
 				     sizeof(struct tcp_hdr));
 		} else {
+			uint8_t flags = TCP_ACK;
+
 			m = net_tx_alloc_mbuf();
 			if (unlikely(!m)) {
 				ret = -ENOBUFS;
@@ -169,11 +172,12 @@ ssize_t tcp_tx_buf(tcpconn_t *c, const void *buf, size_t len, bool push)
 		pos += seglen;
 
 		/* if not pushing, keep the last buffer for later */
-		if (!push && pos == end) {
+		if (!push && pos == end && mbuf_length(m) -
+		    sizeof(struct tcp_hdr) < TCP_MSS) {
 			c->tx_pending = m;
 			break;
 		}
-		mbufq_push_tail(&c->rxq, m);
+		mbufq_push_tail(&c->txq, m);
 
 		/* transmit the packet if connection is established */
 		if (c->pcb.state != TCP_STATE_ESTABLISHED)

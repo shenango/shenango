@@ -63,7 +63,7 @@ tcpconn_t *tcp_conn_alloc(int state)
 
 	/* initialize egress half of PCB */
 	c->pcb.state = state;
-	c->pcb.iss = rand_crc32c(0xDEADBEEF); /* TODO: not secure */
+	c->pcb.iss = microtime(); /* TODO: not secure */
 	c->pcb.snd_nxt = c->pcb.iss;
 	c->pcb.snd_una = c->pcb.iss;
 	c->pcb.rcv_wnd = TCP_WIN;
