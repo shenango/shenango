@@ -310,9 +310,8 @@ ssize_t udp_read_from(udpconn_t *c, void *buf, size_t len,
 	return ret;
 }
 
-static void udp_tx_release_mbuf(struct kref *r)
+static void udp_tx_release_mbuf(struct mbuf *m)
 {
-	struct mbuf *m = container_of(r, struct mbuf, ref);
 	udpconn_t *c = (udpconn_t *)m->release_data;
 	thread_t *th;
 	bool free_conn;

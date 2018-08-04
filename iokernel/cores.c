@@ -676,14 +676,14 @@ static bool cores_is_proc_congested(struct proc *p)
 		}
 
 		/* check if the runqueue is congested */
-		if (wraps_before(rq_tail, last_rq_head)) {
+		if (wraps_lt(rq_tail, last_rq_head)) {
 			STAT_INC(RQ_GRANT, 1);
 			congested = true;
 			continue;
 		}
 
 		/* check if the RX queue is congested */
-		if (wraps_before(rxq_tail, last_rxq_head)) {
+		if (wraps_lt(rxq_tail, last_rxq_head)) {
 			STAT_INC(RX_GRANT, 1);
 			congested = true;
 			continue;

@@ -72,9 +72,8 @@ void __noinline __net_recurrent(void)
  * RX Networking Functions
  */
 
-static void net_rx_release_mbuf(struct kref *r)
+static void net_rx_release_mbuf(struct mbuf *m)
 {
-	struct mbuf *m = container_of(r, struct mbuf, ref);
 	struct rx_net_hdr *hdr = container_of((void *)m->head,
 					      struct rx_net_hdr, payload);
 	struct kthread *k = getk();
@@ -275,12 +274,6 @@ void net_tx_release_mbuf(struct mbuf *m)
 	preempt_enable();
 }
 
-static void net_tx_release_mbuf_ref(struct kref *r)
-{
-	struct mbuf *m = container_of(r, struct mbuf, ref);
-	net_tx_release_mbuf(m);
-}
-
 /**
  * net_tx_alloc_mbuf - allocates an mbuf for transmitting.
  *
@@ -310,7 +303,7 @@ struct mbuf *net_tx_alloc_mbuf(void)
 	m->csum_type = CHECKSUM_TYPE_NEEDED;
 	m->txflags = 0;
 	m->release_data = 0;
-	m->release = net_tx_release_mbuf_ref;
+	m->release = net_tx_release_mbuf;
 	return m;
 }
 

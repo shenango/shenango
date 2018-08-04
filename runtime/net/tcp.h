@@ -91,5 +91,8 @@ extern tcpconn_t *tcp_rx_listener(struct netaddr laddr, struct mbuf *m);
 
 extern int tcp_tx_raw_rst(struct netaddr laddr, struct netaddr raddr,
 			  tcp_seq seq);
-extern int tcp_tx_ctl(tcpconn_t *c, uint8_t flags, bool retransmit);
-extern ssize_t tcp_tx_iov(tcpconn_t *c, const struct iovec *iov, int iovcnt);
+extern int tcp_tx_raw_rst_ack(struct netaddr laddr, struct netaddr raddr,
+			      tcp_seq seq, tcp_seq ack);
+extern int tcp_tx_ack(tcpconn_t *c);
+extern int tcp_tx_ctl(tcpconn_t *c, uint8_t flags);
+extern ssize_t tcp_tx_buf(tcpconn_t *c, const void *buf, size_t len, bool push);

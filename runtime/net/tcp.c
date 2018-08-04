@@ -12,6 +12,30 @@
 
 #include "tcp.h"
 
+/**
+ * tcp_conn_ack - removes acknowledged packets from TX queue
+ * @c: the TCP connection to update
+ * @freeq: a pointer to an mbufq to store acknowledged buffers to later free
+ *
+ * WARNING: the caller must hold @c->lock.
+ * @freeq is provided so that @c->lock can be released before freeing buffers.
+ */
+void tcp_conn_ack(tcpconn_t *c, struct mbufq *freeq)
+{
+	struct mbuf *m;
+
+	assert_spin_lock_held(&c->lock);
+
+	/* dequeue buffers that are fully acknowledged */
+	while (true) {
+		m = mbufq_peak_head(&c->txq);
+		if (wraps_gt(m->seg_seq + m->seg_len, c->pcb.snd_una))
+			break;
+
+		mbufq_push_tail(freeq, mbufq_pop_head(&c->txq));
+	}
+}
+
 /* handles network errors for TCP sockets */
 static void tcp_conn_err(struct trans_entry *e, int err)
 {
@@ -328,11 +352,29 @@ int tcp_dial(struct netaddr laddr, struct netaddr raddr, tcpconn_t **c_out)
 	}
 
 	/* finally, send a SYN to the remote host */
-	ret = tcp_tx_ctl(c, TCP_SYN, true);
+	c->tx_exclusive = true; /* safe because conn not shared yet */
+	ret = tcp_tx_ctl(c, TCP_SYN);
 	if (unlikely(!ret)) {
 		tcp_conn_destroy(c);
 		return ret;
 	}
+	c->tx_exclusive = false;
+
+	/* wait until the connection is established or there is a failure */
+	spin_lock_np(&c->lock);
+	while (c->pcb.state != TCP_STATE_ESTABLISHED &&
+	       c->pcb.state != TCP_STATE_CLOSING)
+		waitq_wait(&c->tx_wq, &c->lock);
+
+	/* check if the connection failed */
+	if (c->pcb.state == TCP_STATE_CLOSING) {
+		ret = -c->rx_err;
+		spin_unlock_np(&c->lock);
+		tcp_conn_destroy(c);
+		return ret;
+	}
+	assert(c->pcb.state == TCP_STATE_ESTABLISHED);
+	spin_unlock_np(&c->lock);
 
 	*c_out = c;
 	return 0;
@@ -361,19 +403,119 @@ ssize_t tcp_read(tcpconn_t *c, void *buf, size_t len)
 	return -ENOTSUP;
 }
 
+ssize_t tcp_readv(tcpconn_t *c, const struct iovec *iov, int iovcnt)
+{
+	return -ENOTSUP;
+}
+
+static int tcp_write_wait(tcpconn_t *c, size_t *win_len)
+{
+	/* block until there is an actionable event */
+	while (c->pcb.state != TCP_STATE_ESTABLISHED &&
+	       c->pcb.state != TCP_STATE_CLOSING &&
+	       (c->tx_exclusive ||
+		(c->pcb.snd_wnd == 0 && mbufq_empty(&c->txq)))) {
+		waitq_wait(&c->tx_wq, &c->lock);
+	}
+
+	/* is the socket closed? */
+	if (c->pcb.state == TCP_STATE_CLOSING) {
+		spin_unlock_np(&c->lock);
+		return -c->rx_err;
+	}
+
+	/* drop the lock to allow concurrent RX processing */
+	c->tx_exclusive = true;
+	*win_len = min(c->pcb.snd_wnd, 1);
+	spin_unlock_np(&c->lock);
+
+	return 0;
+}
+
+static void tcp_write_finish(tcpconn_t *c, size_t sent_len)
+{
+	struct mbufq q;
+	thread_t *th;
+
+	mbufq_init(&q);
+
+	spin_lock_np(&c->lock);
+	if (sent_len <= c->pcb.snd_wnd)
+		c->pcb.snd_wnd -= sent_len;
+	else
+		c->pcb.snd_wnd = 0;
+	tcp_conn_ack(c, &q);
+	c->tx_exclusive = false;
+	th = waitq_signal(&c->tx_wq, &c->lock);
+	spin_unlock_np(&c->lock);
+
+	waitq_signal_finish(th);
+	mbufq_release(&q);
+}
+
+/**
+ * tcp_write - writes data to a TCP connection
+ * @c: the TCP connection
+ * @buf: a buffer from which to copy the data
+ * @len: the length of the data
+ *
+ * Returns the number of bytes written (could be less than @len), or < 0
+ * if there was a failure.
+ */
 ssize_t tcp_write(tcpconn_t *c, const void *buf, size_t len)
 {
-	return -ENOTSUP;
+	size_t winlen;
+	ssize_t ret;
+
+	/* block until the data can be sent */
+	ret = tcp_write_wait(c, &winlen);
+	if (ret)
+		return ret;
+
+	/* actually send the data */
+	ret = tcp_tx_buf(c, buf, min(len, winlen), len >= winlen);
+
+	/* catch up on any pending work */
+	tcp_write_finish(c, ret > 0 ? ret : 0);
+
+	return ret;
 }
 
-ssize_t tcp_readv(const struct iovec *iov, int iovcnt)
+/**
+ * tcp_writev - writes vectored data to a TCP connection
+ * @c: the TCP connection
+ * @iov: a pointer to the IO vector
+ * @iovcnt: the number of vectors in @iov
+ *
+ * Returns the number of bytes written (could be less than requested), or < 0
+ * if there was a failure.
+ */
+ssize_t tcp_writev(tcpconn_t *c, const struct iovec *iov, int iovcnt)
 {
-	return -ENOTSUP;
-}
+	size_t winlen;
+	ssize_t sent = 0, ret;
+	int i;
 
-ssize_t tcp_writev(const struct iovec *iov, int iovcnt)
-{
-	return -ENOTSUP;
+	/* block until the data can be sent */
+	ret = tcp_write_wait(c, &winlen);
+	if (ret)
+		return ret;
+
+	/* actually send the data */
+	for (i = 0; i < iovcnt; i++) {
+		if (winlen <= 0)
+			break;
+		ret = tcp_tx_buf(c, iov->iov_base, min(iov->iov_len, winlen),
+				 i < iovcnt - 1 && iov->iov_len <= winlen);
+		if (ret <= 0)
+			break;
+		winlen -= ret;
+	}
+
+	/* catch up on any pending work */
+	tcp_write_finish(c, sent);
+
+	return sent > 0 ? sent : ret;
 }
 
 void tcp_shutdown(tcpconn_t *c, int how)

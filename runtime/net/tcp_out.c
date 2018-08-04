@@ -11,6 +11,12 @@
 #include "tcp.h"
 #include "defs.h"
 
+static void tcp_tx_release_mbuf(struct mbuf *m)
+{
+	if (!atomic_dec_and_test(&m->ref))
+		net_tx_release_mbuf(m);
+}
+
 static struct tcp_hdr *
 tcp_push_tcphdr(struct mbuf *m, tcpconn_t *c, uint8_t flags)
 {
@@ -30,10 +36,10 @@ tcp_push_tcphdr(struct mbuf *m, tcpconn_t *c, uint8_t flags)
 }
 
 /**
- * tcp_tx_raw_rst - send a reset without an established connection
+ * tcp_tx_raw_rst - send a RST without an established connection
  * @laddr: the local address
  * @raddr: the remote address
- * @seq: the TCP sequence number
+ * @seq: the segement's sequence number
  *
  * Returns 0 if successful, otherwise fail.
  */
@@ -65,15 +71,49 @@ int tcp_tx_raw_rst(struct netaddr laddr, struct netaddr raddr, tcp_seq seq)
 }
 
 /**
- * tcp_tx_ctl - sends a control message without data
- * @c: the TCP connection
- * @flags: the control flags (e.g. TCP_ACK, etc.)
- * @retransmit: should the control message be retransmitted?
+ * tcp_tx_raw_rst_ack - send a RST/ACK without an established connection
+ * @laddr: the local address
+ * @raddr: the remote address
+ * @seq: the segment's sequence number
+ * @ack: the segment's acknowledgement number
  *
- * Returns 0 if successful, -ENOMEM if out memory, and -EAGAIN if another
- * thread has transmit exclusive rights on the connection.
+ * Returns 0 if successful, otherwise fail.
  */
-int tcp_tx_ctl(tcpconn_t *c, uint8_t flags, bool retransmit)
+int tcp_tx_raw_rst_ack(struct netaddr laddr, struct netaddr raddr,
+		       tcp_seq seq, tcp_seq ack)
+{
+	struct tcp_hdr *tcphdr;
+	struct mbuf *m;
+	int ret;
+
+	m = net_tx_alloc_mbuf();
+	if (unlikely((!m)))
+		return -ENOMEM;
+
+	/* write the tcp header */
+	tcphdr = mbuf_push_hdr(m, *tcphdr);
+	tcphdr->sport = hton16(laddr.port);
+	tcphdr->dport = hton16(raddr.port);
+	tcphdr->seq = hton32(seq);
+	tcphdr->ack = hton32(ack);
+	tcphdr->off = 5;
+	tcphdr->flags = TCP_RST | TCP_ACK;
+	tcphdr->win = hton16(0);
+
+	/* transmit packet */
+	ret = net_tx_ip(m, IPPROTO_TCP, raddr.ip);
+	if (unlikely(ret))
+		mbuf_free(m);
+	return ret;
+}
+
+/**
+ * tcp_tx_ack - send an acknowledgement and window update packet
+ * @c: the connection to send the ACK
+ *
+ * Returns 0 if succesful, otherwise fail.
+ */
+int tcp_tx_ack(tcpconn_t *c)
 {
 	struct tcp_hdr *tcphdr;
 	struct mbuf *m;
@@ -83,28 +123,49 @@ int tcp_tx_ctl(tcpconn_t *c, uint8_t flags, bool retransmit)
 	if (unlikely(!m))
 		return -ENOMEM;
 
-	kref_initn(&m->ref, retransmit ? 2 : 1);
-	tcphdr = tcp_push_tcphdr(m, c, flags);
+	tcphdr = tcp_push_tcphdr(m, c, TCP_ACK);
+	tcphdr->seq = hton32(load_acquire(&c->pcb.snd_nxt));
 
-	spin_lock_np(&c->lock);
-	assert(!c->tx_pending);
-	if (c->tx_exclusive) {
-		spin_unlock_np(&c->lock);
-		mbuf_free(m);
-		return -EAGAIN;
-	}
-	m->seg = c->pcb.snd_nxt;
-	tcphdr->seq = hton32(c->pcb.snd_nxt);
-	if (retransmit) {
-		c->pcb.snd_nxt++;
-		mbufq_push_tail(&c->txq, m);
-	}
-	spin_unlock_np(&c->lock);
-
-	m->timestamp = microtime();
 	ret = net_tx_ip(m, IPPROTO_TCP, c->e.raddr.ip);
 	if (unlikely(ret))
-		mbuf_rput(m);
+		mbuf_free(m);
+	return ret;
+}
+
+/**
+ * tcp_tx_ctl - sends a control message without data
+ * @c: the TCP connection
+ * @flags: the control flags (e.g. TCP_SYN, TCP_FIN, etc.)
+ *
+ * WARNING: The caller must have write exclusive access to the socket.
+ *
+ * Returns 0 if successful, -ENOMEM if out memory.
+ */
+int tcp_tx_ctl(tcpconn_t *c, uint8_t flags)
+{
+	struct tcp_hdr *tcphdr;
+	struct mbuf *m;
+	int ret;
+
+	BUG_ON(!c->tx_exclusive);
+
+	m = net_tx_alloc_mbuf();
+	if (unlikely(!m))
+		return -ENOMEM;
+
+	m->seg_seq = c->pcb.snd_nxt;
+	m->seg_len = 1;
+	tcphdr = tcp_push_tcphdr(m, c, flags);
+	tcphdr->seq = hton32(c->pcb.snd_nxt);
+	store_release(&c->pcb.snd_nxt, c->pcb.snd_nxt + 1);
+	mbufq_push_tail(&c->txq, m);
+
+	m->timestamp = microtime();
+	atomic_write(&m->ref, 2);
+	m->release = tcp_tx_release_mbuf;
+	ret = net_tx_ip(m, IPPROTO_TCP, c->e.raddr.ip);
+	if (unlikely(ret))
+		mbuf_free(m);
 	return ret;
 }
 
@@ -116,10 +177,10 @@ int tcp_tx_ctl(tcpconn_t *c, uint8_t flags, bool retransmit)
  * @push: indicates the data is ready for consumption by the receiver
  *
  * If @push is false, the implementation may buffer some or all of the data for
- * future transmission. tcp_tx_buf() must be called with @push equal to true
- * before dropping TX exclusive on the socket.
+ * future transmission.
  *
  * WARNING: The caller is responsible for respecting the TCP window size limit.
+ * WARNING: The caller must have write exclusive access to the socket.
  *
  * Returns the number of bytes transmitted, or < 0 if there was an error.
  */
@@ -132,9 +193,7 @@ ssize_t tcp_tx_buf(tcpconn_t *c, const void *buf, size_t len, bool push)
 	ssize_t ret = 0;
 	size_t seglen;
 
-	assert(c->pcb.state == TCP_STATE_SYN_SENT ||
-	       c->pcb.state == TCP_STATE_SYN_RECEIVED ||
-	       c->pcb.state == TCP_STATE_ESTABLISHED);
+	assert(c->pcb.state == TCP_STATE_ESTABLISHED);
 	assert(c->tx_exclusive);
 
 	pos = buf;
@@ -157,8 +216,10 @@ ssize_t tcp_tx_buf(tcpconn_t *c, const void *buf, size_t len, bool push)
 				break;
 			}
 			seglen = min(end - pos, TCP_MSS);
-			kref_init(&m->ref);
-			m->seg = c->pcb.snd_nxt;
+			m->seg_seq = c->pcb.snd_nxt;
+			m->seg_len = seglen;
+			atomic_write(&m->ref, 2);
+			m->release = tcp_tx_release_mbuf;
 
 			/* initialize TCP header */
 			if (push && pos + seglen == end)
@@ -167,8 +228,8 @@ ssize_t tcp_tx_buf(tcpconn_t *c, const void *buf, size_t len, bool push)
 			tcphdr->seq = hton32(c->pcb.snd_nxt);
 		}
 
-		c->pcb.snd_nxt += seglen;
 		memcpy(mbuf_put(m, seglen), pos, seglen);
+		store_release(&c->pcb.snd_nxt, c->pcb.snd_nxt + seglen);
 		pos += seglen;
 
 		/* if not pushing, keep the last buffer for later */
@@ -177,16 +238,17 @@ ssize_t tcp_tx_buf(tcpconn_t *c, const void *buf, size_t len, bool push)
 			c->tx_pending = m;
 			break;
 		}
-		mbufq_push_tail(&c->txq, m);
 
-		/* transmit the packet if connection is established */
-		if (c->pcb.state != TCP_STATE_ESTABLISHED)
-			continue;
-		mbuf_rget(m);
+		/* transmit the packet */
+		mbufq_push_tail(&c->txq, m);
 		m->timestamp = microtime();
 		ret = net_tx_ip(m, IPPROTO_TCP, c->e.raddr.ip);
-		if (unlikely(ret))
-			mbuf_rput(m);
+		if (unlikely(ret)) {
+			/* pretend the packet was sent */
+			mbuf_push(m, sizeof(struct eth_hdr) +
+				     sizeof(struct ip_hdr));
+			mbuf_free(m);
+		}
 	}
 
 	/* if we sent anything return the length we sent instead of an error */

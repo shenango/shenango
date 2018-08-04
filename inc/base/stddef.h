@@ -132,23 +132,44 @@
 #define GB	(1024 * MB)
 
 /**
- * wraps_before - a < b ?
+ * wraps_lt - a < b ?
  *
  * This comparison is safe against unsigned wrap around.
  */
-static inline bool wraps_before(uint32_t a, uint32_t b)
+static inline bool wraps_lt(uint32_t a, uint32_t b)
 {
         return (int32_t)(a - b) < 0;
 }
 
 /**
- * wraps_after - b < a ?
+ * wraps_lte - a <= b ?
  *
  * This comparison is safe against unsigned wrap around.
  */
-static inline bool wraps_after(uint32_t a, uint32_t b)
+static inline bool wraps_lte(uint32_t a, uint32_t b)
+{
+        return (int32_t)(a - b) <= 0;
+}
+
+
+/**
+ * wraps_gt - a > b ?
+ *
+ * This comparison is safe against unsigned wrap around.
+ */
+static inline bool wraps_gt(uint32_t a, uint32_t b)
 {
         return (int32_t)(b - a) < 0;
+}
+
+/**
+ * wraps_gte - a >= b ?
+ *
+ * This comparison is safe against unsigned wrap around.
+ */
+static inline bool wraps_gte(uint32_t a, uint32_t b)
+{
+        return (int32_t)(b - a) <= 0;
 }
 
 /**

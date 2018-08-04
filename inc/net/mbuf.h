@@ -11,7 +11,7 @@
 
 #include <base/stddef.h>
 #include <base/assert.h>
-#include <base/kref.h>
+#include <base/atomic.h>
 #include <iokernel/queue.h>
 
 #define MBUF_DEFAULT_LEN	2048
@@ -34,16 +34,14 @@ struct mbuf {
 
 	unsigned short	network_off;	/* the offset of the network header */
 	unsigned short	transport_off;	/* the offset of the transport header */
+	unsigned long   release_data;	/* data for the release method */
+	void		(*release)(struct mbuf *m); /* frees the mbuf */
 
 	/* TCP fields */
 	uint64_t	timestamp;  /* the time the packet was last sent */
-	uint32_t	seg;	    /* the segment number of the packet */
-	uint32_t	pad;
-
-	/* <- START OF SECOND CACHE LINE -> */
-	struct kref	ref;		/* the reference count */
-	unsigned long	release_data;	/* data for the release method */
-	void		(*release)(struct kref *r); /* frees the mbuf */
+	uint32_t	seg_seq;    /* the TCP segment number */
+	uint32_t	seg_len;    /* the TCP segment length */
+	atomic_t	ref;	    /* a reference count for the mbuf */
 };
 
 static inline unsigned char *__mbuf_pull(struct mbuf *m, unsigned int len)
@@ -240,7 +238,6 @@ static inline void mbuf_init(struct mbuf *m, unsigned char *head,
 	m->head_len = head_len;
 	m->data = m->head + reserve_len;
 	m->len = 0;
-	kref_initn(&m->ref, 0);
 }
 
 /**
@@ -249,29 +246,7 @@ static inline void mbuf_init(struct mbuf *m, unsigned char *head,
  */
 static inline void mbuf_free(struct mbuf *m)
 {
-	m->release(&m->ref);
-}
-
-/**
- * mbuf_rget - increments the mbuf reference count
- * @m: the mbuf to reference count
- *
- * Returns the same mbuf.
- */
-static inline struct mbuf *mbuf_rget(struct mbuf *m)
-{
-	assert(!kref_released(&m->ref));
-	kref_get(&m->ref);
-	return m;
-}
-
-/**
- * mbuf_rput - decrements the mbuf reference count, freeing if it reaches zero
- * @m: the mbuf to unreference count
- */
-static inline void mbuf_rput(struct mbuf *m)
-{
-	kref_put(&m->ref, m->release);
+	m->release(m);
 }
 
 extern struct mbuf *mbuf_clone(struct mbuf *dst, struct mbuf *src);
