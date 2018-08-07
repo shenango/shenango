@@ -164,8 +164,11 @@ int tcp_tx_ctl(tcpconn_t *c, uint8_t flags)
 	atomic_write(&m->ref, 2);
 	m->release = tcp_tx_release_mbuf;
 	ret = net_tx_ip(m, IPPROTO_TCP, c->e.raddr.ip);
-	if (unlikely(ret))
-		mbuf_free(m);
+	if (unlikely(ret)) {
+		/* pretend the packet was sent */
+		mbuf_push(m, sizeof(struct eth_hdr) + sizeof(struct ip_hdr));
+		atomic_write(&m->ref, 1);
+	}
 	return ret;
 }
 
@@ -247,7 +250,7 @@ ssize_t tcp_tx_buf(tcpconn_t *c, const void *buf, size_t len, bool push)
 			/* pretend the packet was sent */
 			mbuf_push(m, sizeof(struct eth_hdr) +
 				     sizeof(struct ip_hdr));
-			mbuf_free(m);
+			atomic_write(&m->ref, 1);
 		}
 	}
 

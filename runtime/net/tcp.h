@@ -57,6 +57,7 @@ struct tcpconn {
 	spinlock_t		lock;
 
 	/* ingress path */
+	bool			rx_exclusive;
 	int			rx_err;
 	waitq_t			rx_wq;
 	struct mbufq		rxq_ooo;
