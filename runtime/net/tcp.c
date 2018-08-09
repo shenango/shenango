@@ -39,7 +39,8 @@ void tcp_conn_ack(tcpconn_t *c, struct mbufq *freeq)
 /* handles network errors for TCP sockets */
 static void tcp_conn_err(struct trans_entry *e, int err)
 {
-
+	tcpconn_t *c = container_of(e, tcpconn_t, e);
+	tcp_conn_shutdown_err(c, err);
 }
 
 /* operations for TCP sockets */
@@ -70,15 +71,17 @@ tcpconn_t *tcp_conn_alloc(int state)
 	/* general fields */
 	memset(&c->pcb, 0, sizeof(c->pcb));
 	spin_lock_init(&c->lock);
+	c->err = 0;
 
 	/* ingress fields */
+	c->rx_closed = false;
 	c->rx_exclusive = false;
-	c->rx_err = 0;
 	waitq_init(&c->rx_wq);
 	mbufq_init(&c->rxq_ooo);
 	mbufq_init(&c->rxq);
 
 	/* egress fields */
+	c->tx_closed = false;
 	c->tx_exclusive = false;
 	waitq_init(&c->tx_wq);
 	c->tx_last_ack = 0;
@@ -356,7 +359,7 @@ int tcp_dial(struct netaddr laddr, struct netaddr raddr, tcpconn_t **c_out)
 	}
 
 	/* send a SYN to the remote host */
-	c->tx_exclusive = true; /* safe because conn not shared yet */
+	c->tx_exclusive = true; /* safe because @c not shared yet */
 	ret = tcp_tx_ctl(c, TCP_SYN);
 	if (unlikely(!ret)) {
 		tcp_conn_destroy(c);
@@ -366,19 +369,17 @@ int tcp_dial(struct netaddr laddr, struct netaddr raddr, tcpconn_t **c_out)
 
 	/* wait until the connection is established or there is a failure */
 	spin_lock_np(&c->lock);
-	while (c->pcb.state != TCP_STATE_ESTABLISHED &&
-	       c->pcb.state != TCP_STATE_CLOSING) {
+	while (!c->rx_closed && c->pcb.state < TCP_STATE_ESTABLISHED) {
 		waitq_wait(&c->tx_wq, &c->lock);
 	}
 
 	/* check if the connection failed */
-	if (c->pcb.state == TCP_STATE_CLOSING) {
-		ret = -c->rx_err;
+	if (c->rx_closed) {
+		ret = -c->err;
 		spin_unlock_np(&c->lock);
 		tcp_conn_destroy(c);
 		return ret;
 	}
-	assert(c->pcb.state == TCP_STATE_ESTABLISHED);
 	spin_unlock_np(&c->lock);
 
 	*c_out = c;
@@ -413,17 +414,16 @@ static ssize_t tcp_read_wait(tcpconn_t *c, size_t len,
 	spin_lock_np(&c->lock);
 
 	/* block until there is an actionable event */
-	while ((c->pcb.state != TCP_STATE_CLOSING &&
-	        c->pcb.state != TCP_STATE_ESTABLISHED) ||
-	       (c->pcb.state == TCP_STATE_ESTABLISHED &&
-		(c->rx_exclusive || mbufq_empty(&c->rxq)))) {
+	while (!c->rx_closed &&
+	       (c->pcb.state < TCP_STATE_ESTABLISHED || c->rx_exclusive ||
+		mbufq_empty(&c->rxq))) {
 		waitq_wait(&c->rx_wq, &c->lock);
 	}
 
 	/* is the socket closed? */
-	if (mbufq_empty(&c->rxq) && c->pcb.state == TCP_STATE_CLOSING) {
+	if (c->rx_closed) {
 		spin_unlock_np(&c->lock);
-		return 0;
+		return -c->err;
 	}
 
 	/* pop off the mbufs that will be read */
@@ -474,15 +474,16 @@ ssize_t tcp_read(tcpconn_t *c, void *buf, size_t len)
 	char *pos = buf;
 	struct mbufq q;
 	struct mbuf *m;
+	ssize_t ret;
 
 	mbufq_init(&q);
 
 	/* wait for data to become available */
-	tcp_read_wait(c, len, &q, &m);
+	ret = tcp_read_wait(c, len, &q, &m);
 
 	/* check if connection was closed */
-	if (m == NULL && mbufq_empty(&q))
-		return 0;
+	if (ret <= 0)
+		return ret;
 
 	/* copy the data from the buffers */
 	while (true) {
@@ -495,16 +496,16 @@ ssize_t tcp_read(tcpconn_t *c, void *buf, size_t len)
 		mbuf_free(cur);
 	}
 
+	/* we may have to consume only part of a buffer */
 	if (m) {
 		size_t cpylen = len - (uintptr_t)pos + (uintptr_t)buf;
 		memcpy(pos, mbuf_pull(m, cpylen), cpylen);
-		pos += cpylen;
 	}
 
 	/* wakeup any pending readers */
 	tcp_read_finish(c, m);
 
-	return pos - (char *)buf;
+	return ret;
 }
 
 static size_t iov_len(const struct iovec *iov, int iovcnt)
@@ -531,7 +532,7 @@ ssize_t tcp_readv(tcpconn_t *c, const struct iovec *iov, int iovcnt)
 {
 	struct mbufq q;
 	struct mbuf *m;
-	size_t len = iov_len(iov, iovcnt);
+	ssize_t len = iov_len(iov, iovcnt);
 	off_t offset = 0;
 	int i = 0;
 
@@ -541,8 +542,8 @@ ssize_t tcp_readv(tcpconn_t *c, const struct iovec *iov, int iovcnt)
 	len = tcp_read_wait(c, len, &q, &m);
 
 	/* check if connection was closed */
-	if (len == 0)
-		return 0;
+	if (len <= 0)
+		return len;
 
 	/* copy the data from the buffers */
 	while (true) {
@@ -568,7 +569,7 @@ ssize_t tcp_readv(tcpconn_t *c, const struct iovec *iov, int iovcnt)
 		} while (mbuf_length(m) > 0);
 	}
 
-	/* we may have to consume part of a buffer */
+	/* we may have to consume only part of a buffer */
 	if (m) {
 		do {
 			const struct iovec *vp = &iov[i];
@@ -599,18 +600,16 @@ static int tcp_write_wait(tcpconn_t *c, size_t *winlen)
 	spin_lock_np(&c->lock);
 
 	/* block until there is an actionable event */
-	while ((c->pcb.state != TCP_STATE_CLOSING &&
-	        c->pcb.state != TCP_STATE_ESTABLISHED) ||
-	       (c->pcb.state == TCP_STATE_ESTABLISHED &&
-	        (c->tx_exclusive ||
-		 (c->pcb.snd_wnd == 0 && mbufq_empty(&c->txq))))) {
+	while (!c->tx_closed &&
+	       (c->pcb.state < TCP_STATE_ESTABLISHED || c->tx_exclusive ||
+		(c->pcb.snd_wnd == 0 && !mbufq_empty(&c->txq)))) {
 		waitq_wait(&c->tx_wq, &c->lock);
 	}
 
 	/* is the socket closed? */
-	if (c->pcb.state == TCP_STATE_CLOSING) {
+	if (c->tx_closed) {
 		spin_unlock_np(&c->lock);
-		return -c->rx_err;
+		return c->err ? -c->err : -EPIPE;
 	}
 
 	/* drop the lock to allow concurrent RX processing */
@@ -627,7 +626,7 @@ static void tcp_write_finish(tcpconn_t *c, size_t sent_len)
 	struct mbufq q;
 	thread_t *th;
 
-	assert(c->tx_exclusive);
+	assert(c->tx_exclusive == true);
 	mbufq_init(&q);
 
 	spin_lock_np(&c->lock);
@@ -708,6 +707,33 @@ ssize_t tcp_writev(tcpconn_t *c, const struct iovec *iov, int iovcnt)
 	tcp_write_finish(c, sent);
 
 	return sent > 0 ? sent : ret;
+}
+
+static void __tcp_shutdown(tcpconn_t *c, bool rx, bool tx)
+{
+	spin_lock_np(&c->lock);
+	if (c->rx_closed)
+		rx = false;
+	else if (rx)
+		c->rx_closed = true;
+
+	if (c->tx_closed)
+		tx = false;
+	else if (tx)
+		c->tx_closed = true;
+	spin_unlock_np(&c->lock);
+
+	/* wake all blocked threads */
+	if (rx)
+		waitq_release(&c->rx_wq);
+	if (tx)
+		waitq_release(&c->tx_wq);
+}
+
+void tcp_conn_shutdown_with_err(tcpconn_t *c, int err)
+{
+	c->err = err;
+	__tcp_shutdown(c, true, true);
 }
 
 void tcp_shutdown(tcpconn_t *c, int how)

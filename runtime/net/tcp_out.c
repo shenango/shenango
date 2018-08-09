@@ -197,7 +197,7 @@ ssize_t tcp_tx_buf(tcpconn_t *c, const void *buf, size_t len, bool push)
 	size_t seglen;
 
 	assert(c->pcb.state == TCP_STATE_ESTABLISHED);
-	assert(c->tx_exclusive);
+	assert(c->tx_exclusive == true);
 
 	pos = buf;
 	end = pos + len;

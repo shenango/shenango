@@ -27,6 +27,7 @@ enum {
 	TCP_STATE_CLOSING,
 	TCP_STATE_LAST_ACK,
 	TCP_STATE_TIME_WAIT,
+	TCP_STATE_CLOSED,
 };
 
 /* TCP protocol control block (PCB) */
@@ -55,16 +56,18 @@ struct tcpconn {
 	struct tcp_pcb		pcb;
 	struct list_node	link;
 	spinlock_t		lock;
+	int			err; /* error code for read(), write(), etc. */
 
 	/* ingress path */
-	bool			rx_exclusive;
-	int			rx_err;
+	unsigned int		rx_closed:1;
+	unsigned int		rx_exclusive:1;
 	waitq_t			rx_wq;
 	struct mbufq		rxq_ooo;
 	struct mbufq		rxq;
 
 	/* egress path */
-	bool			tx_exclusive;
+	unsigned int		tx_closed:1;
+	unsigned int		tx_exclusive:1;
 	waitq_t			tx_wq;
 	uint32_t		tx_last_ack;
 	uint16_t		tx_last_win;
@@ -76,6 +79,7 @@ extern tcpconn_t *tcp_conn_alloc(int state);
 extern int tcp_conn_attach(tcpconn_t *c, struct netaddr laddr,
 			   struct netaddr raddr);
 extern void tcp_conn_destroy(tcpconn_t *c);
+extern void tcp_conn_shutdown_err(tcpconn_t *c, int err);
 
 
 /*
