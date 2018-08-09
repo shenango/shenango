@@ -72,7 +72,7 @@ static void udp_conn_recv(struct trans_entry *e, struct mbuf *m)
 
 	spin_lock_np(&c->inq_lock);
 	/* drop packet if the ingress queue is full */
-	if (c->inq_len >= c->inq_cap || c->shutdown) {
+	if (c->inq_len >= c->inq_cap || c->inq_err || c->shutdown) {
 		spin_unlock_np(&c->inq_lock);
 		mbuf_drop(m);
 		return;
@@ -94,11 +94,15 @@ static void udp_conn_err(struct trans_entry *e, int err)
 {
 	udpconn_t *c = container_of(e, udpconn_t, e);
 
+	bool do_release;
+
 	spin_lock_np(&c->inq_lock);
+	do_release = !c->inq_err && !c->shutdown;
 	c->inq_err = err;
 	spin_unlock_np(&c->inq_lock);
 
-	waitq_release(&c->inq_wq);
+	if (do_release)
+		waitq_release(&c->inq_wq);
 }
 
 /* operations for UDP sockets */
@@ -313,13 +317,14 @@ ssize_t udp_read_from(udpconn_t *c, void *buf, size_t len,
 static void udp_tx_release_mbuf(struct mbuf *m)
 {
 	udpconn_t *c = (udpconn_t *)m->release_data;
-	thread_t *th;
+	thread_t *th = NULL;
 	bool free_conn;
 
 	spin_lock_np(&c->outq_lock);
 	c->outq_len--;
 	free_conn = (c->outq_free && c->outq_len == 0);
-	th = waitq_signal(&c->outq_wq, &c->outq_lock);
+	if (!c->shutdown)
+		th = waitq_signal(&c->outq_wq, &c->outq_lock);
 	spin_unlock_np(&c->outq_lock);
 	waitq_signal_finish(th);
 
@@ -454,7 +459,8 @@ void udp_shutdown(udpconn_t *c)
 	__udp_shutdown(c);
 
 	/* wake all blocked threads */
-	waitq_release(&c->inq_wq);
+	if (!c->inq_err)
+		waitq_release(&c->inq_wq);
 	waitq_release(&c->outq_wq);
 }
 
@@ -485,6 +491,7 @@ void udp_close(udpconn_t *c)
 
 	spin_lock_np(&c->outq_lock);
 	free_conn = c->outq_len == 0;
+	c->outq_free = true;
 	spin_unlock_np(&c->outq_lock);
 
 	if (free_conn)
