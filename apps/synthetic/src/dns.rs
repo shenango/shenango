@@ -3,7 +3,7 @@ use byteorder::{BigEndian, WriteBytesExt};
 
 use Packet;
 
-use dns_parser::{QueryClass, QueryType, Header, Opcode, ResponseCode, Name};
+use dns_parser::{QueryClass, QueryType, Header, Opcode, ResponseCode};
 
 use std::io::Write;
 use std::str::from_utf8;

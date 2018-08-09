@@ -21,7 +21,7 @@ use std::net::SocketAddrV4;
 use std::slice;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use std::f32::INFINITY;
 
 use clap::{App, Arg};
@@ -278,6 +278,11 @@ fn run_client(
                 packet.actual_start = Some(start.elapsed());
                 if let Err(e) = socket2.send(&payload[..]) {
                     match e.raw_os_error() {
+                        Some(-105) => {
+                            packet.actual_start = None;
+                            backend.thread_yield();
+                            continue;
+                        }
                         Some(-32) => {}
                         _ => println!("Send thread: {}", e)
                     }
@@ -382,7 +387,7 @@ fn run_client(
                 percentile(99.0),
                 percentile(99.9),
                 percentile(99.99),
-                start_unix.duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs()
+                start_unix.duration_since(UNIX_EPOCH).unwrap().as_secs()
             );
         }
         OutputMode::Trace => {

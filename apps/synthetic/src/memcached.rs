@@ -99,7 +99,7 @@ pub fn warmup(
             let sock1 = Arc::new(backend.create_udp_connection("0.0.0.0:0".parse().unwrap(), Some(addr)));
             let socket = sock1.clone();
             backend.spawn_thread(move || {
-                backend.sleep(Duration::from_secs(5));
+                backend.sleep(Duration::from_secs(10));
                 if Arc::strong_count(&socket) > 1 {
                     println!("Timing out socket");
                     socket.shutdown();
@@ -111,7 +111,7 @@ pub fn warmup(
                 set_request(i * perthread + n, 0, &mut vec);
 
                 if let Err(e) = sock1.send(&vec[..]) {
-                    println!("Warmup send: {}", e);
+                    println!("Warmup send ({}/{}): {}", n, perthread, e);
                     break;
                 }
 
@@ -127,7 +127,7 @@ pub fn warmup(
                         }
                     }
                     Err(e) => {
-                        println!("Warmup receive: {}", e);
+                        println!("Warmup receive ({}/{}): {}", n, perthread, e);
                         break;
                     },
                 }
