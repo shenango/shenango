@@ -19,7 +19,6 @@ void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 	const struct tcp_hdr *tcphdr;
 	uint32_t seq, ack;
 	uint16_t win;
-	int err = 0;
 
 	/* find header offsets */
 	iphdr = mbuf_network_hdr(m, *iphdr);
@@ -34,6 +33,10 @@ void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 
 	spin_lock_np(&c->lock);
 
+	/* handle TCP_STATE_CLOSED state */
+	if (c->pcb.state == TCP_STATE_CLOSED)
+		goto unlock_and_drop;
+
 	/* handle TCP_STATE_SYN_SENT state */
 	if (c->pcb.state == TCP_STATE_SYN_SENT) {
 		if ((tcphdr->flags & TCP_ACK) > 0) {
@@ -47,7 +50,7 @@ void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 				if (wraps_lte(c->pcb.snd_una, ack) &&
 				    wraps_lte(ack, c->pcb.snd_nxt)) {
 					c->pcb.state = TCP_STATE_CLOSED;
-					err = ECONNRESET;
+					tcp_conn_fail(c, ECONNRESET);
 					goto unlock_and_drop;
 				}
 			}
@@ -64,8 +67,6 @@ void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 unlock_and_drop:
 	spin_unlock_np(&c->lock);
 	waitq_signal_finish(th);
-	if (err)
-		tcp_conn_shutdown_err(c, err);
 
 drop:
 	mbuf_free(m);
@@ -105,7 +106,7 @@ tcpconn_t *tcp_rx_listener(struct netaddr laddr, struct mbuf *m)
 		return NULL;
 
 	/* we have a valid SYN packet, initialize a new connection */
-	c = tcp_conn_alloc(TCP_STATE_SYN_RECEIVED);
+	c = tcp_conn_alloc();
 	if (unlikely(!c))
 		return NULL;
 	c->pcb.irs = ntoh32(tcphdr->seq);
@@ -122,13 +123,17 @@ tcpconn_t *tcp_rx_listener(struct netaddr laddr, struct mbuf *m)
 	}
 
 	/* finally, send a SYN/ACK to the remote host */
-	c->tx_exclusive = true; /* safe because not accept() yet */
+	spin_lock_np(&c->lock);
+	c->pcb.state = TCP_STATE_SYN_RECEIVED;
+	c->tx_exclusive = true; /* safe because @c not shared yet */
 	ret = tcp_tx_ctl(c, TCP_SYN | TCP_ACK);
 	if (unlikely(!ret)) {
+		spin_unlock_np(&c->lock);
 		tcp_conn_destroy(c);
 		return NULL;
 	}
 	c->tx_exclusive = false;
+	spin_unlock_np(&c->lock);
 
 	return c;
 }

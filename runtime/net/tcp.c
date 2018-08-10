@@ -40,7 +40,10 @@ void tcp_conn_ack(tcpconn_t *c, struct mbufq *freeq)
 static void tcp_conn_err(struct trans_entry *e, int err)
 {
 	tcpconn_t *c = container_of(e, tcpconn_t, e);
-	tcp_conn_shutdown_err(c, err);
+
+	spin_lock_np(&c->lock);
+	tcp_conn_fail(c, err);
+	spin_unlock_np(&c->lock);
 }
 
 /* operations for TCP sockets */
@@ -56,11 +59,10 @@ const struct trans_ops tcp_conn_ops = {
 
 /**
  * tcp_conn_alloc - allocates a TCP connection struct
- * @state: the initial PCB state of the connection
  *
  * Returns a connection, or NULL if out of memory.
  */
-tcpconn_t *tcp_conn_alloc(int state)
+tcpconn_t *tcp_conn_alloc()
 {
 	tcpconn_t *c;
 
@@ -90,7 +92,7 @@ tcpconn_t *tcp_conn_alloc(int state)
 	mbufq_init(&c->txq);
 
 	/* initialize egress half of PCB */
-	c->pcb.state = state;
+	c->pcb.state = TCP_STATE_CLOSED;
 	c->pcb.iss = microtime(); /* TODO: not secure */
 	c->pcb.snd_nxt = c->pcb.iss;
 	c->pcb.snd_una = c->pcb.iss;
@@ -344,7 +346,7 @@ int tcp_dial(struct netaddr laddr, struct netaddr raddr, tcpconn_t **c_out)
 	int ret;
 
 	/* create and initialize a connection */
-	c = tcp_conn_alloc(TCP_STATE_SYN_SENT);
+	c = tcp_conn_alloc();
 	if (unlikely(!c))
 		return -ENOMEM;
 
@@ -359,13 +361,17 @@ int tcp_dial(struct netaddr laddr, struct netaddr raddr, tcpconn_t **c_out)
 	}
 
 	/* send a SYN to the remote host */
+	spin_lock_np(&c->lock);
+	c->pcb.state = TCP_STATE_SYN_SENT;
 	c->tx_exclusive = true; /* safe because @c not shared yet */
 	ret = tcp_tx_ctl(c, TCP_SYN);
 	if (unlikely(!ret)) {
+		spin_unlock_np(&c->lock);
 		tcp_conn_destroy(c);
 		return ret;
 	}
 	c->tx_exclusive = false;
+	spin_unlock_np(&c->lock);
 
 	/* wait until the connection is established or there is a failure */
 	spin_lock_np(&c->lock);
@@ -696,7 +702,7 @@ ssize_t tcp_writev(tcpconn_t *c, const struct iovec *iov, int iovcnt)
 		if (winlen <= 0)
 			break;
 		ret = tcp_tx_buf(c, iov->iov_base, min(iov->iov_len, winlen),
-				 i < iovcnt - 1 && iov->iov_len <= winlen);
+				 i == iovcnt - 1 && iov->iov_len <= winlen);
 		if (ret <= 0)
 			break;
 		winlen -= ret;
@@ -711,7 +717,8 @@ ssize_t tcp_writev(tcpconn_t *c, const struct iovec *iov, int iovcnt)
 
 static void __tcp_shutdown(tcpconn_t *c, bool rx, bool tx)
 {
-	spin_lock_np(&c->lock);
+	assert_spin_lock_held(&c->lock);
+
 	if (c->rx_closed)
 		rx = false;
 	else if (rx)
@@ -721,7 +728,6 @@ static void __tcp_shutdown(tcpconn_t *c, bool rx, bool tx)
 		tx = false;
 	else if (tx)
 		c->tx_closed = true;
-	spin_unlock_np(&c->lock);
 
 	/* wake all blocked threads */
 	if (rx)
@@ -730,15 +736,50 @@ static void __tcp_shutdown(tcpconn_t *c, bool rx, bool tx)
 		waitq_release(&c->tx_wq);
 }
 
-void tcp_conn_shutdown_with_err(tcpconn_t *c, int err)
+/**
+ * tcp_conn_fail - shuts a TCP connection down with an error
+ * @c: the TCP connection to shutdown
+ * @err: the error code (reason for the shutdown)
+ *
+ * The caller must hold @c's lock.
+ */
+void tcp_conn_fail(tcpconn_t *c, int err)
 {
+	assert_spin_lock_held(&c->lock);
+
 	c->err = err;
 	__tcp_shutdown(c, true, true);
 }
 
-void tcp_shutdown(tcpconn_t *c, int how)
+/**
+ * tcp_shutdown - shuts a TCP connection down
+ * @c: the TCP connection to shutdown
+ * @how: the directions to shutdown (SHUT_RD, SHUT_WR, or SHUT_RDWR)
+ *
+ * Returns 0 if successful, otherwise < 0 for failure.
+ */
+int tcp_shutdown(tcpconn_t *c, int how)
 {
+	bool rx, tx, send_rst;
 
+	if (how != SHUT_RD && how != SHUT_WR && how != SHUT_RDWR)
+		return -EINVAL;
+
+	rx = how == SHUT_RD || how == SHUT_RDWR;
+	tx = how == SHUT_WR || how == SHUT_RDWR;
+
+	spin_lock_np(&c->lock);
+	c->pcb.state = TCP_STATE_CLOSED;
+	send_rst = tx && !c->tx_closed;
+	__tcp_shutdown(c, rx, tx);
+	spin_unlock_np(&c->lock);
+
+	/* TODO: Need to send FIN and support rest of state machine */
+	if (send_rst) {
+
+	}
+
+	return 0;
 }
 
 void tcp_close(tcpconn_t *c)

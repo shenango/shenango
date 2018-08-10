@@ -6,6 +6,7 @@
 
 #include <runtime/net.h>
 #include <sys/uio.h>
+#include <sys/socket.h>
 
 struct tcpqueue;
 typedef struct tcpqueue tcpqueue_t;
@@ -24,5 +25,5 @@ extern ssize_t tcp_read(tcpconn_t *c, void *buf, size_t len);
 extern ssize_t tcp_write(tcpconn_t *c, const void *buf, size_t len);
 extern ssize_t tcp_readv(tcpconn_t *c, const struct iovec *iov, int iovcnt);
 extern ssize_t tcp_writev(tcpconn_t *c, const struct iovec *iov, int iovcnt);
-extern void tcp_shutdown(tcpconn_t *c, int how);
+extern int tcp_shutdown(tcpconn_t *c, int how);
 extern void tcp_close(tcpconn_t *c);

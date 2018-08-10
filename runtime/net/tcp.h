@@ -75,11 +75,11 @@ struct tcpconn {
 	struct mbufq		txq;
 };
 
-extern tcpconn_t *tcp_conn_alloc(int state);
+extern tcpconn_t *tcp_conn_alloc();
 extern int tcp_conn_attach(tcpconn_t *c, struct netaddr laddr,
 			   struct netaddr raddr);
 extern void tcp_conn_destroy(tcpconn_t *c);
-extern void tcp_conn_shutdown_err(tcpconn_t *c, int err);
+extern void tcp_conn_fail(tcpconn_t *c, int err);
 
 
 /*
