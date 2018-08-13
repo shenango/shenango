@@ -26,6 +26,10 @@ void tcp_conn_ack(tcpconn_t *c, struct segq *freeq)
 
 	assert_spin_lock_held(&c->lock);
 
+	/* will free these segments later */
+	if (c->tx_exclusive)
+		return;
+
 	/* dequeue buffers that are fully acknowledged */
 	while (true) {
 		m = segq_peak_head(&c->txq);
@@ -591,6 +595,7 @@ ssize_t tcp_readv(tcpconn_t *c, const struct iovec *iov, int iovcnt)
 
 			assert(i <= iovcnt);
 		} while (mbuf_length(m) > 0);
+		mbuf_free(cur);
 	}
 
 	/* we may have to consume only part of a buffer */
@@ -658,8 +663,8 @@ static void tcp_write_finish(tcpconn_t *c, size_t sent_len)
 		c->pcb.snd_wnd -= sent_len;
 	else
 		c->pcb.snd_wnd = 0;
-	tcp_conn_ack(c, &q);
 	c->tx_exclusive = false;
+	tcp_conn_ack(c, &q);
 	th = waitq_signal(&c->tx_wq, &c->lock);
 	spin_unlock_np(&c->lock);
 

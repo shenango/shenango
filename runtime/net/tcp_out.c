@@ -126,6 +126,7 @@ int tcp_tx_ack(tcpconn_t *c)
 	tcphdr = tcp_push_tcphdr(m, c, TCP_ACK);
 	tcphdr->seq = hton32(load_acquire(&c->pcb.snd_nxt));
 
+	/* transmit packet */
 	ret = net_tx_ip(m, IPPROTO_TCP, c->e.raddr.ip);
 	if (unlikely(ret))
 		mbuf_free(m);
@@ -137,7 +138,8 @@ int tcp_tx_ack(tcpconn_t *c)
  * @c: the TCP connection
  * @flags: the control flags (e.g. TCP_SYN, TCP_FIN, etc.)
  *
- * WARNING: The caller must have write exclusive access to the socket.
+ * WARNING: The caller must have write exclusive access to the socket or hold
+ * @c->lock while write exclusion isn't taken.
  *
  * Returns 0 if successful, -ENOMEM if out memory.
  */
@@ -183,7 +185,8 @@ int tcp_tx_ctl(tcpconn_t *c, uint8_t flags)
  * future transmission.
  *
  * WARNING: The caller is responsible for respecting the TCP window size limit.
- * WARNING: The caller must have write exclusive access to the socket.
+ * WARNING: The caller must have write exclusive access to the socket or hold
+ * @c->lock while write exclusion isn't taken.
  *
  * Returns the number of bytes transmitted, or < 0 if there was an error.
  */
@@ -197,7 +200,7 @@ ssize_t tcp_tx_buf(tcpconn_t *c, const void *buf, size_t len, bool push)
 	size_t seglen;
 
 	assert(c->pcb.state == TCP_STATE_ESTABLISHED);
-	assert(c->tx_exclusive == true);
+	assert(c->tx_exclusive == true || spin_lock_held(&c->lock));
 
 	pos = buf;
 	end = pos + len;

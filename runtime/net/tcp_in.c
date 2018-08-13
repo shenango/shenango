@@ -29,6 +29,18 @@ static bool is_acceptable(tcpconn_t *c, uint32_t len, uint32_t seq)
 		wraps_lt(seq + len - 1, c->pcb.rcv_nxt + c->pcb.rcv_wnd));
 }
 
+/* see reset generation (RFC 793) */
+static void send_rst(tcpconn_t *c, bool acked, uint32_t seq, uint32_t ack,
+		     uint32_t len)
+{
+	if (acked) {
+		tcp_tx_raw_rst(c->e.laddr, c->e.raddr, ack);
+		return;
+	}
+
+	tcp_tx_raw_rst_ack(c->e.laddr, c->e.raddr, 0, seq + len);
+}
+
 /* handles ingress packets for TCP connections */
 void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 {
@@ -64,17 +76,18 @@ void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 
 	spin_lock_np(&c->lock);
 
-	switch(c->pcb.state) {
-	case TCP_STATE_CLOSED:
-		break;
+	if (c->pcb.state == TCP_STATE_CLOSED) {
+		do_drop = true;
+		goto done;
+	}
 
-	case TCP_STATE_SYN_SENT:
+	if (c->pcb.state == TCP_STATE_SYN_SENT) {
 		if ((tcphdr->flags & TCP_ACK) > 0) {
 			if (wraps_lte(ack, c->pcb.iss) ||
 			    wraps_gt(ack, load_acquire(&c->pcb.snd_nxt))) {
-				tcp_tx_raw_rst(c->e.laddr, c->e.raddr, ack);
+				send_rst(c, false, seq, ack, len);
 				do_drop = true;
-				break;
+				goto done;
 			}
 			if ((tcphdr->flags & TCP_RST) > 0) {
 				/* check if the ack is valid */
@@ -82,12 +95,12 @@ void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 				    wraps_lte(ack, c->pcb.snd_nxt)) {
 					tcp_conn_fail(c, ECONNRESET);
 					do_drop = true;
-					break;
+					goto done;
 				}
 			}
 		} else if ((tcphdr->flags & TCP_RST) > 0) {
 			do_drop = true;
-			break;
+			goto done;
 		}
 		if ((tcphdr->flags & TCP_SYN) > 0) {
 			c->pcb.rcv_nxt = seq + 1;
@@ -103,40 +116,76 @@ void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 				ret = tcp_tx_ctl(c, TCP_SYN | TCP_ACK);
 				if (unlikely(ret)) {
 					do_drop = true;
-					break; /* feign packet loss */
+					goto done; /* feign packet loss */
 				}
 				tcp_conn_set_state(c, TCP_STATE_SYN_RECEIVED);
 			}
 		}
-		break; /* TCP_STATE_SYN_SENT */
-
-	case TCP_STATE_SYN_RECEIVED:
-	case TCP_STATE_ESTABLISHED:
-	case TCP_STATE_FIN_WAIT1:
-	case TCP_STATE_FIN_WAIT2:
-	case TCP_STATE_CLOSE_WAIT:
-	case TCP_STATE_CLOSING:
-	case TCP_STATE_LAST_ACK:
-	case TCP_STATE_TIME_WAIT:
-		if (!is_acceptable(c, len, seq)) {
-			do_ack = true;
-			do_drop = true;
-			break;
-		}
-		if ((tcphdr->flags & TCP_RST) > 0) {
-			tcp_conn_fail(c, ECONNRESET);
-			do_drop = true;
-			break;
-		}
-		if ((tcphdr->flags & TCP_SYN) > 0) {
-			tcp_tx_raw_rst(c->e.laddr, c->e.raddr, ack);
-			tcp_conn_fail(c, ECONNRESET);
-			do_drop = true;
-			break;
-		}
-		break; /* TCP_STATE_SYN_RECEIVED to TCP_STATE_TIME_WAIT */
+		goto done;
 	}
 
+	/*
+	 * TCP_STATE_SYN_RECEIVED || TCP_STATE_ESTABLISHED ||
+	 * TCP_STATE_FIN_WAIT1 || TCP_STATE_FIN_WAIT2 ||
+	 * TCP_STATE_CLOSE_WAIT || TCP_STATE_CLOSING ||
+	 * TCP_STATE_LAST_ACK || TCP_STATE_TIME_WAIT
+	 */
+
+	/* step 1 */
+	if (!is_acceptable(c, len, seq)) {
+		do_ack = (tcphdr->flags & TCP_RST) == 0;
+		do_drop = true;
+		goto done;
+	}
+
+	/* step 2 */
+	if ((tcphdr->flags & TCP_RST) > 0) {
+		tcp_conn_fail(c, ECONNRESET);
+		do_drop = true;
+		goto done;
+	}
+
+	/* step 4 */
+	if ((tcphdr->flags & TCP_SYN) > 0) {
+		send_rst(c, (tcphdr->flags & TCP_ACK) > 0, seq, ack, len);
+		tcp_conn_fail(c, ECONNRESET);
+		do_drop = true;
+		goto done;
+	}
+
+	/* step 5 */
+	if ((tcphdr->flags & TCP_ACK) == 0) {
+		do_drop = true;
+		goto done;
+	}
+	if (c->pcb.state == TCP_STATE_SYN_RECEIVED) {
+		if (!(wraps_lte(c->pcb.snd_una, ack) &&
+		      wraps_lte(ack, c->pcb.snd_nxt))) {
+			send_rst(c, true, seq, ack, len);
+			do_drop = true;
+			goto done;
+		}
+		tcp_conn_set_state(c, TCP_STATE_ESTABLISHED);
+	}
+	if (wraps_lt(c->pcb.snd_una, ack) &&
+	    wraps_lte(ack, c->pcb.snd_nxt)) {
+		c->pcb.snd_una = ack;
+		tcp_conn_ack(c, &q);
+		/* should we update the send window? */
+		if (wraps_lt(c->pcb.snd_wl1, seq) ||
+		    (c->pcb.snd_wl1 == seq &&
+		     wraps_lte(c->pcb.snd_wl2, ack))) {
+			c->pcb.snd_wnd = win;
+			c->pcb.snd_wl1 = seq;
+			c->pcb.snd_wl2 = ack;
+		}
+	} else if (wraps_gt(ack, c->pcb.snd_nxt)) {
+		do_ack = true;
+		do_drop = true;
+		goto done;
+	}
+
+done:
 	spin_unlock_np(&c->lock);
 
 	/* deferred work (delayed until after the lock was dropped) */
