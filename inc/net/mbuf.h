@@ -38,6 +38,7 @@ struct mbuf {
 	void		(*release)(struct mbuf *m); /* frees the mbuf */
 
 	/* TCP fields */
+	struct mbuf	*next_seg;  /* the next TCP segment */
 	uint64_t	timestamp;  /* the time the packet was last sent */
 	uint32_t	seg_seq;    /* the TCP segment number */
 	uint32_t	seg_len;    /* the TCP segment length */

@@ -20,7 +20,7 @@
  * WARNING: the caller must hold @c->lock.
  * @freeq is provided so that @c->lock can be released before freeing buffers.
  */
-void tcp_conn_ack(tcpconn_t *c, struct mbufq *freeq)
+void tcp_conn_ack(tcpconn_t *c, struct segq *freeq)
 {
 	struct mbuf *m;
 
@@ -28,12 +28,35 @@ void tcp_conn_ack(tcpconn_t *c, struct mbufq *freeq)
 
 	/* dequeue buffers that are fully acknowledged */
 	while (true) {
-		m = mbufq_peak_head(&c->txq);
+		m = segq_peak_head(&c->txq);
 		if (wraps_gt(m->seg_seq + m->seg_len, c->pcb.snd_una))
 			break;
 
-		mbufq_push_tail(freeq, mbufq_pop_head(&c->txq));
+		segq_push_tail(freeq, segq_pop_head(&c->txq));
 	}
+}
+
+/**
+ * tcp_conn_set_state - changes the TCP PCB state
+ * @c: the TCP connection to update
+ * @new_state: the new TCP_STATE_* value
+ *
+ * WARNING: @c->lock must be held by the caller.
+ * WARNING: @new_state must be greater than the current state.
+ */
+void tcp_conn_set_state(tcpconn_t *c, int new_state)
+{
+	assert_spin_lock_held(&c->lock);
+	assert(c->pcb.state == TCP_STATE_CLOSED || c->pcb.state < new_state);
+
+	/* unblock any threads waiting for the connection to be established */
+	if (c->pcb.state < TCP_STATE_ESTABLISHED &&
+	    new_state >= TCP_STATE_ESTABLISHED) {
+		waitq_release(&c->rx_wq);
+		waitq_release(&c->tx_wq);
+	}
+
+	c->pcb.state = new_state;
 }
 
 /* handles network errors for TCP sockets */
@@ -62,7 +85,7 @@ const struct trans_ops tcp_conn_ops = {
  *
  * Returns a connection, or NULL if out of memory.
  */
-tcpconn_t *tcp_conn_alloc()
+tcpconn_t *tcp_conn_alloc(void)
 {
 	tcpconn_t *c;
 
@@ -89,7 +112,7 @@ tcpconn_t *tcp_conn_alloc()
 	c->tx_last_ack = 0;
 	c->tx_last_win = 0;
 	c->tx_pending = NULL;
-	mbufq_init(&c->txq);
+	segq_init(&c->txq);
 
 	/* initialize egress half of PCB */
 	c->pcb.state = TCP_STATE_CLOSED;
@@ -127,7 +150,7 @@ static void tcp_conn_release(struct rcu_head *h)
 		mbuf_free(c->tx_pending);
 	mbufq_release(&c->rxq_ooo);
 	mbufq_release(&c->rxq);
-	mbufq_release(&c->txq);
+	segq_release(&c->txq);
 	sfree(c);
 }
 
@@ -362,22 +385,17 @@ int tcp_dial(struct netaddr laddr, struct netaddr raddr, tcpconn_t **c_out)
 
 	/* send a SYN to the remote host */
 	spin_lock_np(&c->lock);
-	c->pcb.state = TCP_STATE_SYN_SENT;
-	c->tx_exclusive = true; /* safe because @c not shared yet */
 	ret = tcp_tx_ctl(c, TCP_SYN);
 	if (unlikely(!ret)) {
 		spin_unlock_np(&c->lock);
 		tcp_conn_destroy(c);
 		return ret;
 	}
-	c->tx_exclusive = false;
-	spin_unlock_np(&c->lock);
+	tcp_conn_set_state(c, TCP_STATE_SYN_SENT);
 
 	/* wait until the connection is established or there is a failure */
-	spin_lock_np(&c->lock);
-	while (!c->rx_closed && c->pcb.state < TCP_STATE_ESTABLISHED) {
+	while (!c->rx_closed && c->pcb.state < TCP_STATE_ESTABLISHED)
 		waitq_wait(&c->tx_wq, &c->lock);
-	}
 
 	/* check if the connection failed */
 	if (c->rx_closed) {
@@ -608,7 +626,7 @@ static int tcp_write_wait(tcpconn_t *c, size_t *winlen)
 	/* block until there is an actionable event */
 	while (!c->tx_closed &&
 	       (c->pcb.state < TCP_STATE_ESTABLISHED || c->tx_exclusive ||
-		(c->pcb.snd_wnd == 0 && !mbufq_empty(&c->txq)))) {
+		(c->pcb.snd_wnd == 0 && !segq_empty(&c->txq)))) {
 		waitq_wait(&c->tx_wq, &c->lock);
 	}
 
@@ -629,11 +647,11 @@ static int tcp_write_wait(tcpconn_t *c, size_t *winlen)
 
 static void tcp_write_finish(tcpconn_t *c, size_t sent_len)
 {
-	struct mbufq q;
+	struct segq q;
 	thread_t *th;
 
 	assert(c->tx_exclusive == true);
-	mbufq_init(&q);
+	segq_init(&q);
 
 	spin_lock_np(&c->lock);
 	if (sent_len <= c->pcb.snd_wnd)
@@ -646,7 +664,7 @@ static void tcp_write_finish(tcpconn_t *c, size_t sent_len)
 	spin_unlock_np(&c->lock);
 
 	waitq_signal_finish(th);
-	mbufq_release(&q);
+	segq_release(&q);
 }
 
 /**
@@ -748,6 +766,7 @@ void tcp_conn_fail(tcpconn_t *c, int err)
 	assert_spin_lock_held(&c->lock);
 
 	c->err = err;
+	c->pcb.state = TCP_STATE_CLOSED;
 	__tcp_shutdown(c, true, true);
 }
 

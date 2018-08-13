@@ -147,7 +147,7 @@ int tcp_tx_ctl(tcpconn_t *c, uint8_t flags)
 	struct mbuf *m;
 	int ret;
 
-	BUG_ON(!c->tx_exclusive);
+	BUG_ON(!c->tx_exclusive && !spin_lock_held(&c->lock));
 
 	m = net_tx_alloc_mbuf();
 	if (unlikely(!m))
@@ -158,7 +158,7 @@ int tcp_tx_ctl(tcpconn_t *c, uint8_t flags)
 	tcphdr = tcp_push_tcphdr(m, c, flags);
 	tcphdr->seq = hton32(c->pcb.snd_nxt);
 	store_release(&c->pcb.snd_nxt, c->pcb.snd_nxt + 1);
-	mbufq_push_tail(&c->txq, m);
+	segq_push_tail(&c->txq, m);
 
 	m->timestamp = microtime();
 	atomic_write(&m->ref, 2);
@@ -243,7 +243,7 @@ ssize_t tcp_tx_buf(tcpconn_t *c, const void *buf, size_t len, bool push)
 		}
 
 		/* transmit the packet */
-		mbufq_push_tail(&c->txq, m);
+		segq_push_tail(&c->txq, m);
 		m->timestamp = microtime();
 		ret = net_tx_ip(m, IPPROTO_TCP, c->e.raddr.ip);
 		if (unlikely(ret)) {
