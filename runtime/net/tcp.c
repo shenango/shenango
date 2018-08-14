@@ -738,27 +738,6 @@ ssize_t tcp_writev(tcpconn_t *c, const struct iovec *iov, int iovcnt)
 	return sent > 0 ? sent : ret;
 }
 
-static void __tcp_shutdown(tcpconn_t *c, bool rx, bool tx)
-{
-	assert_spin_lock_held(&c->lock);
-
-	if (c->rx_closed)
-		rx = false;
-	else if (rx)
-		c->rx_closed = true;
-
-	if (c->tx_closed)
-		tx = false;
-	else if (tx)
-		c->tx_closed = true;
-
-	/* wake all blocked threads */
-	if (rx)
-		waitq_release(&c->rx_wq);
-	if (tx)
-		waitq_release(&c->tx_wq);
-}
-
 /**
  * tcp_conn_fail - shuts a TCP connection down with an error
  * @c: the TCP connection to shutdown
@@ -772,7 +751,10 @@ void tcp_conn_fail(tcpconn_t *c, int err)
 
 	c->err = err;
 	c->pcb.state = TCP_STATE_CLOSED;
-	__tcp_shutdown(c, true, true);
+	c->rx_closed = true;
+	c->tx_closed = true;
+	waitq_release(&c->rx_wq);
+	waitq_release(&c->tx_wq);
 }
 
 /**
@@ -784,7 +766,8 @@ void tcp_conn_fail(tcpconn_t *c, int err)
  */
 int tcp_shutdown(tcpconn_t *c, int how)
 {
-	bool rx, tx, send_rst;
+	bool rx, tx;
+	int ret;
 
 	if (how != SHUT_RD && how != SHUT_WR && how != SHUT_RDWR)
 		return -EINVAL;
@@ -793,15 +776,33 @@ int tcp_shutdown(tcpconn_t *c, int how)
 	tx = how == SHUT_WR || how == SHUT_RDWR;
 
 	spin_lock_np(&c->lock);
-	c->pcb.state = TCP_STATE_CLOSED;
-	send_rst = tx && !c->tx_closed;
-	__tcp_shutdown(c, rx, tx);
-	spin_unlock_np(&c->lock);
 
-	/* TODO: Need to send FIN and support rest of state machine */
-	if (send_rst) {
-
+	/* shutdown RX path */
+	if (!c->rx_closed && rx) {
+		c->rx_closed = true;
+		waitq_release(&c->rx_wq);
 	}
+
+	/* shutdown TX path */
+	if (!c->tx_closed && tx) {
+		assert(c->pcb.state >= TCP_STATE_ESTABLISHED);
+		while (c->tx_exclusive)
+			waitq_wait(&c->tx_wq, &c->lock);
+		ret = tcp_tx_ctl(c, TCP_FIN | TCP_ACK);
+		if (unlikely(ret)) {
+			spin_unlock_np(&c->lock);
+			return ret;
+		}
+		c->tx_closed = true;
+		waitq_release(&c->tx_wq);
+		if (c->pcb.state == TCP_STATE_ESTABLISHED)
+			tcp_conn_set_state(c, TCP_STATE_FIN_WAIT1);
+		else if (c->pcb.state == TCP_STATE_CLOSE_WAIT)
+			tcp_conn_set_state(c, TCP_STATE_LAST_ACK);
+		else
+			WARN();
+	}
+	spin_unlock_np(&c->lock);
 
 	return 0;
 }

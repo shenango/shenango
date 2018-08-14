@@ -1,5 +1,7 @@
 /*
  * tcp_in.c - the ingress datapath for TCP
+ *
+ * Based on RFC 793 and RFC 1122 (errata).
  */
 
 #include <base/stddef.h>
@@ -37,7 +39,6 @@ static void send_rst(tcpconn_t *c, bool acked, uint32_t seq, uint32_t ack,
 		tcp_tx_raw_rst(c->e.laddr, c->e.raddr, ack);
 		return;
 	}
-
 	tcp_tx_raw_rst_ack(c->e.laddr, c->e.raddr, 0, seq + len);
 }
 
@@ -111,6 +112,9 @@ void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 			}
 			if (wraps_gt(c->pcb.snd_una, c->pcb.iss)) {
 				do_ack = true;
+				c->pcb.snd_wnd = win;
+				c->pcb.snd_wl1 = seq;
+				c->pcb.snd_wl2 = ack;
 				tcp_conn_set_state(c, TCP_STATE_ESTABLISHED);
 			} else {
 				ret = tcp_tx_ctl(c, TCP_SYN | TCP_ACK);
@@ -145,6 +149,8 @@ void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 		goto done;
 	}
 
+	/* step 3 - security checks skipped */
+
 	/* step 4 */
 	if ((tcphdr->flags & TCP_SYN) > 0) {
 		send_rst(c, (tcphdr->flags & TCP_ACK) > 0, seq, ack, len);
@@ -165,9 +171,12 @@ void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 			do_drop = true;
 			goto done;
 		}
+		c->pcb.snd_wnd = win;
+		c->pcb.snd_wl1 = seq;
+		c->pcb.snd_wl2 = ack;
 		tcp_conn_set_state(c, TCP_STATE_ESTABLISHED);
 	}
-	if (wraps_lt(c->pcb.snd_una, ack) &&
+	if (wraps_lte(c->pcb.snd_una, ack) &&
 	    wraps_lte(ack, c->pcb.snd_nxt)) {
 		c->pcb.snd_una = ack;
 		tcp_conn_ack(c, &q);
@@ -184,6 +193,19 @@ void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 		do_drop = true;
 		goto done;
 	}
+	if (c->pcb.state == TCP_STATE_FIN_WAIT1 &&
+	    c->pcb.snd_una == c->pcb.snd_nxt) {
+		tcp_conn_set_state(c, TCP_STATE_FIN_WAIT2);
+	} else if (c->pcb.state == TCP_STATE_CLOSING &&
+		   c->pcb.snd_una == c->pcb.snd_nxt) {
+		tcp_conn_set_state(c, TCP_STATE_TIME_WAIT);
+	} else if (c->pcb.state == TCP_STATE_LAST_ACK &&
+		   c->pcb.snd_una == c->pcb.snd_nxt) {
+		tcp_conn_set_state(c, TCP_STATE_CLOSED);
+		/* delete the PCB */
+		goto done;
+	}
+
 
 done:
 	spin_unlock_np(&c->lock);
