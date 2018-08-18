@@ -15,6 +15,8 @@
 /* four cases for the acceptability test for an incoming segment */
 static bool is_acceptable(tcpconn_t *c, uint32_t len, uint32_t seq)
 {
+	assert_spin_lock_held(&c->lock);
+
 	if (len == 0 && c->pcb.rcv_wnd == 0) {
 		return seq == c->pcb.rcv_nxt;
 	} else if (len == 0 && c->pcb.rcv_wnd > 0) {
@@ -31,6 +33,14 @@ static bool is_acceptable(tcpconn_t *c, uint32_t len, uint32_t seq)
 		wraps_lt(seq + len - 1, c->pcb.rcv_nxt + c->pcb.rcv_wnd));
 }
 
+/* is the TX window full? */
+static bool is_snd_full(tcpconn_t *c)
+{
+	assert_spin_lock_held(&c->lock);
+
+	return c->pcb.snd_una + c->pcb.snd_wnd <= c->pcb.snd_nxt;
+}
+
 /* see reset generation (RFC 793) */
 static void send_rst(tcpconn_t *c, bool acked, uint32_t seq, uint32_t ack,
 		     uint32_t len)
@@ -42,20 +52,28 @@ static void send_rst(tcpconn_t *c, bool acked, uint32_t seq, uint32_t ack,
 	tcp_tx_raw_rst_ack(c->e.laddr, c->e.raddr, 0, seq + len);
 }
 
+/* process RX text segments */
+static void tcp_rx_text(tcpconn_t *c, struct mbuf *m)
+{
+	assert_spin_lock_held(&c->lock);
+
+
+}
+
 /* handles ingress packets for TCP connections */
 void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 {
 	tcpconn_t *c = container_of(e, tcpconn_t, e);
-	thread_t *th = NULL;
 	struct segq q;
 	const struct ip_hdr *iphdr;
 	const struct tcp_hdr *tcphdr;
-	uint32_t seq, ack, len;
+	uint32_t seq, ack, len, snd_nxt;
 	uint16_t win;
 	bool do_ack = false, do_drop = false;
 	int ret;
 
 	segq_init(&q);
+	snd_nxt = load_acquire(&c->pcb.snd_nxt);
 
 	/* find header offsets */
 	iphdr = mbuf_network_hdr(m, *iphdr);
@@ -85,7 +103,7 @@ void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 	if (c->pcb.state == TCP_STATE_SYN_SENT) {
 		if ((tcphdr->flags & TCP_ACK) > 0) {
 			if (wraps_lte(ack, c->pcb.iss) ||
-			    wraps_gt(ack, load_acquire(&c->pcb.snd_nxt))) {
+			    wraps_gt(ack, snd_nxt)) {
 				send_rst(c, false, seq, ack, len);
 				do_drop = true;
 				goto done;
@@ -93,7 +111,7 @@ void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 			if ((tcphdr->flags & TCP_RST) > 0) {
 				/* check if the ack is valid */
 				if (wraps_lte(c->pcb.snd_una, ack) &&
-				    wraps_lte(ack, c->pcb.snd_nxt)) {
+				    wraps_lte(ack, snd_nxt)) {
 					tcp_conn_fail(c, ECONNRESET);
 					do_drop = true;
 					goto done;
@@ -135,14 +153,14 @@ void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 	 * TCP_STATE_LAST_ACK || TCP_STATE_TIME_WAIT
 	 */
 
-	/* step 1 */
+	/* step 1 - acceptability testing */
 	if (!is_acceptable(c, len, seq)) {
 		do_ack = (tcphdr->flags & TCP_RST) == 0;
 		do_drop = true;
 		goto done;
 	}
 
-	/* step 2 */
+	/* step 2 - RST */
 	if ((tcphdr->flags & TCP_RST) > 0) {
 		tcp_conn_fail(c, ECONNRESET);
 		do_drop = true;
@@ -151,7 +169,7 @@ void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 
 	/* step 3 - security checks skipped */
 
-	/* step 4 */
+	/* step 4 - SYN */
 	if ((tcphdr->flags & TCP_SYN) > 0) {
 		send_rst(c, (tcphdr->flags & TCP_ACK) > 0, seq, ack, len);
 		tcp_conn_fail(c, ECONNRESET);
@@ -159,14 +177,14 @@ void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 		goto done;
 	}
 
-	/* step 5 */
+	/* step 5 - ACK */
 	if ((tcphdr->flags & TCP_ACK) == 0) {
 		do_drop = true;
 		goto done;
 	}
 	if (c->pcb.state == TCP_STATE_SYN_RECEIVED) {
 		if (!(wraps_lte(c->pcb.snd_una, ack) &&
-		      wraps_lte(ack, c->pcb.snd_nxt))) {
+		      wraps_lte(ack, snd_nxt))) {
 			send_rst(c, true, seq, ack, len);
 			do_drop = true;
 			goto done;
@@ -177,7 +195,8 @@ void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 		tcp_conn_set_state(c, TCP_STATE_ESTABLISHED);
 	}
 	if (wraps_lte(c->pcb.snd_una, ack) &&
-	    wraps_lte(ack, c->pcb.snd_nxt)) {
+	    wraps_lte(ack, snd_nxt)) {
+		bool snd_was_full = is_snd_full(c);
 		c->pcb.snd_una = ack;
 		tcp_conn_ack(c, &q);
 		/* should we update the send window? */
@@ -188,30 +207,59 @@ void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 			c->pcb.snd_wl1 = seq;
 			c->pcb.snd_wl2 = ack;
 		}
-	} else if (wraps_gt(ack, c->pcb.snd_nxt)) {
+		if (snd_was_full && !is_snd_full(c))
+			waitq_signal_locked(&c->tx_wq, &c->lock);
+	} else if (wraps_gt(ack, snd_nxt)) {
 		do_ack = true;
 		do_drop = true;
 		goto done;
 	}
 	if (c->pcb.state == TCP_STATE_FIN_WAIT1 &&
-	    c->pcb.snd_una == c->pcb.snd_nxt) {
+	    c->pcb.snd_una == snd_nxt) {
 		tcp_conn_set_state(c, TCP_STATE_FIN_WAIT2);
 	} else if (c->pcb.state == TCP_STATE_CLOSING &&
-		   c->pcb.snd_una == c->pcb.snd_nxt) {
+		   c->pcb.snd_una == snd_nxt) {
 		tcp_conn_set_state(c, TCP_STATE_TIME_WAIT);
 	} else if (c->pcb.state == TCP_STATE_LAST_ACK &&
-		   c->pcb.snd_una == c->pcb.snd_nxt) {
+		   c->pcb.snd_una == snd_nxt) {
 		tcp_conn_set_state(c, TCP_STATE_CLOSED);
 		/* delete the PCB */
 		goto done;
 	}
 
+	/* step 6 - URG support skipped */
+
+	/* step 7 - segment text */
+	if (len > 0 &&
+	    (c->pcb.state == TCP_STATE_ESTABLISHED ||
+	     c->pcb.state == TCP_STATE_FIN_WAIT1 ||
+	     c->pcb.state == TCP_STATE_FIN_WAIT2)) {
+		m->seg_seq = seq;
+		m->seg_len = len;
+		m->push = (tcphdr->flags & TCP_PUSH) > 0;
+		tcp_rx_text(c, m);
+		do_ack = true;
+	}
+
+	/* step 8 - FIN */
+	if ((tcphdr->flags & TCP_FIN) == 0)
+		goto done;
+	tcp_conn_close(c, true, false);
+	if (c->pcb.state == TCP_STATE_SYN_RECEIVED ||
+	    c->pcb.state == TCP_STATE_ESTABLISHED) {
+		tcp_conn_set_state(c, TCP_STATE_CLOSE_WAIT);
+	} else if (c->pcb.state == TCP_STATE_FIN_WAIT1) {
+		assert(c->pcb.snd_una != snd_nxt);
+		tcp_conn_set_state(c, TCP_STATE_CLOSING);
+	} else if (c->pcb.state == TCP_STATE_FIN_WAIT2) {
+		/* TODO: enable time-wait timer and disable other timers */
+		tcp_conn_set_state(c, TCP_STATE_TIME_WAIT);
+	}
 
 done:
 	spin_unlock_np(&c->lock);
 
 	/* deferred work (delayed until after the lock was dropped) */
-	waitq_signal_finish(th);
 	segq_release(&q);
 	if (do_ack)
 		tcp_tx_ack(c);

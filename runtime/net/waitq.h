@@ -51,6 +51,17 @@ static inline void waitq_signal_finish(thread_t *th)
 }
 
 /**
+ * waitq_signal_locked - wakes up to one waiter on the wake queue
+ * @q: the wake queue
+ * @l: a held spinlock protecting the wake queue and the condition
+ */
+static inline void waitq_signal_locked(waitq_t *q, spinlock_t *l)
+{
+	thread_t *th = waitq_signal(q, l);
+	waitq_signal_finish(th);
+}
+
+/**
  * waitq_release - wakes all pending waiters
  * @q: the wake queue
  *

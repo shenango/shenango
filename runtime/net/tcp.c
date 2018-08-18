@@ -449,7 +449,7 @@ static ssize_t tcp_read_wait(tcpconn_t *c, size_t len,
 	}
 
 	/* is the socket closed? */
-	if (c->rx_closed) {
+	if (c->rx_closed && mbufq_empty(&c->rxq)) {
 		spin_unlock_np(&c->lock);
 		return -c->err;
 	}
@@ -475,7 +475,7 @@ static ssize_t tcp_read_wait(tcpconn_t *c, size_t len,
 	return readlen;
 }
 
-static void tcp_read_finish(tcpconn_t *c, struct mbuf *m)
+static void tcp_read_finish(tcpconn_t *c, struct mbuf *m, size_t len)
 {
 	thread_t *th;
 
@@ -483,6 +483,7 @@ static void tcp_read_finish(tcpconn_t *c, struct mbuf *m)
 		return;
 
 	spin_lock_np(&c->lock);
+	c->pcb.rcv_wnd += len;
 	th = waitq_signal(&c->rx_wq, &c->lock);
 	spin_unlock_np(&c->lock);
 	waitq_signal_finish(th);
@@ -528,10 +529,12 @@ ssize_t tcp_read(tcpconn_t *c, void *buf, size_t len)
 	if (m) {
 		size_t cpylen = len - (uintptr_t)pos + (uintptr_t)buf;
 		memcpy(pos, mbuf_pull(m, cpylen), cpylen);
+		m->seg_seq += cpylen;
+		m->seg_len -= cpylen;
 	}
 
 	/* wakeup any pending readers */
-	tcp_read_finish(c, m);
+	tcp_read_finish(c, m, ret);
 
 	return ret;
 }
@@ -607,7 +610,8 @@ ssize_t tcp_readv(tcpconn_t *c, const struct iovec *iov, int iovcnt)
 
 			memcpy((char *)vp->iov_base + offset,
 			       mbuf_pull(m, cpylen), cpylen);
-
+			m->seg_seq += cpylen;
+			m->seg_len -= cpylen;
 			offset += cpylen;
 			if (offset == vp->iov_len) {
 				offset = 0;
@@ -619,7 +623,7 @@ ssize_t tcp_readv(tcpconn_t *c, const struct iovec *iov, int iovcnt)
 	}
 
 	/* wakeup any pending readers */
-	tcp_read_finish(c, m);
+	tcp_read_finish(c, m, len);
 
 	return len;
 }
@@ -631,7 +635,8 @@ static int tcp_write_wait(tcpconn_t *c, size_t *winlen)
 	/* block until there is an actionable event */
 	while (!c->tx_closed &&
 	       (c->pcb.state < TCP_STATE_ESTABLISHED || c->tx_exclusive ||
-		(c->pcb.snd_wnd == 0 && !segq_empty(&c->txq)))) {
+		(c->pcb.snd_una + c->pcb.snd_wnd <= c->pcb.snd_nxt &&
+		 !segq_empty(&c->txq)))) {
 		waitq_wait(&c->tx_wq, &c->lock);
 	}
 
@@ -644,13 +649,13 @@ static int tcp_write_wait(tcpconn_t *c, size_t *winlen)
 	/* drop the lock to allow concurrent RX processing */
 	c->tx_exclusive = true;
 	/* must allow at least one byte to avoid zero window deadlock */
-	*winlen = max(c->pcb.snd_wnd, 1);
+	*winlen = max(c->pcb.snd_una + c->pcb.snd_wnd - c->pcb.snd_nxt, 1);
 	spin_unlock_np(&c->lock);
 
 	return 0;
 }
 
-static void tcp_write_finish(tcpconn_t *c, size_t sent_len)
+static void tcp_write_finish(tcpconn_t *c)
 {
 	struct segq q;
 	thread_t *th;
@@ -659,10 +664,6 @@ static void tcp_write_finish(tcpconn_t *c, size_t sent_len)
 	segq_init(&q);
 
 	spin_lock_np(&c->lock);
-	if (sent_len <= c->pcb.snd_wnd)
-		c->pcb.snd_wnd -= sent_len;
-	else
-		c->pcb.snd_wnd = 0;
 	c->tx_exclusive = false;
 	tcp_conn_ack(c, &q);
 	th = waitq_signal(&c->tx_wq, &c->lock);
@@ -695,7 +696,7 @@ ssize_t tcp_write(tcpconn_t *c, const void *buf, size_t len)
 	ret = tcp_tx_buf(c, buf, min(len, winlen), len <= winlen);
 
 	/* catch up on any pending work */
-	tcp_write_finish(c, ret > 0 ? ret : 0);
+	tcp_write_finish(c);
 
 	return ret;
 }
@@ -733,15 +734,37 @@ ssize_t tcp_writev(tcpconn_t *c, const struct iovec *iov, int iovcnt)
 	}
 
 	/* catch up on any pending work */
-	tcp_write_finish(c, sent);
+	tcp_write_finish(c);
 
 	return sent > 0 ? sent : ret;
 }
 
 /**
- * tcp_conn_fail - shuts a TCP connection down with an error
+ * tcp_conn_close - closes a TCP connection
  * @c: the TCP connection to shutdown
- * @err: the error code (reason for the shutdown)
+ * @close_rx: close the RX path
+ * @close_tx: close the TX path
+ *
+ * The caller must hold @c's lock.
+ */
+void tcp_conn_close(tcpconn_t *c, bool close_rx, bool close_tx)
+{
+	assert_spin_lock_held(&c->lock);
+
+	if (close_rx) {
+		c->rx_closed = true;
+		waitq_release(&c->rx_wq);
+	}
+	if (close_tx) {
+		c->tx_closed = true;
+		waitq_release(&c->tx_wq);
+	}
+}
+
+/**
+ * tcp_conn_fail - closes a TCP connection with an error
+ * @c: the TCP connection to shutdown
+ * @err: the error code (failure reason for the close)
  *
  * The caller must hold @c's lock.
  */
@@ -750,11 +773,8 @@ void tcp_conn_fail(tcpconn_t *c, int err)
 	assert_spin_lock_held(&c->lock);
 
 	c->err = err;
-	c->pcb.state = TCP_STATE_CLOSED;
-	c->rx_closed = true;
-	c->tx_closed = true;
-	waitq_release(&c->rx_wq);
-	waitq_release(&c->tx_wq);
+	tcp_conn_close(c, true, true);
+	tcp_conn_set_state(c, TCP_STATE_CLOSED);
 }
 
 /**
@@ -777,13 +797,7 @@ int tcp_shutdown(tcpconn_t *c, int how)
 
 	spin_lock_np(&c->lock);
 
-	/* shutdown RX path */
-	if (!c->rx_closed && rx) {
-		c->rx_closed = true;
-		waitq_release(&c->rx_wq);
-	}
-
-	/* shutdown TX path */
+	/* handle TCP close operation */
 	if (!c->tx_closed && tx) {
 		assert(c->pcb.state >= TCP_STATE_ESTABLISHED);
 		while (c->tx_exclusive)
@@ -793,8 +807,6 @@ int tcp_shutdown(tcpconn_t *c, int how)
 			spin_unlock_np(&c->lock);
 			return ret;
 		}
-		c->tx_closed = true;
-		waitq_release(&c->tx_wq);
 		if (c->pcb.state == TCP_STATE_ESTABLISHED)
 			tcp_conn_set_state(c, TCP_STATE_FIN_WAIT1);
 		else if (c->pcb.state == TCP_STATE_CLOSE_WAIT)
@@ -802,6 +814,8 @@ int tcp_shutdown(tcpconn_t *c, int how)
 		else
 			WARN();
 	}
+
+	tcp_conn_close(c, rx, tx);
 	spin_unlock_np(&c->lock);
 
 	return 0;
