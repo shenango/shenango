@@ -12,6 +12,7 @@
 #include <base/stddef.h>
 #include <base/assert.h>
 #include <base/atomic.h>
+#include <base/list.h>
 #include <iokernel/queue.h>
 
 #define MBUF_DEFAULT_LEN	2048
@@ -40,6 +41,7 @@ struct mbuf {
 	/* TCP fields */
 	struct mbuf	*next_seg;  /* the next TCP segment */
 	uint64_t	timestamp;  /* the time the packet was last sent */
+	struct list_node link;	    /* list node for RX and TX queues */
 	uint32_t	seg_seq;    /* the TCP segment number */
 	uint32_t	seg_len;    /* the TCP segment length */
 	bool		push;	    /* was TCP_PSH flag set? */

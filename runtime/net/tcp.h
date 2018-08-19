@@ -67,8 +67,8 @@ struct tcpconn {
 	unsigned int		rx_closed:1;
 	unsigned int		rx_exclusive:1;
 	waitq_t			rx_wq;
-	struct mbufq		rxq_ooo;
-	struct mbufq		rxq;
+	struct list_head	rxq_ooo;
+	struct list_head	rxq;
 
 	/* egress path */
 	unsigned int		tx_closed:1;
@@ -77,13 +77,13 @@ struct tcpconn {
 	uint32_t		tx_last_ack;
 	uint16_t		tx_last_win;
 	struct mbuf		*tx_pending;
-	struct segq		txq;
+	struct list_head	txq;
 };
 
 extern tcpconn_t *tcp_conn_alloc(void);
 extern int tcp_conn_attach(tcpconn_t *c, struct netaddr laddr,
 			   struct netaddr raddr);
-extern void tcp_conn_ack(tcpconn_t *c, struct segq *freeq);
+extern void tcp_conn_ack(tcpconn_t *c, struct list_head *freeq);
 extern void tcp_conn_set_state(tcpconn_t *c, int new_state);
 extern void tcp_conn_destroy(tcpconn_t *c);
 extern void tcp_conn_close(tcpconn_t *c, bool close_rx, bool close_tx);
@@ -110,81 +110,16 @@ extern int tcp_tx_ack(tcpconn_t *c);
 extern int tcp_tx_ctl(tcpconn_t *c, uint8_t flags);
 extern ssize_t tcp_tx_buf(tcpconn_t *c, const void *buf, size_t len, bool push);
 
-
-/*
- * TCP segment queues
- */
-
-/**
- * segq_push_tail - push an mbuf to the tail of the segment queue
- * @q: the segment queue
- * @m: the mbuf to push
- */
-static inline void segq_push_tail(struct segq *q, struct mbuf *m)
-{
-	m->next_seg = NULL;
-	if (!q->head) {
-		q->head = q->tail = m;
-		return;
-	}
-	q->tail->next_seg = m;
-	q->tail = m;
-}
-
-/**
- * segq_pop_head - pop an mbuf from the head of the segement queue
- * @q: the mbuf queue
- *
- * Returns an mbuf or NULL if the queue is empty.
- */
-static inline struct mbuf *segq_pop_head(struct segq *q)
-{
-	struct mbuf *head = q->head;
-	if (!head)
-		return NULL;
-	q->head = head->next_seg;
-	return head;
-}
-
-/**
- * segq_peak_head - reads the head of the segment queue without popping
- * @q: the mbuf queue
- *
- * Returns an mbuf or NULL if the queue is empty.
- */
-static inline struct mbuf *segq_peak_head(struct segq *q)
-{
-	return q->head;
-}
-
-/**
- * segq_empty - returns true if the segment queue is empty
- */
-static inline bool segq_empty(struct segq *q)
-{
-	return q->head == NULL;
-}
-
-/**
- * segq_release - frees all the mbufs in the segment queue
- * @q: the queue to release
- */
-static inline void segq_release(struct segq *q)
+/* free all mbufs in a linked list */
+static inline void mbuf_list_free(struct list_head *h)
 {
 	struct mbuf *m;
+
 	while (true) {
-		m = segq_pop_head(q);
+		m = list_pop(h, struct mbuf, link);
 		if (!m)
 			break;
+
 		mbuf_free(m);
 	}
-}
-
-/**
- * segq_init - initializes a segment queue
- * @q: the mbuf queue to initialize
- */
-static inline void segq_init(struct segq *q)
-{
-	q->head = NULL;
 }

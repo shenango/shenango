@@ -64,7 +64,7 @@ static void tcp_rx_text(tcpconn_t *c, struct mbuf *m)
 void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 {
 	tcpconn_t *c = container_of(e, tcpconn_t, e);
-	struct segq q;
+	struct list_head q;
 	const struct ip_hdr *iphdr;
 	const struct tcp_hdr *tcphdr;
 	uint32_t seq, ack, len, snd_nxt;
@@ -72,7 +72,7 @@ void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 	bool do_ack = false, do_drop = false;
 	int ret;
 
-	segq_init(&q);
+	list_head_init(&q);
 	snd_nxt = load_acquire(&c->pcb.snd_nxt);
 
 	/* find header offsets */
@@ -260,7 +260,7 @@ done:
 	spin_unlock_np(&c->lock);
 
 	/* deferred work (delayed until after the lock was dropped) */
-	segq_release(&q);
+	mbuf_list_free(&q);
 	if (do_ack)
 		tcp_tx_ack(c);
 	if (do_drop)

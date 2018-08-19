@@ -15,12 +15,12 @@
 /**
  * tcp_conn_ack - removes acknowledged packets from TX queue
  * @c: the TCP connection to update
- * @freeq: a pointer to an mbufq to store acknowledged buffers to later free
+ * @freeq: a pointer to a list to store acknowledged buffers to later free
  *
  * WARNING: the caller must hold @c->lock.
  * @freeq is provided so that @c->lock can be released before freeing buffers.
  */
-void tcp_conn_ack(tcpconn_t *c, struct segq *freeq)
+void tcp_conn_ack(tcpconn_t *c, struct list_head *freeq)
 {
 	struct mbuf *m;
 
@@ -32,11 +32,14 @@ void tcp_conn_ack(tcpconn_t *c, struct segq *freeq)
 
 	/* dequeue buffers that are fully acknowledged */
 	while (true) {
-		m = segq_peak_head(&c->txq);
+		m = list_top(&c->txq, struct mbuf, link);
+		if (!m)
+			break;
 		if (wraps_gt(m->seg_seq + m->seg_len, c->pcb.snd_una))
 			break;
 
-		segq_push_tail(freeq, segq_pop_head(&c->txq));
+		list_pop(&c->txq, struct mbuf, link);
+		list_add_tail(freeq, &m->link);
 	}
 }
 
@@ -106,8 +109,8 @@ tcpconn_t *tcp_conn_alloc(void)
 	c->rx_closed = false;
 	c->rx_exclusive = false;
 	waitq_init(&c->rx_wq);
-	mbufq_init(&c->rxq_ooo);
-	mbufq_init(&c->rxq);
+	list_head_init(&c->rxq_ooo);
+	list_head_init(&c->rxq);
 
 	/* egress fields */
 	c->tx_closed = false;
@@ -116,7 +119,7 @@ tcpconn_t *tcp_conn_alloc(void)
 	c->tx_last_ack = 0;
 	c->tx_last_win = 0;
 	c->tx_pending = NULL;
-	segq_init(&c->txq);
+	list_head_init(&c->txq);
 
 	/* initialize egress half of PCB */
 	c->pcb.state = TCP_STATE_CLOSED;
@@ -152,9 +155,9 @@ static void tcp_conn_release(struct rcu_head *h)
 
 	if (c->tx_pending)
 		mbuf_free(c->tx_pending);
-	mbufq_release(&c->rxq_ooo);
-	mbufq_release(&c->rxq);
-	segq_release(&c->txq);
+	mbuf_list_free(&c->rxq_ooo);
+	mbuf_list_free(&c->rxq);
+	mbuf_list_free(&c->txq);
 	sfree(c);
 }
 
@@ -433,7 +436,7 @@ struct netaddr tcp_remote_addr(tcpconn_t *c)
 }
 
 static ssize_t tcp_read_wait(tcpconn_t *c, size_t len,
-			     struct mbufq *q, struct mbuf **mout)
+			     struct list_head *q, struct mbuf **mout)
 {
 	struct mbuf *m;
 	size_t readlen = 0;
@@ -444,19 +447,19 @@ static ssize_t tcp_read_wait(tcpconn_t *c, size_t len,
 	/* block until there is an actionable event */
 	while (!c->rx_closed &&
 	       (c->pcb.state < TCP_STATE_ESTABLISHED || c->rx_exclusive ||
-		mbufq_empty(&c->rxq))) {
+		list_empty(&c->rxq))) {
 		waitq_wait(&c->rx_wq, &c->lock);
 	}
 
 	/* is the socket closed? */
-	if (c->rx_closed && mbufq_empty(&c->rxq)) {
+	if (c->rx_closed && list_empty(&c->rxq)) {
 		spin_unlock_np(&c->lock);
 		return -c->err;
 	}
 
 	/* pop off the mbufs that will be read */
 	while (readlen < len) {
-		m = mbufq_pop_head(&c->rxq);
+		m = list_pop(&c->rxq, struct mbuf, link);
 		if (!m)
 			break;
 
@@ -467,7 +470,7 @@ static ssize_t tcp_read_wait(tcpconn_t *c, size_t len,
 			break;
 		}
 
-		mbufq_push_tail(q, m);
+		list_add_tail(q, &m->link);
 		readlen += mbuf_length(m);
 	}
 
@@ -501,11 +504,11 @@ static void tcp_read_finish(tcpconn_t *c, struct mbuf *m, size_t len)
 ssize_t tcp_read(tcpconn_t *c, void *buf, size_t len)
 {
 	char *pos = buf;
-	struct mbufq q;
+	struct list_head q;
 	struct mbuf *m;
 	ssize_t ret;
 
-	mbufq_init(&q);
+	list_head_init(&q);
 
 	/* wait for data to become available */
 	ret = tcp_read_wait(c, len, &q, &m);
@@ -516,7 +519,7 @@ ssize_t tcp_read(tcpconn_t *c, void *buf, size_t len)
 
 	/* copy the data from the buffers */
 	while (true) {
-		struct mbuf *cur = mbufq_pop_head(&q);
+		struct mbuf *cur = list_pop(&q, struct mbuf, link);
 		if (!cur)
 			break;
 
@@ -561,13 +564,13 @@ static size_t iov_len(const struct iovec *iov, int iovcnt)
  */
 ssize_t tcp_readv(tcpconn_t *c, const struct iovec *iov, int iovcnt)
 {
-	struct mbufq q;
+	struct list_head q;
 	struct mbuf *m;
 	ssize_t len = iov_len(iov, iovcnt);
 	off_t offset = 0;
 	int i = 0;
 
-	mbufq_init(&q);
+	list_head_init(&q);
 
 	/* wait for data to become available */
 	len = tcp_read_wait(c, len, &q, &m);
@@ -578,7 +581,7 @@ ssize_t tcp_readv(tcpconn_t *c, const struct iovec *iov, int iovcnt)
 
 	/* copy the data from the buffers */
 	while (true) {
-		struct mbuf *cur = mbufq_pop_head(&q);
+		struct mbuf *cur = list_pop(&q, struct mbuf, link);
 		if (!cur)
 			break;
 
@@ -636,7 +639,7 @@ static int tcp_write_wait(tcpconn_t *c, size_t *winlen)
 	while (!c->tx_closed &&
 	       (c->pcb.state < TCP_STATE_ESTABLISHED || c->tx_exclusive ||
 		(c->pcb.snd_una + c->pcb.snd_wnd <= c->pcb.snd_nxt &&
-		 !segq_empty(&c->txq)))) {
+		 !list_empty(&c->txq)))) {
 		waitq_wait(&c->tx_wq, &c->lock);
 	}
 
@@ -657,11 +660,11 @@ static int tcp_write_wait(tcpconn_t *c, size_t *winlen)
 
 static void tcp_write_finish(tcpconn_t *c)
 {
-	struct segq q;
+	struct list_head q;
 	thread_t *th;
 
 	assert(c->tx_exclusive == true);
-	segq_init(&q);
+	list_head_init(&q);
 
 	spin_lock_np(&c->lock);
 	c->tx_exclusive = false;
@@ -670,7 +673,7 @@ static void tcp_write_finish(tcpconn_t *c)
 	spin_unlock_np(&c->lock);
 
 	waitq_signal_finish(th);
-	segq_release(&q);
+	mbuf_list_free(&q);
 }
 
 /**
