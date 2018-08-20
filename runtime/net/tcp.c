@@ -35,7 +35,7 @@ void tcp_conn_ack(tcpconn_t *c, struct list_head *freeq)
 		m = list_top(&c->txq, struct mbuf, link);
 		if (!m)
 			break;
-		if (wraps_gt(m->seg_seq + m->seg_len, c->pcb.snd_una))
+		if (wraps_gt(m->seg_end, c->pcb.snd_una))
 			break;
 
 		list_pop(&c->txq, struct mbuf, link);
@@ -533,7 +533,6 @@ ssize_t tcp_read(tcpconn_t *c, void *buf, size_t len)
 		size_t cpylen = len - (uintptr_t)pos + (uintptr_t)buf;
 		memcpy(pos, mbuf_pull(m, cpylen), cpylen);
 		m->seg_seq += cpylen;
-		m->seg_len -= cpylen;
 	}
 
 	/* wakeup any pending readers */
@@ -614,7 +613,6 @@ ssize_t tcp_readv(tcpconn_t *c, const struct iovec *iov, int iovcnt)
 			memcpy((char *)vp->iov_base + offset,
 			       mbuf_pull(m, cpylen), cpylen);
 			m->seg_seq += cpylen;
-			m->seg_len -= cpylen;
 			offset += cpylen;
 			if (offset == vp->iov_len) {
 				offset = 0;

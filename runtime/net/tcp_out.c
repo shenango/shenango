@@ -156,7 +156,7 @@ int tcp_tx_ctl(tcpconn_t *c, uint8_t flags)
 		return -ENOMEM;
 
 	m->seg_seq = c->pcb.snd_nxt;
-	m->seg_len = 1;
+	m->seg_end = c->pcb.snd_nxt + 1;
 	tcphdr = tcp_push_tcphdr(m, c, flags);
 	tcphdr->seq = hton32(c->pcb.snd_nxt);
 	store_release(&c->pcb.snd_nxt, c->pcb.snd_nxt + 1);
@@ -223,7 +223,7 @@ ssize_t tcp_tx_buf(tcpconn_t *c, const void *buf, size_t len, bool push)
 			}
 			seglen = min(end - pos, TCP_MSS);
 			m->seg_seq = c->pcb.snd_nxt;
-			m->seg_len = seglen;
+			m->seg_end = c->pcb.snd_nxt + seglen;
 			atomic_write(&m->ref, 2);
 			m->release = tcp_tx_release_mbuf;
 

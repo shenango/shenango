@@ -2,6 +2,9 @@
  * tcp_in.c - the ingress datapath for TCP
  *
  * Based on RFC 793 and RFC 1122 (errata).
+ *
+ * FIXME: We do too little to prevent heavy fragmentation in the out-of-order
+ * RX queue.
  */
 
 #include <base/stddef.h>
@@ -52,12 +55,89 @@ static void send_rst(tcpconn_t *c, bool acked, uint32_t seq, uint32_t ack,
 	tcp_tx_raw_rst_ack(c->e.laddr, c->e.raddr, 0, seq + len);
 }
 
-/* process RX text segments */
-static void tcp_rx_text(tcpconn_t *c, struct mbuf *m)
+static void tcp_rx_append_text(tcpconn_t *c, struct mbuf *m)
 {
+	uint32_t len;
+
 	assert_spin_lock_held(&c->lock);
 
+	/* verify assumptions enforced by acceptability testing */
+	assert(wraps_lte(m->seg_seq, c->pcb.rcv_nxt));
+	assert(wraps_gt(m->seg_end, c->pcb.rcv_nxt));
 
+	/* does the next receive octet clip the head of the text? */
+	if (wraps_lt(m->seg_seq, c->pcb.rcv_nxt)) {
+		len = c->pcb.rcv_nxt - m->seg_seq;
+		mbuf_pull(m, len);
+		m->seg_seq += len;
+	}
+
+	/* does the receive window clip the tail of the text? */
+	if (wraps_lt(c->pcb.rcv_nxt + c->pcb.rcv_wnd, m->seg_end)) {
+		len = m->seg_end - (c->pcb.rcv_nxt + c->pcb.rcv_wnd);
+		mbuf_trim(m, len);
+		m->seg_end = c->pcb.rcv_nxt + c->pcb.rcv_wnd;
+	}
+
+	/* enqueue the text */
+	c->pcb.rcv_nxt = m->seg_end;
+	list_add_tail(&c->rxq, &m->link);
+}
+
+/* process RX text segments, returning true if @m is used for text */
+static bool tcp_rx_text(tcpconn_t *c, struct mbuf *m, bool *wake)
+{
+	struct mbuf *pos;
+
+	assert_spin_lock_held(&c->lock);
+
+	/* don't accept any text if the receive window is zero */
+	if (c->pcb.rcv_wnd == 0)
+		return false;
+
+	if (wraps_lte(m->seg_seq, c->pcb.rcv_nxt)) {
+		/* we got the next in-order segment */
+		if (m->push)
+			*wake = true;
+		tcp_rx_append_text(c, m);
+	} else {
+		/* we got an out-of-order segment */
+		list_for_each(&c->rxq_ooo, pos, link) {
+			if (wraps_lt(m->seg_seq, pos->seg_seq)) {
+				list_add_before(&pos->link, &m->link);
+				goto drain;
+			} else if (m->seg_seq == pos->seg_seq) {
+				return false;
+			}
+		}
+ 		list_add_tail(&c->rxq_ooo, &m->link);
+	}
+
+drain:
+	/* attempt to drain the out-of-order RX queue */
+	while (true) {
+		pos = list_top(&c->rxq_ooo, struct mbuf, link);
+		if (!pos)
+			break;
+
+		/* has the segment been fully received already? */
+		if (wraps_lte(pos->seg_end, c->pcb.rcv_nxt)) {
+			mbuf_free(pos);
+			continue;
+		}
+
+		/* is the segment still out-of-order? */
+		if (wraps_gt(pos->seg_seq, c->pcb.rcv_nxt))
+			break;
+
+		/* we got the next in-order segment */
+		list_del(&pos->link);
+		if (pos->push)
+			*wake = true;
+		tcp_rx_append_text(c, pos);
+	}
+
+	return true;
 }
 
 /* handles ingress packets for TCP connections */
@@ -234,10 +314,16 @@ void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 	    (c->pcb.state == TCP_STATE_ESTABLISHED ||
 	     c->pcb.state == TCP_STATE_FIN_WAIT1 ||
 	     c->pcb.state == TCP_STATE_FIN_WAIT2)) {
+		bool wake = false;
 		m->seg_seq = seq;
-		m->seg_len = len;
+		m->seg_end = seq + len;
 		m->push = (tcphdr->flags & TCP_PUSH) > 0;
-		tcp_rx_text(c, m);
+		do_drop = !tcp_rx_text(c, m, &wake);
+		if (wake) {
+			assert(!list_empty(&c->rxq));
+			assert(do_drop == false);
+			waitq_signal_locked(&c->rx_wq, &c->lock);
+		}
 		do_ack = true;
 	}
 
@@ -308,7 +394,7 @@ tcpconn_t *tcp_rx_listener(struct netaddr laddr, struct mbuf *m)
 	c->pcb.rcv_nxt = c->pcb.irs + 1;
 
 	/*
-	 * Attach the connection to the transport layer. From this point onward
+	 * attach the connection to the transport layer. From this point onward
 	 * ingress packets can be dispatched to the connection.
 	 */
 	ret = tcp_conn_attach(c, laddr, raddr);
