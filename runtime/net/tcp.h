@@ -61,6 +61,7 @@ struct tcpconn {
 	struct tcp_pcb		pcb;
 	struct list_node	link;
 	spinlock_t		lock;
+	bool			closed;
 	int			err; /* error code for read(), write(), etc. */
 
 	/* ingress path */
@@ -86,8 +87,8 @@ extern int tcp_conn_attach(tcpconn_t *c, struct netaddr laddr,
 extern void tcp_conn_ack(tcpconn_t *c, struct list_head *freeq);
 extern void tcp_conn_set_state(tcpconn_t *c, int new_state);
 extern void tcp_conn_destroy(tcpconn_t *c);
-extern void tcp_conn_close(tcpconn_t *c, bool close_rx, bool close_tx);
 extern void tcp_conn_fail(tcpconn_t *c, int err);
+extern void tcp_conn_shutdown_rx(tcpconn_t *c);
 
 
 /*

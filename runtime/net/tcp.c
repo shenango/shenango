@@ -103,6 +103,7 @@ tcpconn_t *tcp_conn_alloc(void)
 	/* general fields */
 	memset(&c->pcb, 0, sizeof(c->pcb));
 	spin_lock_init(&c->lock);
+	c->closed = false;
 	c->err = 0;
 
 	/* ingress fields */
@@ -741,29 +742,7 @@ ssize_t tcp_writev(tcpconn_t *c, const struct iovec *iov, int iovcnt)
 }
 
 /**
- * tcp_conn_close - closes a TCP connection
- * @c: the TCP connection to shutdown
- * @close_rx: close the RX path
- * @close_tx: close the TX path
- *
- * The caller must hold @c's lock.
- */
-void tcp_conn_close(tcpconn_t *c, bool close_rx, bool close_tx)
-{
-	assert_spin_lock_held(&c->lock);
-
-	if (close_rx) {
-		c->rx_closed = true;
-		waitq_release(&c->rx_wq);
-	}
-	if (close_tx) {
-		c->tx_closed = true;
-		waitq_release(&c->tx_wq);
-	}
-}
-
-/**
- * tcp_conn_fail - closes a TCP connection with an error
+ * tcp_conn_fail - closes a TCP both sides of a connection with an error
  * @c: the TCP connection to shutdown
  * @err: the error code (failure reason for the close)
  *
@@ -774,8 +753,62 @@ void tcp_conn_fail(tcpconn_t *c, int err)
 	assert_spin_lock_held(&c->lock);
 
 	c->err = err;
-	tcp_conn_close(c, true, true);
 	tcp_conn_set_state(c, TCP_STATE_CLOSED);
+
+	if (!c->rx_closed) {
+		c->rx_closed = true;
+		waitq_release(&c->rx_wq);
+	}
+
+	if (!c->tx_closed) {
+		c->tx_closed = true;
+		waitq_release(&c->tx_wq);
+	}
+}
+
+/**
+ * tcp_conn_shutdown_rx - closes ingress for a TCP connection
+ * @c: the TCP connection to shutdown
+ *
+ * The caller must hold @c's lock.
+ */
+void tcp_conn_shutdown_rx(tcpconn_t *c)
+{
+	assert_spin_lock_held(&c->lock);
+
+	if (c->rx_closed)
+		return;
+
+	c->rx_closed = true;
+	waitq_release(&c->rx_wq);
+}
+
+static int tcp_conn_shutdown_tx(tcpconn_t *c)
+{
+	int ret;
+
+	assert_spin_lock_held(&c->lock);
+
+	if (c->tx_closed)
+		return 0;
+
+	assert(c->pcb.state >= TCP_STATE_ESTABLISHED);
+	while (c->tx_exclusive)
+		waitq_wait(&c->tx_wq, &c->lock);
+	ret = tcp_tx_ctl(c, TCP_FIN | TCP_ACK);
+	if (unlikely(ret))
+		return ret;
+	if (c->pcb.state == TCP_STATE_ESTABLISHED)
+		tcp_conn_set_state(c, TCP_STATE_FIN_WAIT1);
+	else if (c->pcb.state == TCP_STATE_CLOSE_WAIT)
+		tcp_conn_set_state(c, TCP_STATE_LAST_ACK);
+	else
+		WARN();
+
+	c->tx_closed = true;
+	waitq_release(&c->tx_wq);
+
+	return 0;
 }
 
 /**
@@ -787,42 +820,54 @@ void tcp_conn_fail(tcpconn_t *c, int err)
  */
 int tcp_shutdown(tcpconn_t *c, int how)
 {
-	bool rx, tx;
+	bool tx, rx;
 	int ret;
 
 	if (how != SHUT_RD && how != SHUT_WR && how != SHUT_RDWR)
 		return -EINVAL;
 
-	rx = how == SHUT_RD || how == SHUT_RDWR;
 	tx = how == SHUT_WR || how == SHUT_RDWR;
+	rx = how == SHUT_RD || how == SHUT_RDWR;
 
 	spin_lock_np(&c->lock);
-
-	/* handle TCP close operation */
-	if (!c->tx_closed && tx) {
-		assert(c->pcb.state >= TCP_STATE_ESTABLISHED);
-		while (c->tx_exclusive)
-			waitq_wait(&c->tx_wq, &c->lock);
-		ret = tcp_tx_ctl(c, TCP_FIN | TCP_ACK);
-		if (unlikely(ret)) {
+	if (tx) {
+		ret = tcp_conn_shutdown_tx(c);
+		if (ret) {
 			spin_unlock_np(&c->lock);
 			return ret;
 		}
-		if (c->pcb.state == TCP_STATE_ESTABLISHED)
-			tcp_conn_set_state(c, TCP_STATE_FIN_WAIT1);
-		else if (c->pcb.state == TCP_STATE_CLOSE_WAIT)
-			tcp_conn_set_state(c, TCP_STATE_LAST_ACK);
-		else
-			WARN();
 	}
-
-	tcp_conn_close(c, rx, tx);
+	if (rx)
+		tcp_conn_shutdown_rx(c);
 	spin_unlock_np(&c->lock);
 
 	return 0;
 }
 
+/**
+ * tcp_close - frees a TCP connection
+ * @c: the TCP connection to free
+ *
+ * WARNING: Only the last reference can safely call this method. Call
+ * tcp_shutdown() first if any threads are sleeping on the socket.
+ */
 void tcp_close(tcpconn_t *c)
 {
+	bool destroy;
+	int ret;
 
+	spin_lock_np(&c->lock);
+	BUG_ON(!waitq_empty(&c->tx_wq));
+	BUG_ON(!waitq_empty(&c->rx_wq));
+	BUG_ON(c->closed);
+	c->closed = true;
+	ret = tcp_conn_shutdown_tx(c);
+	if (ret)
+		tcp_conn_fail(c, -ret);
+	tcp_conn_shutdown_rx(c);
+	destroy = c->pcb.state == TCP_STATE_CLOSED;
+	spin_unlock_np(&c->lock);
+
+	if (destroy)
+		tcp_conn_destroy(c);
 }

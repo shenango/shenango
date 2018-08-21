@@ -122,6 +122,7 @@ drain:
 
 		/* has the segment been fully received already? */
 		if (wraps_lte(pos->seg_end, c->pcb.rcv_nxt)) {
+			list_del(&pos->link);
 			mbuf_free(pos);
 			continue;
 		}
@@ -149,7 +150,7 @@ void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 	const struct tcp_hdr *tcphdr;
 	uint32_t seq, ack, len, snd_nxt;
 	uint16_t win;
-	bool do_ack = false, do_drop = false;
+	bool do_ack = false, do_drop = false, do_freeconn;
 	int ret;
 
 	list_head_init(&q);
@@ -330,7 +331,7 @@ void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 	/* step 8 - FIN */
 	if ((tcphdr->flags & TCP_FIN) == 0)
 		goto done;
-	tcp_conn_close(c, true, false);
+	tcp_conn_shutdown_rx(c);
 	if (c->pcb.state == TCP_STATE_SYN_RECEIVED ||
 	    c->pcb.state == TCP_STATE_ESTABLISHED) {
 		tcp_conn_set_state(c, TCP_STATE_CLOSE_WAIT);
@@ -343,6 +344,7 @@ void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 	}
 
 done:
+	do_freeconn = (c->pcb.state == TCP_STATE_CLOSED) && c->closed;
 	spin_unlock_np(&c->lock);
 
 	/* deferred work (delayed until after the lock was dropped) */
@@ -351,6 +353,8 @@ done:
 		tcp_tx_ack(c);
 	if (do_drop)
 		mbuf_free(m);
+	if (do_freeconn)
+		tcp_conn_destroy(c);
 }
 
 /* handles ingress packets for TCP listener queues */
