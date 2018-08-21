@@ -81,6 +81,8 @@ static void tcp_rx_append_text(tcpconn_t *c, struct mbuf *m)
 
 	/* enqueue the text */
 	c->pcb.rcv_nxt = m->seg_end;
+	assert(c->pcb.rcv_wnd >= m->seg_end - m->seg_seq);
+	c->pcb.rcv_wnd -= m->seg_end - m->seg_seq;
 	list_add_tail(&c->rxq, &m->link);
 }
 
