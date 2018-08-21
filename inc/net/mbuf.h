@@ -43,7 +43,7 @@ struct mbuf {
 	uint64_t	timestamp;  /* the time the packet was last sent */
 	uint32_t	seg_seq;    /* the first seg number */
 	uint32_t	seg_end;    /* the last seg number (noninclusive) */
-	bool		push;	    /* was TCP_PSH flag set? */
+	bool		push;	    /* was TCP_PUSH flag set? */
 	atomic_t	ref;	    /* a reference count for the mbuf */
 };
 

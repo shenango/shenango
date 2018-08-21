@@ -127,6 +127,7 @@ int tcp_tx_ack(tcpconn_t *c)
 	tcphdr->seq = hton32(load_acquire(&c->pcb.snd_nxt));
 
 	/* transmit packet */
+	tcp_dump_egress_pkt(c, m);
 	ret = net_tx_ip(m, IPPROTO_TCP, c->e.raddr.ip);
 	if (unlikely(ret))
 		mbuf_free(m);
@@ -165,6 +166,7 @@ int tcp_tx_ctl(tcpconn_t *c, uint8_t flags)
 	m->timestamp = microtime();
 	atomic_write(&m->ref, 2);
 	m->release = tcp_tx_release_mbuf;
+	tcp_dump_egress_pkt(c, m);
 	ret = net_tx_ip(m, IPPROTO_TCP, c->e.raddr.ip);
 	if (unlikely(ret)) {
 		/* pretend the packet was sent */
@@ -248,6 +250,7 @@ ssize_t tcp_tx_buf(tcpconn_t *c, const void *buf, size_t len, bool push)
 		/* transmit the packet */
 		list_add_tail(&c->txq, &m->link);
 		m->timestamp = microtime();
+		tcp_dump_egress_pkt(c, m);
 		ret = net_tx_ip(m, IPPROTO_TCP, c->e.raddr.ip);
 		if (unlikely(ret)) {
 			/* pretend the packet was sent */
