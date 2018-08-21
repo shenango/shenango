@@ -103,7 +103,7 @@ tcpconn_t *tcp_conn_alloc(void)
 	/* general fields */
 	memset(&c->pcb, 0, sizeof(c->pcb));
 	spin_lock_init(&c->lock);
-	c->closed = false;
+	kref_init(&c->ref);
 	c->err = 0;
 
 	/* ingress fields */
@@ -172,6 +172,16 @@ void tcp_conn_destroy(tcpconn_t *c)
 	rcu_free(&c->e.rcu, tcp_conn_release);
 }
 
+/**
+ * tcp_conn_release_ref - a helper to free the conn when ref reaches zero
+ * @r: the embedded reference count structure
+ */
+void tcp_conn_release_ref(struct kref *r)
+{
+	tcpconn_t *c = container_of(r, tcpconn_t, ref);
+
+	tcp_conn_destroy(c);
+}
 
 /*
  * Support for accepting new connections
@@ -399,6 +409,7 @@ int tcp_dial(struct netaddr laddr, struct netaddr raddr, tcpconn_t **c_out)
 		tcp_conn_destroy(c);
 		return ret;
 	}
+	tcp_conn_get(c); /* take a ref for the state machine */
 	tcp_conn_set_state(c, TCP_STATE_SYN_SENT);
 
 	/* wait until the connection is established or there is a failure */
@@ -488,6 +499,7 @@ static void tcp_read_finish(tcpconn_t *c, struct mbuf *m, size_t len)
 
 	spin_lock_np(&c->lock);
 	c->pcb.rcv_wnd += len;
+	c->rx_exclusive = false;
 	th = waitq_signal(&c->rx_wq, &c->lock);
 	spin_unlock_np(&c->lock);
 	waitq_signal_finish(th);
@@ -764,6 +776,9 @@ void tcp_conn_fail(tcpconn_t *c, int err)
 		c->tx_closed = true;
 		waitq_release(&c->tx_wq);
 	}
+
+	/* state machine is disabled, drop ref */
+	tcp_conn_put(c);
 }
 
 /**
@@ -853,21 +868,15 @@ int tcp_shutdown(tcpconn_t *c, int how)
  */
 void tcp_close(tcpconn_t *c)
 {
-	bool destroy;
 	int ret;
 
 	spin_lock_np(&c->lock);
 	BUG_ON(!waitq_empty(&c->tx_wq));
 	BUG_ON(!waitq_empty(&c->rx_wq));
-	BUG_ON(c->closed);
-	c->closed = true;
 	ret = tcp_conn_shutdown_tx(c);
 	if (ret)
 		tcp_conn_fail(c, -ret);
 	tcp_conn_shutdown_rx(c);
-	destroy = c->pcb.state == TCP_STATE_CLOSED;
 	spin_unlock_np(&c->lock);
-
-	if (destroy)
-		tcp_conn_destroy(c);
+	tcp_conn_put(c);
 }

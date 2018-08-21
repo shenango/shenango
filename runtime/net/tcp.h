@@ -4,6 +4,7 @@
 
 #include <base/stddef.h>
 #include <base/list.h>
+#include <base/kref.h>
 #include <runtime/sync.h>
 #include <runtime/tcp.h>
 #include <net/tcp.h>
@@ -61,7 +62,7 @@ struct tcpconn {
 	struct tcp_pcb		pcb;
 	struct list_node	link;
 	spinlock_t		lock;
-	bool			closed;
+	struct kref		ref;
 	int			err; /* error code for read(), write(), etc. */
 
 	/* ingress path */
@@ -86,9 +87,32 @@ extern int tcp_conn_attach(tcpconn_t *c, struct netaddr laddr,
 			   struct netaddr raddr);
 extern void tcp_conn_ack(tcpconn_t *c, struct list_head *freeq);
 extern void tcp_conn_set_state(tcpconn_t *c, int new_state);
-extern void tcp_conn_destroy(tcpconn_t *c);
 extern void tcp_conn_fail(tcpconn_t *c, int err);
 extern void tcp_conn_shutdown_rx(tcpconn_t *c);
+extern void tcp_conn_destroy(tcpconn_t *c);
+
+/**
+ * tcp_conn_get - increments the connection ref count
+ * @c: the connection to increment
+ *
+ * Returns @c.
+ */
+static inline tcpconn_t *tcp_conn_get(tcpconn_t *c)
+{
+	kref_get(&c->ref);
+	return c;
+}
+
+extern void tcp_conn_release_ref(struct kref *r);
+
+/**
+ * tcp_conn_put - decrements the connection ref count
+ * @c: the connection to decrement
+ */
+static inline void tcp_conn_put(tcpconn_t *c)
+{
+	kref_put(&c->ref, tcp_conn_release_ref);
+}
 
 
 /*

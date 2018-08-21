@@ -152,8 +152,10 @@ void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 	const struct tcp_hdr *tcphdr;
 	uint32_t seq, ack, len, snd_nxt;
 	uint16_t win;
-	bool do_ack = false, do_drop = false, do_freeconn;
+	bool do_ack = false, do_drop = false;
 	int ret;
+
+	assert_preempt_disabled();
 
 	list_head_init(&q);
 	snd_nxt = load_acquire(&c->pcb.snd_nxt);
@@ -306,7 +308,7 @@ void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 	} else if (c->pcb.state == TCP_STATE_LAST_ACK &&
 		   c->pcb.snd_una == snd_nxt) {
 		tcp_conn_set_state(c, TCP_STATE_CLOSED);
-		/* delete the PCB */
+		tcp_conn_put(c); /* safe because RCU + preempt is disabled */
 		goto done;
 	}
 
@@ -346,7 +348,6 @@ void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 	}
 
 done:
-	do_freeconn = (c->pcb.state == TCP_STATE_CLOSED) && c->closed;
 	spin_unlock_np(&c->lock);
 
 	/* deferred work (delayed until after the lock was dropped) */
@@ -355,8 +356,6 @@ done:
 		tcp_tx_ack(c);
 	if (do_drop)
 		mbuf_free(m);
-	if (do_freeconn)
-		tcp_conn_destroy(c);
 }
 
 /* handles ingress packets for TCP listener queues */
@@ -417,6 +416,7 @@ tcpconn_t *tcp_rx_listener(struct netaddr laddr, struct mbuf *m)
 		tcp_conn_destroy(c);
 		return NULL;
 	}
+	tcp_conn_get(c); /* take a ref for the state machine */
 	tcp_conn_set_state(c, TCP_STATE_SYN_RECEIVED);
 	spin_unlock_np(&c->lock);
 
