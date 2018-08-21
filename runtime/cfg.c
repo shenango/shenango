@@ -184,6 +184,26 @@ static int parse_static_arp_entry(const char *name, const char *val)
 	return 0;
 }
 
+static int parse_log_level(const char *name, const char *val)
+{
+	long tmp;
+	int ret;
+
+	ret = str_to_long(val, &tmp);
+	if (ret)
+		return ret;
+
+	if (tmp < LOG_EMERG || tmp > LOG_DEBUG) {
+		log_err("log level must be between %d and %d",
+			LOG_EMERG, LOG_DEBUG);
+		return -EINVAL;
+	}
+
+	max_loglevel = tmp;
+	return 0;
+}
+
+
 /*
  * Parsing Infrastructure
  */
@@ -206,6 +226,7 @@ static const struct cfg_handler cfg_handlers[] = {
 	{ "runtime_guaranteed_kthreads", parse_runtime_guaranteed_kthreads,
 			false },
 	{ "static_arp", parse_static_arp_entry, false },
+	{ "log_level", parse_log_level, false },
 };
 
 /**
