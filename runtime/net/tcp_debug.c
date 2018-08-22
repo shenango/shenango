@@ -82,24 +82,48 @@ static void tcp_dump_pkt(tcpconn_t *c, const struct tcp_hdr *tcphdr,
 
 	tcp_flags_to_str(tcphdr->flags, flags);
 
-	log_debug("%s:%hu -> %s:%hu "
+	log_debug("tcp: %p %s:%hu -> %s:%hu "
 		  "FLAGS=%s SEQ=ISS+%d ACK=IRS+%d WND=%d LEN=%d",
-		  in_ip, c->e.laddr.port, out_ip, c->e.raddr.port,
+		  c, in_ip, c->e.laddr.port, out_ip, c->e.raddr.port,
 		  flags, seq, ack, wnd, len); 
 
 }
 
 /* prints an outgoing TCP packet */
-void tcp_dump_egress_pkt(tcpconn_t *c, struct mbuf *m)
+void tcp_debug_egress_pkt(tcpconn_t *c, struct mbuf *m)
 {
 	tcp_dump_pkt(c, (struct tcp_hdr *)mbuf_data(m),
 		     mbuf_length(m) - sizeof(struct tcp_hdr), true);
 }
 
 /* prints an incoming TCP packet */
-void tcp_dump_ingress_pkt(tcpconn_t *c, struct mbuf *m)
+void tcp_debug_ingress_pkt(tcpconn_t *c, struct mbuf *m)
 {
 	tcp_dump_pkt(c, (struct tcp_hdr *)mbuf_transport_offset(m),
 		     mbuf_length(m) - sizeof(struct tcp_hdr), false);
+}
+
+static const char *state_names[] = {
+	"SYN-SENT",
+	"SYN-RECEIVED",
+	"ESTABLISHED",
+	"FIN-WAIT1",
+	"FIN-WAIT2",
+	"CLOSE-WAIT",
+	"CLOSING",
+	"LAST-ACK",
+	"TIME-WAIT",
+	"CLOSED",
+};
+
+/* prints a TCP state change */
+void tcp_debug_state_change(tcpconn_t *c, int last, int next)
+{
+	if (last == TCP_STATE_CLOSED) {
+		log_debug("tcp: %p CREATE -> %s", c, state_names[next]);
+	} else {
+		log_debug("tcp: %p %s -> %s", c, state_names[last],
+			  state_names[next]);
+	}
 }
 #endif

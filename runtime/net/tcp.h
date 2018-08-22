@@ -155,13 +155,17 @@ static inline void mbuf_list_free(struct list_head *h)
  */
 
 #if DEBUG
-extern void tcp_dump_egress_pkt(tcpconn_t *c, struct mbuf *m);
-extern void tcp_dump_ingress_pkt(tcpconn_t *c, struct mbuf *m);
+extern void tcp_debug_egress_pkt(tcpconn_t *c, struct mbuf *m);
+extern void tcp_debug_ingress_pkt(tcpconn_t *c, struct mbuf *m);
+extern void tcp_debug_state_change(tcpconn_t *c, int last, int next);
 #else /* DEBUG */
-static inline void tcp_dump_egress_pkt(tcpconn_t *c, struct mbuf *m)
+static inline void tcp_debug_egress_pkt(tcpconn_t *c, struct mbuf *m)
 {
 }
-static inline void tcp_dump_ingress_pkt(tcpconn_t *c, struct mbuf *m)
+static inline void tcp_debug_ingress_pkt(tcpconn_t *c, struct mbuf *m)
+{
+}
+static inline void tcp_debug_state_change(tcpconn_t *c, int last, int next)
 {
 }
 #endif /* DEBUG */

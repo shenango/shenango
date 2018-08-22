@@ -156,7 +156,7 @@ void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 	int ret;
 
 	assert_preempt_disabled();
-	tcp_dump_ingress_pkt(c, m);
+	tcp_debug_ingress_pkt(c, m);
 
 	list_head_init(&q);
 	snd_nxt = load_acquire(&c->pcb.snd_nxt);
@@ -398,7 +398,7 @@ tcpconn_t *tcp_rx_listener(struct netaddr laddr, struct mbuf *m)
 		return NULL;
 	c->pcb.irs = ntoh32(tcphdr->seq);
 	c->pcb.rcv_nxt = c->pcb.irs + 1;
-	tcp_dump_ingress_pkt(c, m);
+	tcp_debug_ingress_pkt(c, m);
 
 	/*
 	 * attach the connection to the transport layer. From this point onward

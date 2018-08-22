@@ -63,6 +63,7 @@ void tcp_conn_set_state(tcpconn_t *c, int new_state)
 		waitq_release(&c->tx_wq);
 	}
 
+	tcp_debug_state_change(c, c->pcb.state, new_state);
 	c->pcb.state = new_state;
 }
 
