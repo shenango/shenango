@@ -681,6 +681,8 @@ static void tcp_write_finish(tcpconn_t *c)
 	spin_lock_np(&c->lock);
 	c->tx_exclusive = false;
 	tcp_conn_ack(c, &q);
+	if (c->pcb.rcv_nxt != c->tx_last_ack)
+		tcp_tx_ack(c);
 	th = waitq_signal(&c->tx_wq, &c->lock);
 	spin_unlock_np(&c->lock);
 
@@ -858,6 +860,22 @@ int tcp_shutdown(tcpconn_t *c, int how)
 	spin_unlock_np(&c->lock);
 
 	return 0;
+}
+
+/**
+ * tcp_abort - force an immediate close (graceful) of the connection
+ * @c: the TCP connection to abort
+ */
+void tcp_abort(tcpconn_t *c)
+{
+	spin_lock_np(&c->lock);
+	if (c->pcb.state == TCP_STATE_CLOSED) {
+		spin_unlock_np(&c->lock);
+		return;
+	}
+	tcp_tx_raw_rst(c->e.laddr, c->e.raddr, c->pcb.snd_nxt);
+	tcp_conn_fail(c, ECONNABORTED);
+	spin_unlock_np(&c->lock);
 }
 
 /**
