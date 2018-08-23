@@ -12,6 +12,11 @@
 
 #include "tcp.h"
 
+/* protects @tcp_conns */
+static DEFINE_SPINLOCK(tcp_lock);
+/* a list of all TCP connections */
+static LIST_HEAD(tcp_conns);
+
 /**
  * tcp_conn_ack - removes acknowledged packets from TX queue
  * @c: the TCP connection to update
@@ -144,15 +149,27 @@ tcpconn_t *tcp_conn_alloc(void)
  */
 int tcp_conn_attach(tcpconn_t *c, struct netaddr laddr, struct netaddr raddr)
 {
+	int ret;
+
 	/* register the connection with the transport layer */
 	if (laddr.ip == 0)
 		 laddr.ip = netcfg.addr;
 	else if (laddr.ip != netcfg.addr)
 		return -EINVAL;
+
 	trans_init_5tuple(&c->e, IPPROTO_TCP, &tcp_conn_ops, laddr, raddr);
 	if (laddr.port == 0)
-		return trans_table_add_with_ephemeral_port(&c->e);
-	return trans_table_add(&c->e);
+		ret = trans_table_add_with_ephemeral_port(&c->e);
+	else
+		ret = trans_table_add(&c->e);
+	if (ret)
+		return ret;
+
+	spin_lock_np(&tcp_lock);
+	list_add_tail(&tcp_conns, &c->global_link);
+	spin_unlock_np(&tcp_lock);
+
+	return 0;
 }
 
 static void tcp_conn_release(struct rcu_head *h)
@@ -173,6 +190,10 @@ static void tcp_conn_release(struct rcu_head *h)
  */
 void tcp_conn_destroy(tcpconn_t *c)
 {
+	spin_lock_np(&tcp_lock);
+	list_del_from(&tcp_conns, &c->global_link);
+	spin_unlock_np(&tcp_lock);
+
 	trans_table_remove(&c->e);
 	rcu_free(&c->e.rcu, tcp_conn_release);
 }
@@ -227,7 +248,7 @@ static void tcp_queue_recv(struct trans_entry *e, struct mbuf *m)
 
 	/* wake a thread to accept the connection */
 	spin_lock_np(&q->l);
-	list_add_tail(&q->conns, &c->link);
+	list_add_tail(&q->conns, &c->queue_link);
 	th = waitq_signal(&q->wq, &q->l);
 	spin_unlock_np(&q->l);
 	waitq_signal_finish(th);
@@ -307,7 +328,7 @@ int tcp_accept(tcpqueue_t *q, tcpconn_t **c_out)
 
 	/* otherwise a new connection is available */
 	q->backlog++;
-	c = list_pop(&q->conns, tcpconn_t, link);
+	c = list_pop(&q->conns, tcpconn_t, queue_link);
 	assert(c != NULL);
 	spin_unlock_np(&q->l);
 
@@ -365,8 +386,8 @@ void tcp_qclose(tcpqueue_t *q)
 	BUG_ON(!waitq_empty(&q->wq));
 
 	/* free all pending connections */
-	list_for_each_safe(&q->conns, c, nextc, link) {
-		list_del_from(&q->conns, &c->link);
+	list_for_each_safe(&q->conns, c, nextc, queue_link) {
+		list_del_from(&q->conns, &c->queue_link);
 		tcp_conn_destroy(c);
 	}
 
@@ -887,7 +908,8 @@ void tcp_abort(tcpconn_t *c)
  * @c: the TCP connection to free
  *
  * WARNING: Only the last reference can safely call this method. Call
- * tcp_shutdown() first if any threads are sleeping on the socket.
+ * tcp_shutdown() or tcp_abort() first if any threads are sleeping on the
+ * socket.
  */
 void tcp_close(tcpconn_t *c)
 {

@@ -51,16 +51,12 @@ struct tcp_pcb {
 	uint32_t	irs;		/* initial receive sequence number */
 };
 
-/* we use a seperate queue type for egress to avoid conflicting with ARP */
-struct segq {
-	struct mbuf *head, *tail;
-};
-
 /* the TCP connection struct */
 struct tcpconn {
 	struct trans_entry	e;
 	struct tcp_pcb		pcb;
-	struct list_node	link;
+	struct list_node	global_link;
+	struct list_node	queue_link;
 	spinlock_t		lock;
 	struct kref		ref;
 	int			err; /* error code for read(), write(), etc. */
