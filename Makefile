@@ -39,6 +39,7 @@ net_obj = $(net_src:.c=.o)
 # iokernel - a soft-NIC service
 iokernel_src = $(wildcard iokernel/*.c)
 iokernel_obj = $(iokernel_src:.c=.o)
+iokernel_noht_obj = $(iokernel_src:.c=-noht.o)
 
 # runtime - a user-level threading and networking library
 runtime_src = $(wildcard runtime/*.c) $(wildcard runtime/net/*.c)
@@ -73,7 +74,7 @@ DPDK_LIBS += -Wl,-whole-archive -lrte_kvargs -Wl,-no-whole-archive
 endif
 
 # must be first
-all: libbase.a libdune.a libnet.a libruntime.a iokerneld $(test_targets)
+all: libbase.a libdune.a libnet.a libruntime.a iokerneld iokerneld-noht $(test_targets)
 
 libbase.a: $(base_obj)
 	$(AR) rcs $@ $^
@@ -91,13 +92,17 @@ iokerneld: $(iokernel_obj) libbase.a libnet.a base/base.ld
 	$(LD) $(LDFLAGS) -o $@ $(iokernel_obj) libbase.a libnet.a $(DPDK_LIBS) \
 	-lpthread -lnuma -ldl
 
+iokerneld-noht: $(iokernel_noht_obj) libbase.a libnet.a base/base.ld
+	$(LD) $(LDFLAGS) -o $@ $(iokernel_noht_obj) libbase.a libnet.a $(DPDK_LIBS) \
+	 -lpthread -lnuma -ldl
+
 $(test_targets): $(test_obj) libbase.a libruntime.a libnet.a base/base.ld
 	$(LD) $(LDFLAGS) -o $@ $@.o libruntime.a libnet.a libbase.a -lpthread
 
 # general build rules for all targets
 src = $(base_src) $(dune_src) $(net_src) $(runtime_src) $(iokernel_src) $(test_src)
 asm = $(dune_asm) $(runtime_asm)
-obj = $(src:.c=.o) $(asm:.S=.o)
+obj = $(src:.c=.o) $(asm:.S=.o) $(iokernel_src:.c=-noht.o)
 dep = $(obj:.o=.d)
 
 ifneq ($(MAKECMDGOALS),clean)
@@ -106,8 +111,12 @@ endif
 
 # rule to generate a dep file by using the C preprocessor
 # (see man cpp for details on the -MM and -MT options)
-%.d: %.c
+%-noht.d %.d: %.c
 	@$(CC) $(CFLAGS) $< -MM -MT $(@:.d=.o) >$@
+
+%-noht.o: %.c
+	$(CC) $(CFLAGS) -Wno-unused-variable -DCORES_NOHT -c $< -o $@
+
 %.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
 %.d: %.S
@@ -122,4 +131,4 @@ sparse: $(src)
 .PHONY: clean
 clean:
 	rm -f $(obj) $(dep) libbase.a libdune.a libnet.a libruntime.a \
-	iokerneld $(test_targets)
+	iokerneld iokerneld-noht $(test_targets)
