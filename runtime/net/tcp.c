@@ -6,9 +6,11 @@
 
 #include <base/stddef.h>
 #include <base/hash.h>
+#include <base/log.h>
 #include <runtime/smalloc.h>
 #include <runtime/thread.h>
 #include <runtime/tcp.h>
+#include <runtime/timer.h>
 
 #include "tcp.h"
 
@@ -16,6 +18,41 @@
 static DEFINE_SPINLOCK(tcp_lock);
 /* a list of all TCP connections */
 static LIST_HEAD(tcp_conns);
+
+/* check for timeouts in a TCP connection */
+static void tcp_handle_timeouts(tcpconn_t *c, uint64_t now)
+{
+	bool do_ack = false;
+
+	spin_lock_np(&c->lock);
+	if (c->ack_delayed && now - c->ack_ts >= TCP_ACK_TIMEOUT) {
+		log_debug("tcp: %p delayed ack timeout", c);
+		c->ack_delayed = false;
+		do_ack = true;
+	}
+	spin_unlock_np(&c->lock);
+
+	if (do_ack)
+		tcp_tx_ack(c);
+}
+
+/* a periodic background thread that handles timeout events */
+static void tcp_worker(void *arg)
+{
+	tcpconn_t *c;
+	uint64_t now;
+
+	while (true) {
+		now = microtime();
+
+		spin_lock_np(&tcp_lock);
+		list_for_each(&tcp_conns, c, global_link)
+			tcp_handle_timeouts(c, now);
+		spin_unlock_np(&tcp_lock);
+
+		timer_sleep(ONE_MS);
+	}
+}
 
 /**
  * tcp_conn_ack - removes acknowledged packets from TX queue
@@ -127,6 +164,10 @@ tcpconn_t *tcp_conn_alloc(void)
 	c->tx_last_win = 0;
 	c->tx_pending = NULL;
 	list_head_init(&c->txq);
+
+	/* timeouts */
+	c->ack_delayed = false;
+	c->ack_ts = 0;
 
 	/* initialize egress half of PCB */
 	c->pcb.state = TCP_STATE_CLOSED;
@@ -706,8 +747,9 @@ static void tcp_write_finish(tcpconn_t *c)
 	spin_lock_np(&c->lock);
 	c->tx_exclusive = false;
 	tcp_conn_ack(c, &q);
-	if (c->pcb.rcv_nxt != c->tx_last_ack)
+	if (c->pcb.rcv_nxt != c->tx_last_ack) /* race condition check */
 		tcp_tx_ack(c);
+	c->ack_delayed = false;
 	th = waitq_signal(&c->tx_wq, &c->lock);
 	spin_unlock_np(&c->lock);
 
@@ -924,4 +966,14 @@ void tcp_close(tcpconn_t *c)
 	tcp_conn_shutdown_rx(c);
 	spin_unlock_np(&c->lock);
 	tcp_conn_put(c);
+}
+
+/**
+ * tcp_init_late - starts the TCP worker thread
+ *
+ * Returns 0 if successful.
+ */
+int tcp_init_late(void)
+{
+	return thread_spawn(tcp_worker, NULL);
 }

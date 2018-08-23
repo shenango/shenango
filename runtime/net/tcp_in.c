@@ -331,7 +331,14 @@ void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 			assert(do_drop == false);
 			waitq_signal_locked(&c->rx_wq, &c->lock);
 		}
-		do_ack = true;
+		/* delayed ack logic; can only delay at most one ack */
+		if (c->ack_delayed) {
+			do_ack = true;
+			c->ack_delayed = false;
+		} else {
+			c->ack_delayed = true;
+			c->ack_ts = microtime();
+		}
 	} else {
 		do_drop = true;
 	}

@@ -66,6 +66,7 @@ static const struct init_entry late_init_handlers[] = {
 	/* network stack */
 	LATE_INITIALIZER(arp),
 	LATE_INITIALIZER(stat),
+	LATE_INITIALIZER(tcp),
 };
 
 static int run_init_handlers(const char *phase,

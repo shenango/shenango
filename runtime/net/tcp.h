@@ -5,6 +5,7 @@
 #include <base/stddef.h>
 #include <base/list.h>
 #include <base/kref.h>
+#include <base/time.h>
 #include <runtime/sync.h>
 #include <runtime/tcp.h>
 #include <net/tcp.h>
@@ -14,8 +15,10 @@
 #include "defs.h"
 #include "waitq.h"
 
+/* adjustable constants */
 #define TCP_MSS	(ETH_MTU - sizeof(struct ip_hdr) - sizeof(struct tcp_hdr))
 #define TCP_WIN	((32768 / TCP_MSS) * TCP_MSS)
+#define TCP_ACK_TIMEOUT (1 * ONE_MS)
 
 /* connecion states (RFC 793 Section 3.2) */
 enum {
@@ -76,6 +79,10 @@ struct tcpconn {
 	uint16_t		tx_last_win;
 	struct mbuf		*tx_pending;
 	struct list_head	txq;
+
+	/* timeouts */
+	bool			ack_delayed;
+	uint64_t		ack_ts;
 };
 
 extern tcpconn_t *tcp_conn_alloc(void);

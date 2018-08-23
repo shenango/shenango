@@ -506,6 +506,7 @@ extern int smalloc_init(void);
 extern int ioqueues_register_iokernel(void);
 extern int arp_init_late(void);
 extern int stat_init_late(void);
+extern int tcp_init_late(void);
 
 /* configuration loading */
 extern int cfg_load(const char *path);
