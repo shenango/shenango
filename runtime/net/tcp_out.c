@@ -13,7 +13,7 @@
 
 static void tcp_tx_release_mbuf(struct mbuf *m)
 {
-	if (!atomic_dec_and_test(&m->ref))
+	if (atomic_dec_and_test(&m->ref))
 		net_tx_release_mbuf(m);
 }
 

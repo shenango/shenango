@@ -145,6 +145,10 @@ tcpconn_t *tcp_conn_alloc(void)
 int tcp_conn_attach(tcpconn_t *c, struct netaddr laddr, struct netaddr raddr)
 {
 	/* register the connection with the transport layer */
+	if (laddr.ip == 0)
+		 laddr.ip = netcfg.addr;
+	else if (laddr.ip != netcfg.addr)
+		return -EINVAL;
 	trans_init_5tuple(&c->e, IPPROTO_TCP, &tcp_conn_ops, laddr, raddr);
 	if (laddr.port == 0)
 		return trans_table_add_with_ephemeral_port(&c->e);
@@ -397,7 +401,7 @@ int tcp_dial(struct netaddr laddr, struct netaddr raddr, tcpconn_t **c_out)
 	 * ingress packets can be dispatched to the connection.
 	 */
 	ret = tcp_conn_attach(c, laddr, raddr);
-	if (unlikely(!ret)) {
+	if (unlikely(ret)) {
 		sfree(c);
 		return ret;
 	}
@@ -405,7 +409,7 @@ int tcp_dial(struct netaddr laddr, struct netaddr raddr, tcpconn_t **c_out)
 	/* send a SYN to the remote host */
 	spin_lock_np(&c->lock);
 	ret = tcp_tx_ctl(c, TCP_SYN);
-	if (unlikely(!ret)) {
+	if (unlikely(ret)) {
 		spin_unlock_np(&c->lock);
 		tcp_conn_destroy(c);
 		return ret;
@@ -487,11 +491,12 @@ static ssize_t tcp_read_wait(tcpconn_t *c, size_t len,
 		readlen += mbuf_length(m);
 	}
 
+	c->pcb.rcv_wnd += readlen;
 	spin_unlock_np(&c->lock);
 	return readlen;
 }
 
-static void tcp_read_finish(tcpconn_t *c, struct mbuf *m, size_t len)
+static void tcp_read_finish(tcpconn_t *c, struct mbuf *m)
 {
 	thread_t *th;
 
@@ -499,7 +504,6 @@ static void tcp_read_finish(tcpconn_t *c, struct mbuf *m, size_t len)
 		return;
 
 	spin_lock_np(&c->lock);
-	c->pcb.rcv_wnd += len;
 	c->rx_exclusive = false;
 	th = waitq_signal(&c->rx_wq, &c->lock);
 	spin_unlock_np(&c->lock);
@@ -550,7 +554,7 @@ ssize_t tcp_read(tcpconn_t *c, void *buf, size_t len)
 	}
 
 	/* wakeup any pending readers */
-	tcp_read_finish(c, m, ret);
+	tcp_read_finish(c, m);
 
 	return ret;
 }
@@ -638,7 +642,7 @@ ssize_t tcp_readv(tcpconn_t *c, const struct iovec *iov, int iovcnt)
 	}
 
 	/* wakeup any pending readers */
-	tcp_read_finish(c, m, len);
+	tcp_read_finish(c, m);
 
 	return len;
 }
@@ -863,7 +867,7 @@ int tcp_shutdown(tcpconn_t *c, int how)
 }
 
 /**
- * tcp_abort - force an immediate close (graceful) of the connection
+ * tcp_abort - force an immediate (ungraceful) close of the connection
  * @c: the TCP connection to abort
  */
 void tcp_abort(tcpconn_t *c)

@@ -68,22 +68,24 @@ static void tcp_dump_pkt(tcpconn_t *c, const struct tcp_hdr *tcphdr,
 	uint32_t ack, seq;
 	uint16_t wnd;
 
-	ack = ntoh32(tcphdr->ack) - c->pcb.iss;
-	seq = ntoh32(tcphdr->seq) - c->pcb.iss;
 	wnd = ntoh16(tcphdr->win);
 
 	if (egress) {
 		ip_addr_to_str(c->e.laddr.ip, in_ip);
 		ip_addr_to_str(c->e.raddr.ip, out_ip);
+		ack = ntoh32(tcphdr->ack) - c->pcb.irs;
+		seq = ntoh32(tcphdr->seq) - c->pcb.iss;
 	} else {
 		ip_addr_to_str(c->e.laddr.ip, out_ip);
 		ip_addr_to_str(c->e.raddr.ip, in_ip);
+		ack = ntoh32(tcphdr->ack) - c->pcb.iss;
+		seq = ntoh32(tcphdr->seq) - c->pcb.irs;
 	}
 
 	tcp_flags_to_str(tcphdr->flags, flags);
 
 	log_debug("tcp: %p %s:%hu -> %s:%hu "
-		  "FLAGS=%s SEQ=ISS+%d ACK=IRS+%d WND=%d LEN=%d",
+		  "FLAGS=%s SEQ=ISS+%u ACK=IRS+%u WND=%u LEN=%u",
 		  c, in_ip, c->e.laddr.port, out_ip, c->e.raddr.port,
 		  flags, seq, ack, wnd, len); 
 
@@ -100,7 +102,7 @@ void tcp_debug_egress_pkt(tcpconn_t *c, struct mbuf *m)
 void tcp_debug_ingress_pkt(tcpconn_t *c, struct mbuf *m)
 {
 	tcp_dump_pkt(c, (struct tcp_hdr *)mbuf_transport_offset(m),
-		     mbuf_length(m) - sizeof(struct tcp_hdr), false);
+		     mbuf_length(m), false);
 }
 
 static const char *state_names[] = {

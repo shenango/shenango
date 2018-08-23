@@ -1,5 +1,5 @@
 /*
- * netperf.c - a UDP client similar to netperf
+ * netperf.c - a client similar to netperf
  */
 
 #include <stdio.h>
@@ -12,7 +12,7 @@
 #include <net/ip.h>
 #include <runtime/thread.h>
 #include <runtime/sync.h>
-#include <runtime/udp.h>
+#include <runtime/tcp.h>
 
 #define NETPERF_PORT	8000
 
@@ -24,6 +24,8 @@ static uint64_t stop_us;
 static size_t payload_len;
 static int depth;
 
+#define BUF_SIZE	4096
+
 struct client_rr_args {
 	waitgroup_t *wg;
 	uint64_t reqs;
@@ -31,9 +33,9 @@ struct client_rr_args {
 
 static void client_worker(void *arg)
 {
-	unsigned char buf[UDP_MAX_PAYLOAD];
+	unsigned char buf[BUF_SIZE];
 	struct client_rr_args *args = (struct client_rr_args *)arg;
-	udpconn_t *c;
+	tcpconn_t *c;
 	struct netaddr laddr;
 	ssize_t ret;
 	int budget = depth;
@@ -44,25 +46,25 @@ static void client_worker(void *arg)
 
 	memset(buf, 0xAB, payload_len);
 
-	ret = udp_dial(laddr, raddr, &c);
+	ret = tcp_dial(laddr, raddr, &c);
 	if (ret) {
-		log_err("udp_dial() failed, ret = %ld", ret);
+		log_err("tcp_dial() failed, ret = %ld", ret);
 		goto done;
 	}
 
 	while (microtime() < stop_us) {
 		while (budget) {
-			ret = udp_write(c, buf, payload_len);
+			ret = tcp_write(c, buf, payload_len);
 			if (ret != payload_len) {
-				log_err("udp_write() failed, ret = %ld", ret);
+				log_err("tcp_write() failed, ret = %ld", ret);
 				break;
 			}
 			budget--;
 		}
 
-		ret = udp_read(c, buf, UDP_MAX_PAYLOAD);
+		ret = tcp_read(c, buf, payload_len);
 		if (ret != payload_len) {
-			log_err("udp_read() failed, ret = %ld", ret);
+			log_err("tcp_read() failed, ret = %ld", ret);
 			break;
 		}
 
@@ -70,7 +72,8 @@ static void client_worker(void *arg)
 		args->reqs++;
 	}
 
-	udp_close(c);
+	tcp_abort(c);
+	tcp_close(c);
 done:
 	waitgroup_done(args->wg);
 }
@@ -82,7 +85,7 @@ static void do_client(void *arg)
 	int i, ret;
 	uint64_t reqs = 0;
 
-	log_info("client-mode UDP: %d workers, %ld bytes, %d seconds %d depth",
+	log_info("client-mode TCP: %d workers, %ld bytes, %d seconds %d depth",
 		 nworkers, payload_len, seconds, depth);
 
 	arg_tbl = calloc(nworkers, sizeof(*arg_tbl));
@@ -106,30 +109,46 @@ static void do_client(void *arg)
 	log_info("measured %f reqs/s", (double)reqs / seconds);
 }
 
-static void server_recv_one(struct udp_spawn_data *d)
+static void server_worker(void *arg)
 {
-	/* try to echo the packet back */
-	udp_send(d->buf, d->len, d->laddr, d->raddr);
-	udp_spawn_data_release(d->release_data);
+	unsigned char buf[BUF_SIZE];
+	tcpconn_t *c = (tcpconn_t *)arg;
+	ssize_t ret;
+
+	/* echo the data back */
+	while (true) {
+		ret = tcp_read(c, buf, BUF_SIZE);
+		if (ret <= 0)
+			break;
+
+		ret = tcp_write(c, buf, ret);
+		if (ret < 0)
+			break;
+	}
+
+	tcp_close(c);
 }
 
 static void do_server(void *arg)
 {
-	waitgroup_t wg;
 	struct netaddr laddr;
-	udpspawner_t *s;
+	tcpqueue_t *q;
 	int ret;
 
 	laddr.ip = 0;
 	laddr.port = NETPERF_PORT;
 
-	ret = udp_create_spawner(laddr, server_recv_one, &s);
+	ret = tcp_listen(laddr, 4096, &q);
 	BUG_ON(ret);
 
-	/* wait forever */
-	waitgroup_init(&wg);
-	waitgroup_add(&wg, 1);
-	waitgroup_wait(&wg);
+	while (true) {
+		tcpconn_t *c;
+
+		ret = tcp_accept(q, &c);
+		BUG_ON(ret);
+		ret = thread_spawn(server_worker, c);
+		BUG_ON(ret);
+	}
 }
 
 static int str_to_ip(const char *str, uint32_t *addr)
@@ -167,9 +186,9 @@ int main(int argc, char *argv[])
 		return -EINVAL;
 	}
 
-	if (!strcmp(argv[2], "UDP_CLIENT")) {
+	if (!strcmp(argv[2], "CLIENT")) {
 		fn = do_client;
-	} else if (!strcmp(argv[2], "UDP_SERVER")) {
+	} else if (!strcmp(argv[2], "SERVER")) {
 		fn = do_server;
 	} else {
 		printf("invalid mode '%s'\n", argv[2]);

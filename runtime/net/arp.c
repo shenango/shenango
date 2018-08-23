@@ -311,7 +311,7 @@ int arp_lookup(uint32_t daddr, struct eth_addr *dhost_out, struct mbuf *m)
 	e = lookup_entry(idx, daddr);
 	if (e) {
 		/* entry already exists */
-		free(newe);
+		sfree(newe);
 		if (e->state != ARP_STATE_PROBING) {
 			*dhost_out = e->eth;
 			spin_unlock_np(&arp_lock);

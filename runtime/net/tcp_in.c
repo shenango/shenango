@@ -156,7 +156,6 @@ void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 	int ret;
 
 	assert_preempt_disabled();
-	tcp_debug_ingress_pkt(c, m);
 
 	list_head_init(&q);
 	snd_nxt = load_acquire(&c->pcb.snd_nxt);
@@ -174,10 +173,12 @@ void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 	ack = ntoh32(tcphdr->ack);
 	win = ntoh16(tcphdr->win);
 	len = ntoh16(iphdr->len) - sizeof(*iphdr) - sizeof(*tcphdr);
-	if (unlikely(len != mbuf_length(m))) {
+	if (unlikely(len > mbuf_length(m))) {
 		mbuf_free(m);
 		return;
 	}
+	if (len < mbuf_length(m))
+		mbuf_trim(m, mbuf_length(m) - len);
 
 	spin_lock_np(&c->lock);
 
@@ -331,6 +332,8 @@ void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 			waitq_signal_locked(&c->rx_wq, &c->lock);
 		}
 		do_ack = true;
+	} else {
+		do_drop = true;
 	}
 
 	/* step 8 - FIN */
@@ -349,6 +352,7 @@ void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 	}
 
 done:
+	tcp_debug_ingress_pkt(c, m);
 	spin_unlock_np(&c->lock);
 
 	/* deferred work (delayed until after the lock was dropped) */
@@ -398,22 +402,22 @@ tcpconn_t *tcp_rx_listener(struct netaddr laddr, struct mbuf *m)
 		return NULL;
 	c->pcb.irs = ntoh32(tcphdr->seq);
 	c->pcb.rcv_nxt = c->pcb.irs + 1;
-	tcp_debug_ingress_pkt(c, m);
 
 	/*
 	 * attach the connection to the transport layer. From this point onward
 	 * ingress packets can be dispatched to the connection.
 	 */
 	ret = tcp_conn_attach(c, laddr, raddr);
-	if (unlikely(!ret)) {
+	if (unlikely(ret)) {
 		sfree(c);
 		return NULL;
 	}
+	tcp_debug_ingress_pkt(c, m);
 
 	/* finally, send a SYN/ACK to the remote host */
 	spin_lock_np(&c->lock);
 	ret = tcp_tx_ctl(c, TCP_SYN | TCP_ACK);
-	if (unlikely(!ret)) {
+	if (unlikely(ret)) {
 		spin_unlock_np(&c->lock);
 		tcp_conn_destroy(c);
 		return NULL;
