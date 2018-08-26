@@ -44,8 +44,6 @@ pub struct Packet {
     completion_time: Option<Duration>,
 }
 
-mod memcache_error;
-mod memcache_packet;
 mod memcached;
 
 mod dns;
@@ -91,22 +89,39 @@ impl Distribution {
     }
 }
 
+arg_enum!{
 #[derive(Copy, Clone)]
 enum Protocol {
     Synthetic,
     Memcached,
     Dns,
+}}
+
+impl Protocol {
+    fn create_request(&self, i: usize, p: &mut Packet, buf: &mut Vec<u8>) {
+        match *self {
+            Protocol::Memcached => memcached::create_request(i, p.randomness, buf),
+            Protocol::Synthetic => payload::create_request(i, p, buf),
+            Protocol::Dns => dns::create_request(i, p, buf),
+        }
+    }
+    fn parse_response(&self, buf: &[u8]) -> Result<usize, ()> {
+        match *self {
+            Protocol::Memcached => memcached::parse_response(buf),
+            Protocol::Synthetic => payload::parse_response(buf),
+            Protocol::Dns => dns::parse_response(buf),
+        }
+    }
 }
 
+arg_enum!{
 #[derive(Copy, Clone)]
 enum OutputMode {
     Silent,
     Normal,
-    WithHeader,
-    Trace,
-    IncludeRaw,
-    IncludeRawWithHeader,
-}
+    Buckets,
+    Trace
+}}
 
 #[allow(unused)]
 #[inline(always)]
@@ -132,7 +147,7 @@ fn duration_to_ns(duration: Duration) -> u64 {
     (duration.as_secs() * 1000_000_000 + duration.subsec_nanos() as u64)
 }
 
-fn run_server(backend: Backend, socket: UdpConnection, nthreads: u32) {
+fn run_server(backend: Backend, socket: UdpConnection, nthreads: usize) {
     let socket = Arc::new(socket);
     let join_handles: Vec<_> = (0..nthreads)
         .map(|_| {
@@ -173,20 +188,76 @@ fn run_spawner_server(addr: SocketAddrV4) {
     }
 }
 
+fn run_memcached_preload(
+    backend: Backend,
+    addr: SocketAddrV4,
+    nthreads: usize,
+) {
+    let perthread = (memcached::NVALUES as usize + nthreads - 1) / nthreads;
+    let join_handles: Vec<JoinHandle<_>> = (0..nthreads)
+        .map(|i| {
+            backend.spawn_thread(move || {
+                let sock1 = Arc::new(backend.create_udp_connection("0.0.0.0:0".parse().unwrap(), Some(addr)));
+                let socket = sock1.clone();
+                backend.spawn_thread(move || {
+                    backend.sleep(Duration::from_secs(10));
+                    if Arc::strong_count(&socket) > 1 {
+                        println!("Timing out socket");
+                        socket.shutdown();
+                    }
+                });
+
+                let mut vec_s: Vec<u8> = Vec::with_capacity(4096);
+                let mut vec_r: Vec<u8> = vec![0; 4096];
+                for n in 0..perthread {
+                    vec_s.clear();
+                    memcached::set_request((i * perthread + n) as u64, 0, &mut vec_s);
+
+                    if let Err(e) = sock1.send(&vec_s[..]) {
+                        println!("Preload send ({}/{}): {}", n, perthread, e);
+                        break;
+                    }
+
+                    match sock1.recv(&mut vec_r[..]) {
+                        Ok(len) => {
+                            if len == 0 {
+                                println!("preload timeout ({}/{})", n, perthread);
+                                break;
+                            }
+                            if memcached::parse_response(&mut vec_r[..len]).is_err() {
+                                println!("preload: parse response error");
+                                break;
+                            }
+                        }
+                        Err(e) => {
+                            println!("preload receive ({}/{}): {}", n, perthread, e);
+                            break;
+                        },
+                    }
+                }
+            })
+        })
+        .collect();
+
+    for j in join_handles {
+        j.join().unwrap();
+    }
+}
+
 fn run_client(
     backend: Backend,
     addr: SocketAddrV4,
     runtime: Duration,
     packets_per_second: usize,
-    nthreads: u32,
+    nthreads: usize,
     output: OutputMode,
     protocol: Protocol,
     distribution: Distribution,
     barrier_group: &mut Option<lockstep::Group>,
 ) -> bool {
     let packets_per_thread =
-        duration_to_ns(runtime) as usize * packets_per_second / (1000_000_000 * nthreads as usize);
-    let ns_per_packet = nthreads as usize * 1000_000_000 / packets_per_second;
+        duration_to_ns(runtime) as usize * packets_per_second / (1000_000_000 * nthreads);
+    let ns_per_packet = nthreads * 1000_000_000 / packets_per_second;
 
     let exp = Exp::new(1.0 / ns_per_packet as f64);
     let mut rng = rand::thread_rng();
@@ -228,11 +299,7 @@ fn run_client(
                         if len == 0 {
                             break; // SHUTDOWN
                         }
-                        let idx = match protocol {
-                            Protocol::Memcached => memcached::parse_response(&recv_buf[..len]),
-                            Protocol::Synthetic => payload::parse_response(&recv_buf[..len]),
-                            Protocol::Dns => dns::parse_response(&recv_buf[..len]),
-                        };
+                        let idx = protocol.parse_response(&mut recv_buf[..len]);
                         if idx.is_err() {
                             println!("Error parsing response");
                             continue;
@@ -261,11 +328,7 @@ fn run_client(
             let mut payload = Vec::with_capacity(4096);
             for (i, packet) in packets.iter_mut().enumerate() {
                 payload.clear();
-                match protocol {
-                    Protocol::Memcached => memcached::create_request(i, packet, &mut payload),
-                    Protocol::Synthetic => payload::create_request(i, packet, &mut payload),
-                    Protocol::Dns => dns::create_request(i, packet, &mut payload),
-                };
+                protocol.create_request(i, packet, &mut payload);
 
                 let t = start.elapsed();
                 if t < packet.target_start {
@@ -321,10 +384,8 @@ fn run_client(
     if packets.len() - dropped - never_sent <= 1 {
         match output {
             OutputMode::Silent => {}
-            OutputMode::WithHeader
-            | OutputMode::IncludeRawWithHeader
-            | OutputMode::Normal
-            | OutputMode::IncludeRaw => {
+            OutputMode::Normal
+            | OutputMode::Buckets => {
                 println!(
                     "{}, {}, 0, {}, {}",
                     distribution.name(),
@@ -346,6 +407,10 @@ fn run_client(
         return false;
     }
 
+    if let OutputMode::Silent = output {
+        return true;
+    }
+
     let first_send = packets.iter().filter_map(|p| p.actual_start).min().unwrap();
     let last_send = packets.iter().filter_map(|p| p.actual_start).max().unwrap();
     let mut latencies: Vec<_> = packets
@@ -357,15 +422,11 @@ fn run_client(
         .collect();
     latencies.sort();
 
-    if let OutputMode::WithHeader | OutputMode::IncludeRawWithHeader = output {
-        println!("Distribution, Target, Actual, Dropped, Never Sent, Median, 90th, 99th, 99.9th, 99.99th, Start");
-    }
+
     match output {
         OutputMode::Silent => {}
-        OutputMode::WithHeader
-        | OutputMode::IncludeRawWithHeader
-        | OutputMode::Normal
-        | OutputMode::IncludeRaw => {
+        OutputMode::Normal
+        | OutputMode::Buckets => {
             let percentile = |p| {
                 let idx = ((packets.len() - never_sent) as f32 * p / 100.0) as usize;
                 if idx >= latencies.len() {
@@ -414,7 +475,7 @@ fn run_client(
             }
         }
     }
-    if let OutputMode::IncludeRaw | OutputMode::IncludeRawWithHeader = output {
+    if let OutputMode::Buckets = output {
         let mut buckets = BTreeMap::new();
 
         for l in latencies {
@@ -457,6 +518,7 @@ fn main() {
                     "runtime-client",
                     "spawner-server",
                     "work-bench",
+                    "memcached-preload",
                 ])
                 .required(true)
                 .requires_ifs(&[
@@ -488,25 +550,28 @@ fn main() {
                 .takes_value(true),
         )
         .arg(
-            Arg::with_name("trace")
-                .long("trace")
-                .takes_value(false)
-                .help("Whether to output trace of all packet latencies."),
-        )
-        .arg(
             Arg::with_name("protocol")
                 .short("p")
                 .long("protocol")
                 .value_name("PROTOCOL")
                 .possible_values(&["synthetic", "memcached", "dns"])
                 .default_value("synthetic")
-                .help("Which client protocol to speak"),
+                .help("Server protocol"),
         )
         .arg(
             Arg::with_name("warmup")
                 .long("warmup")
                 .takes_value(false)
                 .help("Run the warmup routine"),
+        )
+        .arg(
+            Arg::with_name("output")
+                .short("o")
+                .long("output")
+                .value_name("output mode")
+                .possible_values(&["silent", "normal", "buckets", "trace"])
+                .default_value("normal")
+                .help("How to display loadgen results"),
         )
         .arg(
             Arg::with_name("distribution")
@@ -562,18 +627,13 @@ fn main() {
         .get_matches();
 
     let addr: SocketAddrV4 = FromStr::from_str(matches.value_of("ADDR").unwrap()).unwrap();
-    let nthreads = value_t_or_exit!(matches, "threads", u32);
+    let nthreads = value_t_or_exit!(matches, "threads", usize);
     let runtime = Duration::from_secs(value_t!(matches, "runtime", u64).unwrap());
     let packets_per_second = (1.0e6 * value_t_or_exit!(matches, "mpps", f32)) as usize;
     let config = matches.value_of("config");
-    let trace = matches.is_present("trace");
     let dowarmup = matches.is_present("warmup");
-    let proto = match matches.value_of("protocol").unwrap() {
-        "synthetic" => Protocol::Synthetic,
-        "memcached" => Protocol::Memcached,
-        "dns" => Protocol::Dns,
-        _ => unreachable!(),
-    };
+    let proto = value_t_or_exit!(matches, "protocol", Protocol);
+    let output = value_t_or_exit!(matches, "output", OutputMode);
     let mean = value_t_or_exit!(matches, "mean", f64);
     let distribution = match matches.value_of("distribution").unwrap() {
         "zero" => Distribution::Zero,
@@ -586,7 +646,7 @@ fn main() {
     let samples = value_t_or_exit!(matches, "samples", usize);
     let mode = matches.value_of("mode").unwrap();
     let backend = match mode {
-        "linux-server" | "linux-client" => Backend::Linux,
+        "linux-server" | "linux-client" | "memcached-preload" => Backend::Linux,
         "runtime-server" | "spawner-server" | "runtime-client" | "work-bench" => Backend::Runtime,
         _ => unreachable!(),
     };
@@ -617,6 +677,12 @@ fn main() {
             let elapsed = duration_to_ns(start.elapsed());
             println!("Rate = {} ns/iteration", elapsed as f64 / iterations as f64);
         }
+        "memcached-preload" => {
+            backend.init_and_run(config, move || {
+                run_memcached_preload(backend, addr, nthreads);
+                println!("Warmup done");
+            })
+        }
         "spawner-server" => backend.init_and_run(config, move || run_spawner_server(addr)),
         "linux-server" | "runtime-server" => backend.init_and_run(config, move || {
             let socket = backend.create_udp_connection(addr, None);
@@ -625,100 +691,37 @@ fn main() {
         }),
         "linux-client" | "runtime-client" => {
             backend.init_and_run(config, move || {
+                println!("Distribution, Target, Actual, Dropped, Never Sent, Median, 90th, 99th, 99.9th, 99.99th, Start");
                 if dowarmup {
-                    match proto {
-                        Protocol::Dns => {}
-                        Protocol::Memcached => {
-                            memcached::warmup(backend, addr, nthreads as u64);
-                            println!("Warmup done");
-                            return;
-                        }
-                        Protocol::Synthetic => for packets_per_second in (1..3).map(|i| i * 100000)
-                        {
-                            run_client(
-                                backend,
-                                addr,
-                                Duration::from_secs(1),
-                                packets_per_second,
-                                nthreads,
-                                OutputMode::Silent,
-                                proto,
-                                distribution,
-                                &mut barrier_group,
-                            );
-                        },
-                    }
-                }
-
-                if trace {
-                    run_client(
-                        backend,
-                        addr,
-                        runtime,
-                        packets_per_second,
-                        nthreads,
-                        OutputMode::Trace,
-                        proto,
-                        distribution,
-                        &mut barrier_group,
-                    );
-                    return;
-                }
-
-                if let Protocol::Synthetic = proto {
-                    for (i, distribution) in [
-                        Distribution::Constant(mean as u64),
-                        Distribution::Exponential(mean),
-                        Distribution::Bimodal1(mean),
-                    ].iter()
-                        .enumerate()
-                    {
-                        for j in 1..=samples {
-                            run_client(
-                                backend,
-                                addr,
-                                runtime,
-                                packets_per_second * j / samples,
-                                nthreads,
-                                if i == 0 && j == 1 {
-                                    OutputMode::IncludeRawWithHeader
-                                } else {
-                                    OutputMode::IncludeRaw
-                                },
-                                proto,
-                                *distribution,
-                                &mut barrier_group,
-                            );
-                        }
-                    }
-                } else {
-                    run_client(
-                        backend,
-                        addr,
-                        Duration::from_secs(3),
-                        packets_per_second,
-                        nthreads,
-                        OutputMode::Silent,
-                        proto,
-                        distribution,
-                        &mut barrier_group,
-                    );
-                    for j in 1..=samples {
+                    for packets_per_second in (1..3).map(|i| i * 100000) {
                         run_client(
                             backend,
                             addr,
-                            runtime,
-                            packets_per_second * j / samples,
+                            Duration::from_secs(1),
+                            packets_per_second,
                             nthreads,
-                            OutputMode::IncludeRaw,
+                            OutputMode::Silent,
                             proto,
                             distribution,
                             &mut barrier_group,
                         );
                     }
-                    if let Some(ref mut g) = barrier_group {
-                        g.barrier();
-                    }
+                }
+                for j in 1..=samples {
+                    run_client(
+                        backend,
+                        addr,
+                        runtime,
+                        packets_per_second * j / samples,
+                        nthreads,
+                        output,
+                        proto,
+                        distribution,
+                        &mut barrier_group,
+                    );
+                }
+                if let Some(ref mut g) = barrier_group {
+                    g.barrier();
                 }
             });
         }

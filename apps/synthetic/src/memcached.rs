@@ -1,29 +1,117 @@
 
-use std::io::Cursor;
-use std::io::Write;
+use std::io;
+use std::io::{Error, ErrorKind};
+use byteorder::{WriteBytesExt, ReadBytesExt, BigEndian};
 
-use std::net::SocketAddrV4;
-use std::sync::Arc;
-use std::time::Duration;
+/** Packet code from https://github.com/aisk/rust-memcache **/
 
-use memcache_packet::{PacketHeader, Opcode, Magic, ResponseStatus};
-use memcache_packet::parse_header_only_response;
+#[allow(dead_code)]
+enum Opcode {
+    Get = 0x00,
+    Set = 0x01,
+    Add = 0x02,
+    Replace = 0x03,
+    Delete = 0x04,
+    Increment = 0x05,
+    Decrement = 0x06,
+    Flush = 0x08,
+    Noop = 0x0a,
+    Version = 0x0b,
+    GetKQ = 0x0d,
+    Append = 0x0e,
+    Prepend = 0x0f,
+    Touch = 0x1c,
+}
 
-use backend::*;
+enum Magic {
+    Request = 0x80,
+    Response = 0x81,
+}
 
-use Packet;
+#[allow(dead_code)]
+enum ResponseStatus {
+    NoError = 0x00,
+    KeyNotFound = 0x01,
+    KeyExists = 0x02,
+    ValueTooLarge = 0x03,
+    InvalidArguments = 0x04,
+}
 
+#[derive(Debug, Default)]
+struct PacketHeader {
+    pub magic: u8,
+    pub opcode: u8,
+    pub key_length: u16,
+    pub extras_length: u8,
+    pub data_type: u8,
+    pub vbucket_id_or_status: u16,
+    pub total_body_length: u32,
+    pub opaque: u32,
+    pub cas: u64,
+}
 
-static NVALUES : u64 = 1000000;
+impl PacketHeader {
+    fn write<W: io::Write>(self, writer: &mut W) -> Result<(), io::Error> {
+        writer.write_u32::<BigEndian>(0 as u32)?;
+        writer.write_u8(0)?;
+        writer.write_u8(1)?;
+        writer.write_u16::<BigEndian>(0 as u16)?;
+        writer.write_u8(self.magic)?;
+        writer.write_u8(self.opcode)?;
+        writer.write_u16::<BigEndian>(self.key_length)?;
+        writer.write_u8(self.extras_length)?;
+        writer.write_u8(self.data_type)?;
+        writer.write_u16::<BigEndian>(self.vbucket_id_or_status)?;
+        writer.write_u32::<BigEndian>(self.total_body_length)?;
+        writer.write_u32::<BigEndian>(self.opaque)?;
+        writer.write_u64::<BigEndian>(self.cas)?;
+        return Ok(());
+    }
+
+    fn read<R: io::Read>(reader: &mut R) -> Result<PacketHeader, io::Error> {
+        let magic = reader.read_u8()?;
+        if magic != Magic::Response as u8 {
+            return Err(Error::new(ErrorKind::Other,
+                format!("Bad magic number in response header: {}", magic),
+            ));
+        }
+        let header = PacketHeader {
+            magic: magic,
+            opcode: reader.read_u8()?,
+            key_length: reader.read_u16::<BigEndian>()?,
+            extras_length: reader.read_u8()?,
+            data_type: reader.read_u8()?,
+            vbucket_id_or_status: reader.read_u16::<BigEndian>()?,
+            total_body_length: reader.read_u32::<BigEndian>()?,
+            opaque: reader.read_u32::<BigEndian>()?,
+            cas: reader.read_u64::<BigEndian>()?,
+        };
+        return Ok(header);
+    }
+}
+
+pub static NVALUES : u64 = 1000000;
 static PCT_SET : u64 = 2; // out of 1000
 static VALUE_SIZE  : usize = 2;
 static KEY_SIZE    : usize = 20;
 
-macro_rules! key_fmt { ($key:expr) => (format_args!("{:020}", $key)) }
 
-fn set_request(key: u64, opaque: u32, buf: &mut Vec<u8>) {
+fn write_key(buf: &mut Vec<u8>, key: u64) {
+    let mut pushed = 0;
+    let mut k = key;
+    while k > 0 {
+        buf.push(48 + (k % 10) as u8);
+        k /= 10;
+        pushed += 1;
+    }
+    for _ in pushed..KEY_SIZE {
+        buf.push('A' as u8);
+    }
+}
 
-    let request_header = PacketHeader {
+pub fn set_request(key: u64, opaque: u32, buf: &mut Vec<u8>) {
+
+    PacketHeader {
         magic: Magic::Request as u8,
         opcode: Opcode::Set as u8,
         key_length: KEY_SIZE as u16,
@@ -31,48 +119,47 @@ fn set_request(key: u64, opaque: u32, buf: &mut Vec<u8>) {
         total_body_length: (8 + KEY_SIZE + VALUE_SIZE) as u32,
         opaque: opaque,
         ..Default::default()
-    };
-    request_header.write(buf).unwrap();
+    }.write(buf).unwrap();
 
-    for _ in 0..8 {
-        buf.push(0 as u8);
-    }
+    buf.write_u64::<BigEndian>(0).unwrap();
 
-    buf.write_fmt(key_fmt!(key)).unwrap();
+    write_key(buf, key);
+
     for i in 0..VALUE_SIZE {
         buf.push((((key * i as u64) >> (i % 4)) & 0xff) as u8);
     }
 }
 
-pub fn create_request(i: usize, packet: &Packet, buf: &mut Vec<u8>) {
+#[allow(dead_code)]
+pub fn create_request(i: usize, randomness: u64, buf: &mut Vec<u8>) {
 
     // Use first 32 bits of randomness to determine if this is a SET or GET req
-    let low32 = packet.randomness & 0xffffffff;
-    let key =  (packet.randomness >> 32) % NVALUES;
+    let low32 = randomness & 0xffffffff;
+    let key =  (randomness >> 32) % NVALUES;
 
     if low32 % 1000 < PCT_SET {
         set_request(key, i as u32, buf);
         return;
     }
 
-    let request_header = PacketHeader {
+    PacketHeader {
         magic: Magic::Request as u8,
         opcode: Opcode::Get as u8,
         key_length: KEY_SIZE as u16,
         total_body_length: KEY_SIZE as u32,
         opaque: i as u32,
         ..Default::default()
-    };
-    request_header.write(buf).unwrap();
-    buf.write_fmt(key_fmt!(key)).unwrap();
+    }.write(buf).unwrap();
+
+    write_key(buf, key);
 }
 
 pub fn parse_response(buf: &[u8]) -> Result<usize, ()> {
     if buf.len() < 8 {
         return Err(());
     }
-    let (_, l) = buf.split_at(8);
-    match PacketHeader::read(&mut Cursor::new(l)) {
+    let (_, mut l) = buf.split_at(8);
+    match PacketHeader::read(&mut l) {
         Ok(hdr) => {
             if hdr.vbucket_id_or_status != ResponseStatus::NoError as u16 {
                 println!("Not NoError {}", hdr.vbucket_id_or_status);
@@ -84,60 +171,3 @@ pub fn parse_response(buf: &[u8]) -> Result<usize, ()> {
     }
 }
 
-pub fn warmup(
-    backend: Backend,
-    addr: SocketAddrV4,
-    nthreads: u64,
-) {
-
-    let perthread = (NVALUES + nthreads - 1) / nthreads;
-
-    let mut join_handles = Vec::new();
-
-    for i in 0..nthreads {
-        join_handles.push(backend.spawn_thread(move || {
-            let sock1 = Arc::new(backend.create_udp_connection("0.0.0.0:0".parse().unwrap(), Some(addr)));
-            let socket = sock1.clone();
-            backend.spawn_thread(move || {
-                backend.sleep(Duration::from_secs(10));
-                if Arc::strong_count(&socket) > 1 {
-                    println!("Timing out socket");
-                    socket.shutdown();
-                }
-            });
-
-            for n in 0..perthread {
-                let mut vec: Vec<u8> = Vec::new();
-                set_request(i * perthread + n, 0, &mut vec);
-
-                if let Err(e) = sock1.send(&vec[..]) {
-                    println!("Warmup send ({}/{}): {}", n, perthread, e);
-                    break;
-                }
-
-                let mut recv_buf: Vec<u8> = vec![0; 4096];
-                match sock1.recv(&mut recv_buf[..]) {
-                    Ok(len) => {
-                        if len < 8 {
-                            continue;
-                        }
-                        if parse_header_only_response(&mut Cursor::new(&recv_buf[8..len])).is_err() {
-                            println!("Warmup: parse response error");
-                            break;
-                        }
-                    }
-                    Err(e) => {
-                        println!("Warmup receive ({}/{}): {}", n, perthread, e);
-                        break;
-                    },
-                }
-            }
-        }));
-    }
-
-    for j in join_handles {
-        j.join().unwrap();
-    }
-
-    return; 
-}
