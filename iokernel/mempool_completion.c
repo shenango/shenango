@@ -1,70 +1,83 @@
 /*
  * mempool_completion.c - a single producer, single consumer mempool that sends
- * completion events when tx buffers can be freed. Based on rte_mempool_ring.c.
+ * completion events when tx buffers can be freed. Based on rte_mempool_stack.c.
  */
 
-#include <rte_errno.h>
 #include <rte_mempool.h>
-#include <rte_ring.h>
+#include <rte_malloc.h>
 
 #include <base/log.h>
 
 #include "defs.h"
 
+struct completion_stack {
+	uint32_t size;
+	uint32_t len;
+	void *objs[];
+};
+
 static int completion_enqueue(struct rte_mempool *mp, void * const *obj_table,
 		unsigned n)
 {
-	unsigned i;
+	unsigned long i;
+	struct completion_stack *s = mp->pool_data;
 
-	for (i = 0; i < n; i++) {
-		if (!tx_send_completion(obj_table[i]))
-			return -ENOBUFS;
-	}
+	if (unlikely(s->len + n > s->size))
+		return -ENOBUFS;
 
-	return rte_ring_sp_enqueue_bulk(mp->pool_data, obj_table, n, NULL) == 0 ?
-			-ENOBUFS : 0;
+	for (i = 0; i < n; i++)
+		// Give up on notifying the runtime if this returns false.
+		tx_send_completion(obj_table[i]);
+
+#pragma GCC ivdep
+	for (i = 0; i < n; i++)
+		s->objs[s->len + i] = obj_table[i];
+
+	s->len += n;
+	return 0;
 }
 
-static int completion_dequeue(struct rte_mempool *mp, void **obj_table, unsigned n)
+static int completion_dequeue(struct rte_mempool *mp, void  ** obj_table, unsigned n)
 {
-	return rte_ring_sc_dequeue_bulk(mp->pool_data, obj_table, n, NULL) == 0 ?
-			-ENOBUFS : 0;
+	unsigned long i, j;
+	struct completion_stack *s = mp->pool_data;
+	if (unlikely(n > s->len))
+		return -ENOBUFS;
+
+	s->len -= n;
+#pragma GCC ivdep
+	for (i = 0, j = s->len; i < n; i++, j++)
+		obj_table[i] = s->objs[j];
+
+	return 0;
 }
 
 static unsigned completion_get_count(const struct rte_mempool *mp)
 {
-	return rte_ring_count(mp->pool_data);
+	struct completion_stack *s = mp->pool_data;
+	return s->len;
 }
 
 static int completion_alloc(struct rte_mempool *mp)
 {
-	int ret, rg_flags;
-	char rg_name[RTE_RING_NAMESIZE];
-	struct rte_ring *r;
-
-	ret = snprintf(rg_name, sizeof(rg_name), RTE_MEMPOOL_MZ_FORMAT, mp->name);
-	if (ret < 0 || ret >= (int) sizeof(rg_name)) {
-		rte_errno = ENAMETOOLONG;
-		return -rte_errno;
+	struct completion_stack *s;
+	unsigned n = mp->size;
+	int size = sizeof(*s) + (n + 16) * sizeof(void *);
+	s = rte_zmalloc_socket(mp->name, size, RTE_CACHE_LINE_SIZE, mp->socket_id);
+	if (!s) {
+		log_err("Could not allocate stack");
+		return -ENOMEM;
 	}
 
-	/* ring flags */
-	rg_flags = RING_F_SP_ENQ | RING_F_SC_DEQ;
-
-	/* allocate the ring that will be used to store objects */
-	r = rte_ring_create(rg_name, rte_align32pow2(mp->size + 1), mp->socket_id,
-			rg_flags);
-	if (r == NULL)
-		return -rte_errno;
-
-	mp->pool_data = r;
-
+	s->len = 0;
+	s->size = n;
+	mp->pool_data = s;
 	return 0;
 }
 
 static void completion_free(struct rte_mempool *mp)
 {
-	rte_ring_free(mp->pool_data);
+	rte_free(mp->pool_data);
 }
 
 /*
