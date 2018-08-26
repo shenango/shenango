@@ -63,8 +63,13 @@ func main() {
 			os.Exit(1)
 		}
 
+		c.SetReadDeadline(time.Now().Add(time.Duration(4) * time.Millisecond))
 		n, err := c.Read(buf[0:])
 		if err != nil {
+			if nerr, ok := err.(net.Error); ok && nerr.Timeout() {
+				lastm = make(map[string]uint64)
+				continue
+			}
 			os.Exit(1)
 		}
 		strs := strings.Split(string(buf[0:n-1]), ",")
