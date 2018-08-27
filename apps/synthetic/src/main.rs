@@ -1,13 +1,8 @@
-#![feature(duration_extras)]
-#![feature(duration_from_micros)]
 #![feature(nll)]
 #![feature(test)]
-#![feature(if_while_or_patterns)]
-#![feature(assoc_unix_epoch)]
 #[macro_use]
 extern crate clap;
 
-extern crate bincode;
 extern crate byteorder;
 extern crate dns_parser;
 extern crate libc;
@@ -157,7 +152,7 @@ fn run_server(backend: Backend, socket: UdpConnection, nthreads: usize) {
                 loop {
                     let (len, remote_addr) = socket2.recv_from(&mut buf[..]).unwrap();
 
-                    let payload: Payload = bincode::deserialize(&buf[..len]).unwrap();
+                    let payload: Payload = payload::deserialize(&buf[..len]).unwrap();
                     work(payload.work_iterations);
                     socket2.send_to(&buf[..len], remote_addr).unwrap();
                 }
@@ -174,7 +169,7 @@ fn run_spawner_server(addr: SocketAddrV4) {
     extern "C" fn echo(d: *mut shenango::ffi::udp_spawn_data) {
         unsafe {
             let buf = slice::from_raw_parts((*d).buf as *mut u8, (*d).len);
-            let payload: Payload = bincode::deserialize(buf).unwrap();
+            let payload: Payload = payload::deserialize(buf).unwrap();
             work(payload.work_iterations);
             let _ = UdpSpawner::reply(d, buf);
             UdpSpawner::release_data(d);

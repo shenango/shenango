@@ -4,7 +4,6 @@ version = "0.1.0"
 authors = ["The Shenango Developers"]
 
 [dependencies]
-bincode = "0.9"
 byteorder = "1"
 clap = "2.32.0"
 dns-parser = "0.7.1"
