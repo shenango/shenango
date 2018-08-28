@@ -21,6 +21,7 @@ pub mod ffi {
 mod asm;
 pub mod thread;
 pub mod udp;
+pub mod tcp;
 
 pub use asm::*;
 
