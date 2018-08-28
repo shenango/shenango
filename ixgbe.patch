@@ -1,5 +1,5 @@
 diff --git a/drivers/net/ixgbe/ixgbe_rxtx.c b/drivers/net/ixgbe/ixgbe_rxtx.c
-index 6c582b4be..2579e344f 100644
+index 6c582b4be..049b738a2 100644
 --- a/drivers/net/ixgbe/ixgbe_rxtx.c
 +++ b/drivers/net/ixgbe/ixgbe_rxtx.c
 @@ -554,10 +554,10 @@ tx_desc_ol_flags_to_cmdtype(uint64_t ol_flags)
@@ -15,6 +15,77 @@ index 6c582b4be..2579e344f 100644
  #endif
  
  /* Reset transmit descriptors after they have been used */
+@@ -2371,6 +2371,45 @@ static const struct ixgbe_txq_ops def_txq_ops = {
+ 	.reset = ixgbe_reset_tx_queue,
+ };
+ 
++static uint16_t
++install_txq_ctx(struct ixgbe_tx_queue *txq, uint16_t slot,
++	const uint64_t flags, const union ixgbe_tx_offload tx_offload)
++{
++
++	/* This must be called before any packets are placed in the ring */
++	ASSERT(txq->tx_tail == 0);
++	ASSERT(((struct ixgbe_tx_entry_v *)txq->sw_ring_v)->mbuf == NULL);
++	ASSERT(txq->nb_tx_free >= txq->tx_free_thresh);
++	ASSERT(txq->nb_tx_desc > 0);
++	ASSERT(txq->nb_tx_free >= 1);
++	ASSERT(slot < IXGBE_CTX_NUM);
++
++
++	uint64_t tx_ol_req = flags & IXGBE_TX_OFFLOAD_MASK;
++
++	volatile union ixgbe_adv_tx_desc *txr = txq->tx_ring;
++	volatile struct ixgbe_adv_tx_context_desc *ctx_txd;
++	ctx_txd = (volatile struct ixgbe_adv_tx_context_desc *)txr;
++
++	txq->ctx_curr = slot;
++	ixgbe_set_xmit_ctx(txq, ctx_txd, tx_ol_req,
++		tx_offload, NULL);
++
++	txq->nb_tx_used = (uint16_t)(txq->nb_tx_used + 1);
++	txq->nb_tx_free = (uint16_t)(txq->nb_tx_free - 1);
++
++	PMD_TX_LOG(DEBUG, "port_id=%u queue_id=%u tx_tail=%u nb_tx=%u",
++		   (unsigned) txq->port_id, (unsigned) txq->queue_id,
++		   (unsigned) 1, (unsigned) 1);
++	IXGBE_PCI_REG_WRITE_RELAXED(txq->tdt_reg_addr, 1);
++	txq->tx_tail = 1;
++	return 1;
++}
++
++
++#define IXGBE_SIMPLE_FLAGS_OFFLOAD \
++	(IXGBE_SIMPLE_FLAGS & ~(ETH_TXQ_FLAGS_NOXSUMUDP | ETH_TXQ_FLAGS_NOXSUMTCP))
++
+ /* Takes an ethdev and a queue and sets up the tx function to be used based on
+  * the queue parameters. Used in tx_queue_setup by primary process and then
+  * in dev_init by secondary process when attaching to an existing ethdev.
+@@ -2379,7 +2418,7 @@ void __attribute__((cold))
+ ixgbe_set_tx_function(struct rte_eth_dev *dev, struct ixgbe_tx_queue *txq)
+ {
+ 	/* Use a simple Tx queue (no offloads, no multi segs) if possible */
+-	if (((txq->txq_flags & IXGBE_SIMPLE_FLAGS) == IXGBE_SIMPLE_FLAGS) &&
++	if (((txq->txq_flags & IXGBE_SIMPLE_FLAGS_OFFLOAD) == IXGBE_SIMPLE_FLAGS_OFFLOAD) &&
+ #ifdef RTE_LIBRTE_SECURITY
+ 			!(txq->using_ipsec) &&
+ #endif
+@@ -2591,6 +2630,15 @@ ixgbe_dev_tx_queue_setup(struct rte_eth_dev *dev,
+ 
+ 	dev->data->tx_queues[queue_idx] = txq;
+ 
++	uint64_t olflags = PKT_TX_IP_CKSUM | PKT_TX_IPV4 | PKT_TX_TCP_CKSUM;
++	union ixgbe_tx_offload offloads;
++	memset(&offloads, 0, sizeof(offloads));
++	offloads.l2_len = ETHER_HDR_LEN;
++	offloads.l3_len = sizeof(struct ipv4_hdr);
++	offloads.l4_len = sizeof(struct tcp_hdr);
++
++	if (install_txq_ctx(txq, 0, olflags, offloads) != 1)
++		return -EINVAL;
+ 
+ 	return 0;
+ }
 diff --git a/drivers/net/ixgbe/ixgbe_rxtx.h b/drivers/net/ixgbe/ixgbe_rxtx.h
 index 69c718bca..9d3fdd0dd 100644
 --- a/drivers/net/ixgbe/ixgbe_rxtx.h
@@ -37,3 +108,45 @@ index 69c718bca..9d3fdd0dd 100644
  #define RTE_IXGBE_MAX_RX_BURST          RTE_IXGBE_RXQ_REARM_THRESH
  #endif
  
+diff --git a/drivers/net/ixgbe/ixgbe_rxtx_vec_common.h b/drivers/net/ixgbe/ixgbe_rxtx_vec_common.h
+index 414840a2b..950beebda 100644
+--- a/drivers/net/ixgbe/ixgbe_rxtx_vec_common.h
++++ b/drivers/net/ixgbe/ixgbe_rxtx_vec_common.h
+@@ -94,8 +94,8 @@ ixgbe_tx_free_bufs(struct ixgbe_tx_queue *txq)
+ 	 * tx_next_dd - (tx_rs_thresh-1)
+ 	 */
+ 	txep = &txq->sw_ring_v[txq->tx_next_dd - (n - 1)];
+-	m = rte_pktmbuf_prefree_seg(txep[0].mbuf);
+-	if (likely(m != NULL)) {
++	if (likely(txep[0].mbuf &&
++			(m = rte_pktmbuf_prefree_seg(txep[0].mbuf)) != NULL)) {
+ 		free[0] = m;
+ 		nb_free = 1;
+ 		for (i = 1; i < n; i++) {
+diff --git a/drivers/net/ixgbe/ixgbe_rxtx_vec_sse.c b/drivers/net/ixgbe/ixgbe_rxtx_vec_sse.c
+index c9ba48246..0a6bc6b06 100644
+--- a/drivers/net/ixgbe/ixgbe_rxtx_vec_sse.c
++++ b/drivers/net/ixgbe/ixgbe_rxtx_vec_sse.c
+@@ -618,7 +618,21 @@ static inline void
+ vtx1(volatile union ixgbe_adv_tx_desc *txdp,
+ 		struct rte_mbuf *pkt, uint64_t flags)
+ {
+-	__m128i descriptor = _mm_set_epi64x((uint64_t)pkt->pkt_len << 46 |
++
++	/* Set Packet Length */
++	uint64_t top_flags =  (uint64_t)pkt->pkt_len << 46;
++
++	/* Set IXGBE_TXD_POPTS_IXSM */
++	top_flags |= (pkt->ol_flags & PKT_TX_IP_CKSUM) >> 14;
++	RTE_BUILD_BUG_ON(
++		PKT_TX_IP_CKSUM >> 14 != (uint64_t)IXGBE_TXD_POPTS_IXSM << 40);
++
++	/* Set IXGBE_TXD_POPTS_TXSM */
++	top_flags |= (pkt->ol_flags & PKT_TX_TCP_CKSUM) >> 11;
++	RTE_BUILD_BUG_ON(
++		PKT_TX_TCP_CKSUM >> 11 != (uint64_t)IXGBE_TXD_POPTS_TXSM << 40);
++
++	__m128i descriptor = _mm_set_epi64x(top_flags |
+ 			flags | pkt->data_len,
+ 			pkt->buf_iova + pkt->data_off);
+ 	_mm_store_si128((__m128i *)&txdp->read, descriptor);

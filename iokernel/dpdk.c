@@ -106,10 +106,8 @@ static inline int dpdk_port_init(uint8_t port, struct rte_mempool *mbuf_pool)
 	txconf = &dev_info.default_txconf;
 	txconf->tx_rs_thresh = 64;
 	txconf->tx_free_thresh = 64;
-#if 0
 	txconf->txq_flags &= ~(ETH_TXQ_FLAGS_NOXSUMUDP |
 			ETH_TXQ_FLAGS_NOXSUMTCP);
-#endif
 
 	/* Allocate and set up 1 TX queue per Ethernet port. */
 	for (q = 0; q < tx_rings; q++) {

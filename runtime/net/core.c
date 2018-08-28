@@ -380,9 +380,6 @@ static void net_push_iphdr(struct mbuf *m, uint8_t proto, uint32_t daddr)
 	iphdr->chksum = 0;
 	iphdr->saddr = hton32(netcfg.addr);
 	iphdr->daddr = hton32(daddr);
-
-	/* calculate IP checksum */
-	iphdr->chksum = chksum_internet((void *)iphdr, sizeof(*iphdr));
 }
 
 static uint32_t net_get_ip_route(uint32_t daddr)

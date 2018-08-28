@@ -53,6 +53,8 @@ int tcp_tx_raw_rst(struct netaddr laddr, struct netaddr raddr, tcp_seq seq)
 	if (unlikely((!m)))
 		return -ENOMEM;
 
+	m->txflags = OLFLAG_TCP_CHKSUM;
+
 	/* write the tcp header */
 	tcphdr = mbuf_push_hdr(m, *tcphdr);
 	tcphdr->sport = hton16(laddr.port);
@@ -90,6 +92,8 @@ int tcp_tx_raw_rst_ack(struct netaddr laddr, struct netaddr raddr,
 	if (unlikely((!m)))
 		return -ENOMEM;
 
+	m->txflags = OLFLAG_TCP_CHKSUM;
+
 	/* write the tcp header */
 	tcphdr = mbuf_push_hdr(m, *tcphdr);
 	tcphdr->sport = hton16(laddr.port);
@@ -123,6 +127,8 @@ int tcp_tx_ack(tcpconn_t *c)
 	if (unlikely(!m))
 		return -ENOMEM;
 
+	m->txflags = OLFLAG_TCP_CHKSUM;
+
 	tcphdr = tcp_push_tcphdr(m, c, TCP_ACK);
 	tcphdr->seq = hton32(load_acquire(&c->pcb.snd_nxt));
 
@@ -155,6 +161,8 @@ int tcp_tx_ctl(tcpconn_t *c, uint8_t flags)
 	m = net_tx_alloc_mbuf();
 	if (unlikely(!m))
 		return -ENOMEM;
+
+	m->txflags = OLFLAG_TCP_CHKSUM;
 
 	m->seg_seq = c->pcb.snd_nxt;
 	m->seg_end = c->pcb.snd_nxt + 1;
@@ -223,6 +231,7 @@ ssize_t tcp_tx_buf(tcpconn_t *c, const void *buf, size_t len, bool push)
 				ret = -ENOBUFS;
 				break;
 			}
+			m->txflags = OLFLAG_TCP_CHKSUM;
 			seglen = min(end - pos, TCP_MSS);
 			m->seg_seq = c->pcb.snd_nxt;
 			m->seg_end = c->pcb.snd_nxt + seglen;

@@ -7,6 +7,7 @@
 #include <rte_hash.h>
 #include <rte_ip.h>
 #include <rte_mbuf.h>
+#include <rte_tcp.h>
 
 #include <base/log.h>
 #include <iokernel/queue.h>
@@ -60,7 +61,6 @@ static void tx_prepare_tx_mbuf(struct rte_mbuf *buf,
 	buf->data_len = net_hdr->len;
 
 	buf->ol_flags = 0;
-#if 0
 	if (net_hdr->olflags != 0) {
 		if (net_hdr->olflags & OLFLAG_IP_CHKSUM)
 			buf->ol_flags |= PKT_TX_IP_CKSUM;
@@ -71,10 +71,10 @@ static void tx_prepare_tx_mbuf(struct rte_mbuf *buf,
 		if (net_hdr->olflags & OLFLAG_IPV6)
 			buf->ol_flags |= PKT_TX_IPV6;
 
+		buf->l4_len = sizeof(struct tcp_hdr);
 		buf->l3_len = sizeof(struct ipv4_hdr);
 		buf->l2_len = ETHER_HDR_LEN;
 	}
-#endif
 
 	/* initialize the private data, used to send completion events */
 	priv_data = tx_pktmbuf_get_priv(buf);
