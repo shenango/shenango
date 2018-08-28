@@ -209,6 +209,7 @@ void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 			goto done;
 		}
 		if ((tcphdr->flags & TCP_SYN) > 0) {
+			do_drop = true;
 			c->pcb.rcv_nxt = seq + 1;
 			c->pcb.irs = seq;
 			if ((tcphdr->flags & TCP_ACK) > 0) {
@@ -224,7 +225,6 @@ void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 			} else {
 				ret = tcp_tx_ctl(c, TCP_SYN | TCP_ACK);
 				if (unlikely(ret)) {
-					do_drop = true;
 					goto done; /* feign packet loss */
 				}
 				tcp_conn_set_state(c, TCP_STATE_SYN_RECEIVED);
@@ -311,6 +311,7 @@ void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 		   c->pcb.snd_una == snd_nxt) {
 		tcp_conn_set_state(c, TCP_STATE_CLOSED);
 		tcp_conn_put(c); /* safe because RCU + preempt is disabled */
+		do_drop = true;
 		goto done;
 	}
 
@@ -354,7 +355,7 @@ void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 		assert(c->pcb.snd_una != snd_nxt);
 		tcp_conn_set_state(c, TCP_STATE_CLOSING);
 	} else if (c->pcb.state == TCP_STATE_FIN_WAIT2) {
-		/* TODO: enable time-wait timer and disable other timers */
+		c->time_wait_ts = microtime();
 		tcp_conn_set_state(c, TCP_STATE_TIME_WAIT);
 	}
 

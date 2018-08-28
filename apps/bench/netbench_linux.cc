@@ -8,7 +8,7 @@ extern "C" {
 #undef min
 #undef max
 
-#include "udp.h"
+#include "net.h"
 #include "fake_worker.h"
 #include "proto.h"
 

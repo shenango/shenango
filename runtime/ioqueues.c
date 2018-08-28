@@ -24,11 +24,11 @@
 
 #include "defs.h"
 
-#define PACKET_QUEUE_MCOUNT	1024
-#define COMMAND_QUEUE_MCOUNT	512
+#define PACKET_QUEUE_MCOUNT	4096
+#define COMMAND_QUEUE_MCOUNT	4096
 /* the egress buffer pool must be large enough to fill all the TXQs entirely */
 #define EGRESS_POOL_SIZE(nks) \
-	(PACKET_QUEUE_MCOUNT * MBUF_DEFAULT_LEN * (nks) * 2)
+	(PACKET_QUEUE_MCOUNT * MBUF_DEFAULT_LEN * (nks) * 4)
 
 DEFINE_SPINLOCK(qlock);
 unsigned int nrqs = 0;

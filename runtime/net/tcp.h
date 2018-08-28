@@ -19,6 +19,7 @@
 #define TCP_MSS	(ETH_MTU - sizeof(struct ip_hdr) - sizeof(struct tcp_hdr))
 #define TCP_WIN	((32768 / TCP_MSS) * TCP_MSS)
 #define TCP_ACK_TIMEOUT (1 * ONE_MS)
+#define TCP_TIME_WAIT_TIMEOUT (1 * ONE_SECOND) /* FIXME: should be 8 minutes */
 
 /* connecion states (RFC 793 Section 3.2) */
 enum {
@@ -83,6 +84,7 @@ struct tcpconn {
 	/* timeouts */
 	bool			ack_delayed;
 	uint64_t		ack_ts;
+	uint64_t		time_wait_ts;
 };
 
 extern tcpconn_t *tcp_conn_alloc(void);

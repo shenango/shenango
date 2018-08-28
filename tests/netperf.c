@@ -24,7 +24,7 @@ static uint64_t stop_us;
 static size_t payload_len;
 static int depth;
 
-#define BUF_SIZE	4096
+#define BUF_SIZE	32768
 
 struct client_rr_args {
 	waitgroup_t *wg;
@@ -62,16 +62,17 @@ static void client_worker(void *arg)
 			budget--;
 		}
 
-		ret = tcp_read(c, buf, payload_len);
-		if (ret != payload_len) {
+		ret = tcp_read(c, buf, payload_len * depth);
+		if (ret <= 0 || ret % payload_len != 0) {
 			log_err("tcp_read() failed, ret = %ld", ret);
 			break;
 		}
 
-		budget++;
-		args->reqs++;
+		budget += ret / payload_len;
+		args->reqs += ret / payload_len;
 	}
 
+	log_info("close port %hu", tcp_local_addr(c).port);
 	tcp_abort(c);
 	tcp_close(c);
 done:

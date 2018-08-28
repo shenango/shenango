@@ -8,7 +8,7 @@ extern "C" {
 #include "thread.h"
 #include "sync.h"
 #include "timer.h"
-#include "udp.h"
+#include "net.h"
 #include "fake_worker.h"
 
 #include <iostream>

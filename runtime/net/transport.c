@@ -11,7 +11,7 @@
 
 #include "defs.h"
 
-#define TRANS_TBL_SIZE	1024
+#define TRANS_TBL_SIZE	16384
 
 /* ephemeral port definitions (IANA suggested range) */
 #define MIN_EPHEMERAL		49152

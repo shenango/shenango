@@ -25,6 +25,14 @@ static void tcp_handle_timeouts(tcpconn_t *c, uint64_t now)
 	bool do_ack = false;
 
 	spin_lock_np(&c->lock);
+	if (c->pcb.state == TCP_STATE_TIME_WAIT &&
+	    now - c->time_wait_ts >= TCP_TIME_WAIT_TIMEOUT) {
+		log_debug("tcp: %p time wait timeout", c);
+		tcp_conn_set_state(c, TCP_STATE_CLOSED);
+		spin_unlock_np(&c->lock);
+		tcp_conn_put(c);
+		return;
+	}
 	if (c->ack_delayed && now - c->ack_ts >= TCP_ACK_TIMEOUT) {
 		log_debug("tcp: %p delayed ack timeout", c);
 		c->ack_delayed = false;
@@ -50,7 +58,7 @@ static void tcp_worker(void *arg)
 			tcp_handle_timeouts(c, now);
 		spin_unlock_np(&tcp_lock);
 
-		timer_sleep(ONE_MS);
+		timer_sleep(10 * ONE_MS);
 	}
 }
 
@@ -192,7 +200,6 @@ int tcp_conn_attach(tcpconn_t *c, struct netaddr laddr, struct netaddr raddr)
 {
 	int ret;
 
-	/* register the connection with the transport layer */
 	if (laddr.ip == 0)
 		 laddr.ip = netcfg.addr;
 	else if (laddr.ip != netcfg.addr)
@@ -538,7 +545,7 @@ static ssize_t tcp_read_wait(tcpconn_t *c, size_t len,
 
 	/* pop off the mbufs that will be read */
 	while (readlen < len) {
-		m = list_pop(&c->rxq, struct mbuf, link);
+		m = list_top(&c->rxq, struct mbuf, link);
 		if (!m)
 			break;
 
@@ -549,6 +556,7 @@ static ssize_t tcp_read_wait(tcpconn_t *c, size_t len,
 			break;
 		}
 
+		list_del_from(&c->rxq, &m->link);
 		list_add_tail(q, &m->link);
 		readlen += mbuf_length(m);
 	}
@@ -846,6 +854,12 @@ void tcp_conn_fail(tcpconn_t *c, int err)
 		c->tx_closed = true;
 		waitq_release(&c->tx_wq);
 	}
+
+	/* try to free up some memory */
+	if (c->tx_pending)
+		mbuf_free(c->tx_pending);
+	mbuf_list_free(&c->txq);
+	mbuf_list_free(&c->rxq_ooo);
 
 	/* state machine is disabled, drop ref */
 	tcp_conn_put(c);
