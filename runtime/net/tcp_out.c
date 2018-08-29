@@ -26,6 +26,7 @@ tcp_push_tcphdr(struct mbuf *m, tcpconn_t *c, uint8_t flags)
 
 	/* write the tcp header */
 	tcphdr = mbuf_push_hdr(m, *tcphdr);
+	mbuf_mark_transport_offset(m);
 	tcphdr->sport = hton16(c->e.laddr.port);
 	tcphdr->dport = hton16(c->e.raddr.port);
 	tcphdr->ack = hton32(ack);
@@ -223,6 +224,10 @@ ssize_t tcp_tx_buf(tcpconn_t *c, const void *buf, size_t len, bool push)
 			c->tx_pending = NULL;
 			seglen = min(end - pos, TCP_MSS - mbuf_length(m) +
 				     sizeof(struct tcp_hdr));
+			if (push && pos + seglen == end) {
+				tcphdr = (struct tcp_hdr *)mbuf_transport_offset(m);
+				tcphdr->flags |= TCP_PUSH;
+			}
 		} else {
 			uint8_t flags = TCP_ACK;
 

@@ -814,7 +814,7 @@ ssize_t tcp_writev(tcpconn_t *c, const struct iovec *iov, int iovcnt)
 		return ret;
 
 	/* actually send the data */
-	for (i = 0; i < iovcnt; i++) {
+	for (i = 0; i < iovcnt; i++, iov++) {
 		if (winlen <= 0)
 			break;
 		ret = tcp_tx_buf(c, iov->iov_base, min(iov->iov_len, winlen),
