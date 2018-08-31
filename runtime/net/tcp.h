@@ -20,6 +20,7 @@
 #define TCP_WIN	((32768 / TCP_MSS) * TCP_MSS)
 #define TCP_ACK_TIMEOUT (1 * ONE_MS)
 #define TCP_TIME_WAIT_TIMEOUT (1 * ONE_SECOND) /* FIXME: should be 8 minutes */
+#define TCP_RETRANSMIT_TIMEOUT (300 * ONE_MS) /* FIXME: should be dynamic */
 
 /* connecion states (RFC 793 Section 3.2) */
 enum {
@@ -138,7 +139,14 @@ extern int tcp_tx_raw_rst_ack(struct netaddr laddr, struct netaddr raddr,
 			      tcp_seq seq, tcp_seq ack);
 extern int tcp_tx_ack(tcpconn_t *c);
 extern int tcp_tx_ctl(tcpconn_t *c, uint8_t flags);
-extern ssize_t tcp_tx_buf(tcpconn_t *c, const void *buf, size_t len, bool push);
+extern ssize_t tcp_tx_send(tcpconn_t *c, const void *buf, size_t len,
+			   bool push);
+extern void tcp_tx_retransmit(tcpconn_t *c);
+
+
+/*
+ * utilities
+ */
 
 /* free all mbufs in a linked list */
 static inline void mbuf_list_free(struct list_head *h)

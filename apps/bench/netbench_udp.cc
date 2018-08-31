@@ -29,7 +29,7 @@ using sec = std::chrono::duration<double, std::micro>;
 // The number of samples to discard from the start and end.
 constexpr uint64_t kDiscardSamples = 1000;
 // The maximum lateness to tolerate before dropping egress samples.
-constexpr uint64_t kMaxCatchUpUS = 10;
+constexpr uint64_t kMaxCatchUpUS = 5;
 
 // the number of worker threads to spawn.
 int threads;
@@ -40,50 +40,106 @@ uint64_t n;
 // the mean service time in us.
 double st;
 
-void ServerWorker(std::unique_ptr<rt::TcpConn> c) {
-  payload p;
+void ServerWorker(rt::UdpConn *c) {
+  union {
+    unsigned char buf[rt::UdpConn::kMaxPayloadSize];
+    payload p;
+  };
   std::unique_ptr<FakeWorker> w(FakeWorkerFactory("stridedmem:3200:64"));
-  if (w == nullptr) panic("couldn't create worker");
+  if (unlikely(w == nullptr)) panic("couldn't create worker");
 
   while (true) {
     // Receive a network response.
-    ssize_t ret = c->ReadFull(&p, sizeof(p));
-    if (ret <= 0 || ret > static_cast<ssize_t>(sizeof(p))) {
-      if (ret == 0 || ret == -ECONNRESET) break;
-      panic("read failed, ret = %ld", ret);
+    ssize_t ret = c->Read(&buf, sizeof(buf));
+    if (ret <= 0 || ret > static_cast<ssize_t>(sizeof(buf))) {
+      if (ret == 0) break;
+      panic("udp read failed, ret = %ld", ret);
+    }
+
+    // Determine if the connection is being killed.
+    if (unlikely(p.tag == kKill)) {
+      c->Shutdown();
+      break;
     }
 
     // Perform fake work if requested.
     if (p.workn != 0) w->Work(p.workn * 82.0);
 
     // Send a network request.
-    ssize_t sret = c->WriteFull(&p, ret);
+    ssize_t sret = c->Write(&buf, ret);
     if (sret != ret) {
-      if (sret == -EPIPE || sret == -ECONNRESET) break;
-      panic("write failed, ret = %ld", sret);
+      if (sret == -EPIPE) break;
+      panic("udp write failed, ret = %ld", sret);
     }
   }
 }
 
 void ServerHandler(void *arg) {
-  std::unique_ptr<rt::TcpQueue> q(rt::TcpQueue::Listen({0, kNetbenchPort},
-				  4096));
-  if (q == nullptr) panic("couldn't listen for connections");
+  std::unique_ptr<rt::UdpConn> c(rt::UdpConn::Listen({0, kNetbenchPort}));
+  if (unlikely(c == nullptr)) panic("couldn't listen for control connections");
 
   while (true) {
-    rt::TcpConn *c = q->Accept();
-    if (c == nullptr) panic("couldn't accept a connection");
-    rt::Thread([=]{ServerWorker(std::unique_ptr<rt::TcpConn>(c));}).Detach();
+    nbench_req req;
+    netaddr raddr;
+    ssize_t ret = c->ReadFrom(&req, sizeof(req), &raddr);
+    if (ret != sizeof(req) || req.magic != kMagic) continue;
+
+    rt::Spawn([=, &c]{
+      log_info("got connection %x:%d, %d ports", raddr.ip,
+               raddr.port, req.nports);
+
+      union {
+        nbench_resp resp;
+        char buf[rt::UdpConn::kMaxPayloadSize];
+      };
+      resp.magic = kMagic;
+      resp.nports = req.nports;
+
+      std::vector<rt::Thread> threads;
+
+      // Create the worker threads.
+      std::vector<std::unique_ptr<rt::UdpConn>> conns;
+      for (int i = 0; i < req.nports; ++i) {
+        std::unique_ptr<rt::UdpConn> cin(rt::UdpConn::Dial({0, 0}, raddr));
+	if (unlikely(cin == nullptr)) panic("couldn't dial data connection");
+	resp.ports[i] = cin->LocalAddr().port;
+        threads.emplace_back(rt::Thread(std::bind(ServerWorker, cin.get())));
+        conns.emplace_back(std::move(cin));
+      }
+
+      // Send the port numbers to the client.
+      ssize_t len = sizeof(nbench_resp) + sizeof(uint16_t) * req.nports;
+      if (len > static_cast<ssize_t>(rt::UdpConn::kMaxPayloadSize))
+        panic("too big");
+      ssize_t ret = c->WriteTo(&resp, len, &raddr);
+      if (ret != len) {
+        log_err("udp write failed, ret = %ld", ret);
+      }
+
+      for (auto& t: threads)
+        t.Join();
+      log_info("done");
+    });
   }
 }
 
-std::vector<double> PoissonWorker(rt::TcpConn *c, double req_rate,
+void KillConn(rt::UdpConn *c)
+{
+  constexpr int kKillRetries = 10;
+  union {
+    unsigned char buf[32];
+    payload p;
+  };
+  p.tag = kKill;
+  for (int i = 0; i < kKillRetries; ++i)
+    udp_send(buf, sizeof(buf), c->LocalAddr(), c->RemoteAddr());
+}
+
+std::vector<double> PoissonWorker(rt::UdpConn *c, double req_rate,
                                   double service_time, rt::WaitGroup *starter)
 {
-  constexpr int kBatchSize = 32;
-
-  // Seed the random generator.
-  std::mt19937 g(microtime());
+  // Seed the random generator with the local port number.
+  std::mt19937 g(c->RemoteAddr().port);
 
   // Create a packet transmit schedule.
   std::vector<double> sched;
@@ -109,13 +165,16 @@ std::vector<double> PoissonWorker(rt::TcpConn *c, double req_rate,
 
   // Start the receiver thread.
   auto th = rt::Thread([&]{
-    payload rp;
+    union {
+      unsigned char rbuf[32] = {};
+      payload rp;
+    };
 
     while (true) {
-     ssize_t ret = c->ReadFull(&rp, sizeof(rp));
-     if (ret != static_cast<ssize_t>(sizeof(rp))) {
-       if (ret == 0 || ret < 0) break;
-       panic("read failed, ret = %ld", ret);
+     ssize_t ret = c->Read(rbuf, sizeof(rbuf));
+     if (ret != static_cast<ssize_t>(sizeof(rbuf))) {
+       if (ret == 0) break;
+       panic("udp read failed, ret = %ld", ret);
      }
 
      barrier();
@@ -126,8 +185,10 @@ std::vector<double> PoissonWorker(rt::TcpConn *c, double req_rate,
   });
 
   // Initialize timing measurement data structures.
-  payload p[kBatchSize];
-  int j = 0;
+  union {
+    unsigned char buf[32] = {};
+    payload p;
+  };
 
   // Synchronized start of load generation.
   starter->Done();
@@ -142,12 +203,7 @@ std::vector<double> PoissonWorker(rt::TcpConn *c, double req_rate,
     uint64_t now = microtime();
     barrier();
     if (now - expstart < sched[i]) {
-      ssize_t ret = c->WriteFull(p, sizeof(payload) * j);
-      if (ret != static_cast<ssize_t>(sizeof(payload) * j))
-        panic("write failed, ret = %ld", ret);
-      j = 0;
-
-      rt::Sleep(sched[i] - (microtime() - expstart));
+      rt::Sleep(sched[i] - (now - expstart));
       now = microtime();
     }
     if (now - expstart - sched[i] > kMaxCatchUpUS)
@@ -157,31 +213,46 @@ std::vector<double> PoissonWorker(rt::TcpConn *c, double req_rate,
     start_us[i] = microtime();
     barrier();
 
-    // Enqueue a network request.
-    p[j].idx = i;
-    p[j].workn = work[i];
-    p[j].tag = 0;
-    j++;
-
-    if (j >= kBatchSize || i == n - 1) {
-      ssize_t ret = c->WriteFull(p, sizeof(payload) * j);
-      if (ret != static_cast<ssize_t>(sizeof(payload) * j))
-        panic("write failed, ret = %ld", ret);
-      j = 0;
-    }
+    // Send a network request.
+    p.idx = i;
+    p.workn = work[i];
+    p.tag = 0;
+    ssize_t ret = udp_send(buf, sizeof(buf), c->LocalAddr(), c->RemoteAddr());
+    if (ret != static_cast<ssize_t>(sizeof(buf)))
+      panic("udp write failed, ret = %ld", ret);
   }
 
-  c->Shutdown(SHUT_RD);
+  c->Shutdown();
   th.Join();
 
   return timings;
 }
 
 std::vector<double> RunExperiment(double req_rate, double *reqs_per_sec) {
-  // Create one TCP connection per thread.
-  std::vector<std::unique_ptr<rt::TcpConn>> conns;
+  std::unique_ptr<rt::UdpConn> c(rt::UdpConn::Dial({0, 0}, raddr));
+  if (c == nullptr) panic("couldn't establish control connection");
+
+  // Send the control message.
+  nbench_req req = {kMagic, threads};
+  ssize_t ret = c->Write(&req, sizeof(req));
+  if (ret != sizeof(req)) panic("couldn't send control message");
+
+  // Receive the control response.
+  union {
+    nbench_resp resp;
+    char buf[rt::UdpConn::kMaxPayloadSize];
+  };
+  ret = c->Read(&resp, rt::UdpConn::kMaxPayloadSize);
+  if (ret < static_cast<ssize_t>(sizeof(nbench_resp)))
+    panic("failed to receive control response");
+  if (resp.magic != kMagic || resp.nports != threads)
+    panic("got back invalid control response");
+
+  // Create one UDP connection per thread.
+  std::vector<std::unique_ptr<rt::UdpConn>> conns;
   for (int i = 0; i < threads; ++i) {
-    std::unique_ptr<rt::TcpConn> outc(rt::TcpConn::Dial({0, 0}, raddr));
+    std::unique_ptr<rt::UdpConn>
+      outc(rt::UdpConn::Dial(c->LocalAddr(), {raddr.ip, resp.ports[i]}));
     if (unlikely(outc == nullptr)) panic("couldn't connect to raddr.");
     conns.emplace_back(std::move(outc));
   }
@@ -218,7 +289,7 @@ std::vector<double> RunExperiment(double req_rate, double *reqs_per_sec) {
 
   // Close the connections.
   for (auto& c: conns)
-    c->Abort();
+    KillConn(c.get());
 
   // Aggregate all the latency timings together.
   uint64_t total = 0;

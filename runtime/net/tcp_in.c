@@ -8,6 +8,7 @@
  */
 
 #include <base/stddef.h>
+#include <base/log.h>
 #include <runtime/smalloc.h>
 #include <net/ip.h>
 #include <net/tcp.h>
@@ -104,6 +105,7 @@ static bool tcp_rx_text(tcpconn_t *c, struct mbuf *m, bool *wake)
 		tcp_rx_append_text(c, m);
 	} else {
 		/* we got an out-of-order segment */
+		log_info_ratelimited("ooo packet");
 		list_for_each(&c->rxq_ooo, pos, link) {
 			if (wraps_lt(m->seg_seq, pos->seg_seq)) {
 				list_add_before(&pos->link, &m->link);
@@ -140,6 +142,9 @@ drain:
 		tcp_rx_append_text(c, pos);
 	}
 
+	if (c->pcb.rcv_wnd == 0)
+		*wake = true;
+
 	return true;
 }
 
@@ -150,7 +155,7 @@ void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 	struct list_head q;
 	const struct ip_hdr *iphdr;
 	const struct tcp_hdr *tcphdr;
-	uint32_t seq, ack, len, snd_nxt;
+	uint32_t seq, ack, len, snd_nxt, hdr_len;
 	uint16_t win;
 	bool do_ack = false, do_drop = false;
 	int ret;
@@ -172,13 +177,17 @@ void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 	seq = ntoh32(tcphdr->seq);
 	ack = ntoh32(tcphdr->ack);
 	win = ntoh16(tcphdr->win);
-	len = ntoh16(iphdr->len) - sizeof(*iphdr) - sizeof(*tcphdr);
+	hdr_len = tcphdr->off * 4;
+	if (unlikely(hdr_len < sizeof(struct tcp_hdr))) {
+		mbuf_free(m);
+		return;
+	}
+	len = ntoh16(iphdr->len) - sizeof(*iphdr) - hdr_len;
 	if (unlikely(len > mbuf_length(m))) {
 		mbuf_free(m);
 		return;
 	}
-	if (len < mbuf_length(m))
-		mbuf_trim(m, mbuf_length(m) - len);
+	mbuf_pull(m, hdr_len - sizeof(struct tcp_hdr)); /* strip off options */
 
 	spin_lock_np(&c->lock);
 
@@ -332,6 +341,7 @@ void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 			assert(do_drop == false);
 			waitq_signal_locked(&c->rx_wq, &c->lock);
 		}
+#if 0
 		/* delayed ack logic; can only delay at most one ack */
 		if (c->ack_delayed) {
 			do_ack = true;
@@ -340,6 +350,7 @@ void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 			c->ack_delayed = true;
 			c->ack_ts = microtime();
 		}
+#endif
 	} else {
 		do_drop = true;
 	}
@@ -401,7 +412,7 @@ tcpconn_t *tcp_rx_listener(struct netaddr laddr, struct mbuf *m)
 		return NULL;
 
 	/* TODO: the spec requires us to enqueue but not post any data */
-	if (ntoh16(iphdr->len) - sizeof(*iphdr) != sizeof(*tcphdr))
+	if (ntoh16(iphdr->len) - sizeof(*iphdr) != tcphdr->off * 4)
 		return NULL;
 
 	/* we have a valid SYN packet, initialize a new connection */

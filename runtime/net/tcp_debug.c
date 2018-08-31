@@ -66,6 +66,7 @@ static void tcp_dump_pkt(tcpconn_t *c, const struct tcp_hdr *tcphdr,
 	char out_ip[IP_ADDR_STR_LEN];
 	char flags[TCP_FLAG_STR_LEN];
 	uint32_t ack, seq;
+	uint16_t in_port, out_port;
 	uint16_t wnd;
 
 	wnd = ntoh16(tcphdr->win);
@@ -75,18 +76,22 @@ static void tcp_dump_pkt(tcpconn_t *c, const struct tcp_hdr *tcphdr,
 		ip_addr_to_str(c->e.raddr.ip, out_ip);
 		ack = ntoh32(tcphdr->ack) - c->pcb.irs;
 		seq = ntoh32(tcphdr->seq) - c->pcb.iss;
+		in_port = c->e.laddr.port;
+		out_port = c->e.raddr.port;
 	} else {
 		ip_addr_to_str(c->e.laddr.ip, out_ip);
 		ip_addr_to_str(c->e.raddr.ip, in_ip);
 		ack = ntoh32(tcphdr->ack) - c->pcb.iss;
 		seq = ntoh32(tcphdr->seq) - c->pcb.irs;
+		out_port = c->e.laddr.port;
+		in_port = c->e.raddr.port;
 	}
 
 	tcp_flags_to_str(tcphdr->flags, flags);
 
 	log_debug("tcp: %p %s:%hu -> %s:%hu "
 		  "FLAGS=%s SEQ=ISS+%u ACK=IRS+%u WND=%u LEN=%u",
-		  c, in_ip, c->e.laddr.port, out_ip, c->e.raddr.port,
+		  c, in_ip, in_port, out_ip, out_port,
 		  flags, seq, ack, wnd, len); 
 
 }

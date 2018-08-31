@@ -19,10 +19,12 @@ static DEFINE_SPINLOCK(tcp_lock);
 /* a list of all TCP connections */
 static LIST_HEAD(tcp_conns);
 
+static void tcp_retransmit(void *arg);
+
 /* check for timeouts in a TCP connection */
 static void tcp_handle_timeouts(tcpconn_t *c, uint64_t now)
 {
-	bool do_ack = false;
+	bool do_ack = false, do_retransmit = false;
 
 	spin_lock_np(&c->lock);
 	if (c->pcb.state == TCP_STATE_TIME_WAIT &&
@@ -38,10 +40,20 @@ static void tcp_handle_timeouts(tcpconn_t *c, uint64_t now)
 		c->ack_delayed = false;
 		do_ack = true;
 	}
+#if 0
+	if (!c->tx_exclusive && !list_empty(&c->txq)) {
+		struct mbuf *m = list_top(&c->txq, struct mbuf, link);
+			log_debug("tcp: %p retransmission timeout", c);
+			do_retransmit = true;
+		}
+	}
+#endif
 	spin_unlock_np(&c->lock);
 
 	if (do_ack)
 		tcp_tx_ack(c);
+	if (do_retransmit)
+		tcp_retransmit(c);
 }
 
 /* a periodic background thread that handles timeout events */
@@ -755,9 +767,11 @@ static void tcp_write_finish(tcpconn_t *c)
 	spin_lock_np(&c->lock);
 	c->tx_exclusive = false;
 	tcp_conn_ack(c, &q);
+#if 0
 	if (c->pcb.rcv_nxt != c->tx_last_ack) /* race condition check */
 		tcp_tx_ack(c);
 	c->ack_delayed = false;
+#endif
 	th = waitq_signal(&c->tx_wq, &c->lock);
 	spin_unlock_np(&c->lock);
 
@@ -785,7 +799,7 @@ ssize_t tcp_write(tcpconn_t *c, const void *buf, size_t len)
 		return ret;
 
 	/* actually send the data */
-	ret = tcp_tx_buf(c, buf, min(len, winlen), len <= winlen);
+	ret = tcp_tx_send(c, buf, min(len, winlen), len <= winlen);
 
 	/* catch up on any pending work */
 	tcp_write_finish(c);
@@ -817,8 +831,8 @@ ssize_t tcp_writev(tcpconn_t *c, const struct iovec *iov, int iovcnt)
 	for (i = 0; i < iovcnt; i++) {
 		if (winlen <= 0)
 			break;
-		ret = tcp_tx_buf(c, iov->iov_base, min(iov->iov_len, winlen),
-				 i == iovcnt - 1 && iov->iov_len <= winlen);
+		ret = tcp_tx_send(c, iov->iov_base, min(iov->iov_len, winlen),
+				  i == iovcnt - 1 && iov->iov_len <= winlen);
 		if (ret <= 0)
 			break;
 		winlen -= ret;
@@ -829,6 +843,22 @@ ssize_t tcp_writev(tcpconn_t *c, const struct iovec *iov, int iovcnt)
 	tcp_write_finish(c);
 
 	return sent > 0 ? sent : ret;
+}
+
+/* resend any pending egress packets that timed out */
+static void tcp_retransmit(void *arg)
+{
+	tcpconn_t *c = (tcpconn_t *)arg;
+
+	spin_lock_np(&c->lock);
+	while (c->tx_exclusive)
+		waitq_wait(&c->tx_wq, &c->lock);
+	c->tx_exclusive = true;
+	spin_unlock_np(&c->lock);
+
+	tcp_tx_retransmit(c);
+
+	tcp_write_finish(c);
 }
 
 /**

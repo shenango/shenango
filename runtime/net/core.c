@@ -210,6 +210,8 @@ static struct mbuf *net_rx_one(struct rx_net_hdr *hdr)
 	len = ntoh16(iphdr->len) - sizeof(*iphdr);
 	if (unlikely(mbuf_length(m) < len))
 		goto drop;
+	if (len < mbuf_length(m))
+		mbuf_trim(m, mbuf_length(m) - len);
 
 	switch(iphdr->proto) {
 	case IPPROTO_ICMP:
