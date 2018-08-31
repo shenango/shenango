@@ -108,7 +108,25 @@ impl Read for UdpConnection {
     }
 }
 
+impl<'a> Read for &'a UdpConnection {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        isize_to_result(unsafe {
+            ffi::udp_read(self.0, buf.as_mut_ptr() as *mut c_void, buf.len())
+        })
+    }
+}
+
 impl Write for UdpConnection {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        isize_to_result(unsafe { ffi::udp_write(self.0, buf.as_ptr() as *const c_void, buf.len()) })
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+impl<'a> Write for &'a UdpConnection {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         isize_to_result(unsafe { ffi::udp_write(self.0, buf.as_ptr() as *const c_void, buf.len()) })
     }

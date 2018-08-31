@@ -11,6 +11,8 @@ extern crate rand;
 extern crate shenango;
 extern crate test;
 
+use std::io;
+use std::io::{Write, ErrorKind};
 use std::collections::BTreeMap;
 use std::net::SocketAddrV4;
 use std::slice;
@@ -28,7 +30,7 @@ mod backend;
 use backend::*;
 
 mod payload;
-use payload::Payload;
+use payload::{Payload, SyntheticProtocol};
 
 #[derive(Default)]
 pub struct Packet {
@@ -40,8 +42,10 @@ pub struct Packet {
 }
 
 mod memcached;
+use memcached::MemcachedProtocol;
 
 mod dns;
+use dns::DnsProtocol;
 
 #[derive(Copy, Clone, Debug)]
 enum Distribution {
@@ -86,6 +90,13 @@ impl Distribution {
 
 arg_enum!{
 #[derive(Copy, Clone)]
+pub enum Transport {
+    Udp,
+    Tcp,
+}}
+
+arg_enum!{
+#[derive(Copy, Clone)]
 enum Protocol {
     Synthetic,
     Memcached,
@@ -93,18 +104,36 @@ enum Protocol {
 }}
 
 impl Protocol {
-    fn create_request(&self, i: usize, p: &mut Packet, buf: &mut Vec<u8>) {
+    fn gen_request(
+        &self,
+        i: usize,
+        p: &Packet,
+        buf: &mut Vec<u8>,
+        tport: Transport
+    ) {
         match *self {
-            Protocol::Memcached => memcached::create_request(i, p.randomness, buf),
-            Protocol::Synthetic => payload::create_request(i, p, buf),
-            Protocol::Dns => dns::create_request(i, p, buf),
+            Protocol::Memcached =>
+                MemcachedProtocol::gen_request(i, p, buf, tport),
+            Protocol::Synthetic =>
+                SyntheticProtocol::gen_request(i, p, buf, tport),
+            Protocol::Dns =>
+                DnsProtocol::gen_request(i, p, buf, tport),
         }
     }
-    fn parse_response(&self, buf: &[u8]) -> Result<usize, ()> {
+
+    fn read_response(
+        &self,
+        sock: &Connection,
+        tport: Transport,
+        scratch: &mut [u8]
+    ) -> io::Result<usize> {
         match *self {
-            Protocol::Memcached => memcached::parse_response(buf),
-            Protocol::Synthetic => payload::parse_response(buf),
-            Protocol::Dns => dns::parse_response(buf),
+           Protocol::Synthetic =>
+                SyntheticProtocol::read_response(sock, tport, scratch),
+            Protocol::Memcached =>
+                MemcachedProtocol::read_response(sock, tport, scratch),
+            Protocol::Dns =>
+                DnsProtocol::read_response(sock, tport, scratch)
         }
     }
 }
@@ -142,8 +171,9 @@ fn duration_to_ns(duration: Duration) -> u64 {
     (duration.as_secs() * 1000_000_000 + duration.subsec_nanos() as u64)
 }
 
-fn run_server(backend: Backend, socket: UdpConnection, nthreads: usize) {
-    let socket = Arc::new(socket);
+fn run_server(backend: Backend, addr: SocketAddrV4, nthreads: usize) {
+    let socket = Arc::new(backend.create_udp_connection(addr, None));
+    println!("Bound to address {}", socket.local_addr());
     let join_handles: Vec<_> = (0..nthreads)
         .map(|_| {
             let socket2 = socket.clone();
@@ -151,8 +181,7 @@ fn run_server(backend: Backend, socket: UdpConnection, nthreads: usize) {
                 let mut buf = vec![0; 4096];
                 loop {
                     let (len, remote_addr) = socket2.recv_from(&mut buf[..]).unwrap();
-
-                    let payload: Payload = payload::deserialize(&buf[..len]).unwrap();
+                    let payload = Payload::deserialize(&mut &buf[..len]).unwrap();
                     work(payload.work_iterations);
                     socket2.send_to(&buf[..len], remote_addr).unwrap();
                 }
@@ -165,11 +194,45 @@ fn run_server(backend: Backend, socket: UdpConnection, nthreads: usize) {
     }
 }
 
+
+
+fn socket_worker(socket: &mut Connection) {
+    #[inline(always)]
+    fn r(socket: &mut Connection) -> io::Result<()> {
+        let payload = Payload::deserialize(socket)?;
+        work(payload.work_iterations);
+        Ok(payload.serialize_into(socket)?)
+    }
+    loop {
+        if let Err(e) = r(socket) {
+            if e.kind() != ErrorKind::UnexpectedEof {
+                println!("Receive thread: {}", e);
+            }
+            break;
+        }
+    }
+}
+
+fn run_tcp_server(backend: Backend, addr: SocketAddrV4) {
+    let tcpq = backend.create_tcp_listener(addr);
+    println!("Bound to address {}", addr);
+    loop {
+        match tcpq.accept() {
+            Ok(mut c) => {
+                backend.spawn_thread(move || socket_worker(&mut c));
+            },
+            Err(e) => {
+                println!("Listener: {}", e);
+            }
+        }
+    }
+}
+
 fn run_spawner_server(addr: SocketAddrV4) {
     extern "C" fn echo(d: *mut shenango::ffi::udp_spawn_data) {
         unsafe {
             let buf = slice::from_raw_parts((*d).buf as *mut u8, (*d).len);
-            let payload: Payload = payload::deserialize(buf).unwrap();
+            let payload = Payload::deserialize(&mut &buf[..]).unwrap();
             work(payload.work_iterations);
             let _ = UdpSpawner::reply(d, buf);
             UdpSpawner::release_data(d);
@@ -185,6 +248,7 @@ fn run_spawner_server(addr: SocketAddrV4) {
 
 fn run_memcached_preload(
     backend: Backend,
+    tport: Transport,
     addr: SocketAddrV4,
     nthreads: usize,
 ) {
@@ -192,7 +256,18 @@ fn run_memcached_preload(
     let join_handles: Vec<JoinHandle<_>> = (0..nthreads)
         .map(|i| {
             backend.spawn_thread(move || {
-                let sock1 = Arc::new(backend.create_udp_connection("0.0.0.0:0".parse().unwrap(), Some(addr)));
+                let sock1 = Arc::new(
+                    match tport {
+                        Transport::Tcp =>
+                            backend.create_tcp_connection(addr),
+                        Transport::Udp =>
+                            backend.create_udp_connection(
+                                "0.0.0.0:0".parse().unwrap(),
+                                Some(addr)
+                            ),
+                    }
+                );
+
                 let socket = sock1.clone();
                 backend.spawn_thread(move || {
                     backend.sleep(Duration::from_secs(10));
@@ -206,29 +281,18 @@ fn run_memcached_preload(
                 let mut vec_r: Vec<u8> = vec![0; 4096];
                 for n in 0..perthread {
                     vec_s.clear();
-                    memcached::set_request((i * perthread + n) as u64, 0, &mut vec_s);
+                    MemcachedProtocol::set_request((i * perthread + n) as u64, 0, &mut vec_s, tport);
 
-                    if let Err(e) = sock1.send(&vec_s[..]) {
+                    if let Err(e) = (&*sock1).write_all(&vec_s[..]) {
                         println!("Preload send ({}/{}): {}", n, perthread, e);
                         break;
                     }
 
-                    match sock1.recv(&mut vec_r[..]) {
-                        Ok(len) => {
-                            if len == 0 {
-                                println!("preload timeout ({}/{})", n, perthread);
-                                break;
-                            }
-                            if memcached::parse_response(&mut vec_r[..len]).is_err() {
-                                println!("preload: parse response error");
-                                break;
-                            }
-                        }
-                        Err(e) => {
-                            println!("preload receive ({}/{}): {}", n, perthread, e);
-                            break;
-                        },
+                    if let Err(e) = MemcachedProtocol::read_response(&sock1, tport, &mut vec_r[..]) {
+                        println!("preload receive ({}/{}): {}", n, perthread, e);
+                        break;
                     }
+
                 }
             })
         })
@@ -247,6 +311,7 @@ fn run_client(
     nthreads: usize,
     output: OutputMode,
     protocol: Protocol,
+    tport: Transport,
     distribution: Distribution,
     barrier_group: &mut Option<lockstep::Group>,
 ) -> bool {
@@ -256,7 +321,7 @@ fn run_client(
 
     let exp = Exp::new(1.0 / ns_per_packet as f64);
     let mut rng = rand::thread_rng();
-    let packet_schedules: Vec<(Vec<Packet>, Vec<Option<Duration>>)> = (0..nthreads)
+    let packet_schedules: Vec<(Vec<Packet>, Vec<Option<Duration>>, Connection)> = (0..nthreads)
         .map(|_| {
             let mut last = 100_000_000;
             let mut packets = Vec::with_capacity(packets_per_thread);
@@ -269,7 +334,16 @@ fn run_client(
                     ..Default::default()
                 });
             }
-            (packets, vec![None; packets_per_thread])
+            let socket = match tport {
+                Transport::Tcp =>
+                    backend.create_tcp_connection(addr),
+                Transport::Udp =>
+                    backend.create_udp_connection(
+                        "0.0.0.0:0".parse().unwrap(),
+                        Some(addr)
+                    ),
+            };
+            (packets, vec![None; packets_per_thread], socket)
         })
         .collect();
 
@@ -281,28 +355,23 @@ fn run_client(
 
     let mut send_threads = Vec::new();
     let mut receive_threads = Vec::new();
-    for (mut packets, mut receive_times) in packet_schedules {
-        let socket =
-            Arc::new(backend.create_udp_connection("0.0.0.0:0".parse().unwrap(), Some(addr)));
+    for (mut packets, mut receive_times, socket) in packet_schedules {
+
+        let socket = Arc::new(socket);
         let socket2 = socket.clone();
 
         receive_threads.push(backend.spawn_thread(move || {
             let mut recv_buf = vec![0; 4096];
             for _ in 0..receive_times.len() {
-                match socket.recv(&mut recv_buf[..]) {
-                    Ok(len) => {
-                        if len == 0 {
-                            break; // SHUTDOWN
-                        }
-                        let idx = protocol.parse_response(&mut recv_buf[..len]);
-                        if idx.is_err() {
-                            println!("Error parsing response");
-                            continue;
-                        }
-                        receive_times[idx.unwrap() as usize] = Some(start.elapsed());
-                    }
+                match protocol.read_response(&socket, tport, &mut recv_buf[..]) {
+                    Ok(idx) => receive_times[idx] = Some(start.elapsed()),
                     Err(e) => {
-                        println!("Receive thread: {}", e);
+                        if let Some(-103) = e.raw_os_error() {
+                            break;
+                        }
+                        if e.kind() != ErrorKind::UnexpectedEof {
+                            println!("Receive thread: {}", e);
+                        }
                         break;
                     }
                 }
@@ -323,7 +392,7 @@ fn run_client(
             let mut payload = Vec::with_capacity(4096);
             for (i, packet) in packets.iter_mut().enumerate() {
                 payload.clear();
-                protocol.create_request(i, packet, &mut payload);
+                protocol.gen_request(i, packet, &mut payload, tport);
 
                 let t = start.elapsed();
                 if t < packet.target_start {
@@ -334,15 +403,15 @@ fn run_client(
                 }
 
                 packet.actual_start = Some(start.elapsed());
-                if let Err(e) = socket2.send(&payload[..]) {
+                if let Err(e) = (&*socket2).write_all(&payload[..]) {
                     match e.raw_os_error() {
                         Some(-105) => {
                             packet.actual_start = None;
                             backend.thread_yield();
                             continue;
                         }
-                        Some(-32) => {}
-                        _ => println!("Send thread: {}", e)
+                        Some(-32) | Some(-103) => {}
+                        _ => println!("Send thread ({}/{}): {}", i, packets.len(), e),
                     }
                     break;
                 }
@@ -619,6 +688,13 @@ fn main() {
                 .default_value("7")
                 .help("Stride used for strided-memtouch fake work"),
         )
+        .arg(
+            Arg::with_name("transport")
+                .long("transport")
+                .takes_value(true)
+                .default_value("udp")
+                .help("udp or tcp"),
+        )
         .get_matches();
 
     let addr: SocketAddrV4 = FromStr::from_str(matches.value_of("ADDR").unwrap()).unwrap();
@@ -629,6 +705,7 @@ fn main() {
     let dowarmup = matches.is_present("warmup");
     let proto = value_t_or_exit!(matches, "protocol", Protocol);
     let output = value_t_or_exit!(matches, "output", OutputMode);
+    let tport = value_t_or_exit!(matches, "transport", Transport);
     let mean = value_t_or_exit!(matches, "mean", f64);
     let distribution = match matches.value_of("distribution").unwrap() {
         "zero" => Distribution::Zero,
@@ -674,16 +751,18 @@ fn main() {
         }
         "memcached-preload" => {
             backend.init_and_run(config, move || {
-                run_memcached_preload(backend, addr, nthreads);
+                run_memcached_preload(backend, tport, addr, nthreads);
                 println!("Warmup done");
             })
-        }
-        "spawner-server" => backend.init_and_run(config, move || run_spawner_server(addr)),
-        "linux-server" | "runtime-server" => backend.init_and_run(config, move || {
-            let socket = backend.create_udp_connection(addr, None);
-            println!("Bound to address {}", socket.local_addr());
-            run_server(backend, socket, nthreads)
-        }),
+        },
+        "spawner-server" => match tport {
+            Transport::Udp => backend.init_and_run(config, move || run_spawner_server(addr)),
+            Transport::Tcp => backend.init_and_run(config, move || run_tcp_server(backend, addr)),
+        },
+        "linux-server" | "runtime-server" => match tport {
+            Transport::Udp => backend.init_and_run(config, move || run_server(backend, addr, nthreads)),
+            Transport::Tcp => backend.init_and_run(config, move || run_tcp_server(backend, addr)),
+        },
         "linux-client" | "runtime-client" => {
             backend.init_and_run(config, move || {
                 println!("Distribution, Target, Actual, Dropped, Never Sent, Median, 90th, 99th, 99.9th, 99.99th, Start");
@@ -697,6 +776,7 @@ fn main() {
                             nthreads,
                             OutputMode::Silent,
                             proto,
+                            tport,
                             distribution,
                             &mut barrier_group,
                         );
@@ -711,6 +791,7 @@ fn main() {
                         nthreads,
                         output,
                         proto,
+                        tport,
                         distribution,
                         &mut barrier_group,
                     );

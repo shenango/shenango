@@ -1,7 +1,11 @@
 
 use std::io;
-use std::io::{Error, ErrorKind};
+use std::io::{Read, Error, ErrorKind};
 use byteorder::{WriteBytesExt, ReadBytesExt, BigEndian};
+
+use Connection;
+use Transport;
+use Packet;
 
 /** Packet code from https://github.com/aisk/rust-memcache **/
 
@@ -51,11 +55,7 @@ struct PacketHeader {
 }
 
 impl PacketHeader {
-    fn write<W: io::Write>(self, writer: &mut W) -> Result<(), io::Error> {
-        writer.write_u32::<BigEndian>(0 as u32)?;
-        writer.write_u8(0)?;
-        writer.write_u8(1)?;
-        writer.write_u16::<BigEndian>(0 as u16)?;
+    fn write<W: io::Write>(self, writer: &mut W) -> io::Result<()> {
         writer.write_u8(self.magic)?;
         writer.write_u8(self.opcode)?;
         writer.write_u16::<BigEndian>(self.key_length)?;
@@ -68,7 +68,7 @@ impl PacketHeader {
         return Ok(());
     }
 
-    fn read<R: io::Read>(reader: &mut R) -> Result<PacketHeader, io::Error> {
+    fn read<R: io::Read>(reader: &mut R) -> io::Result<PacketHeader> {
         let magic = reader.read_u8()?;
         if magic != Magic::Response as u8 {
             return Err(Error::new(ErrorKind::Other,
@@ -95,79 +95,116 @@ static PCT_SET : u64 = 2; // out of 1000
 static VALUE_SIZE  : usize = 2;
 static KEY_SIZE    : usize = 20;
 
-
+#[inline(always)]
 fn write_key(buf: &mut Vec<u8>, key: u64) {
     let mut pushed = 0;
     let mut k = key;
-    while k > 0 {
+    while {
         buf.push(48 + (k % 10) as u8);
         k /= 10;
         pushed += 1;
-    }
+        k == 0
+    } {}
     for _ in pushed..KEY_SIZE {
         buf.push('A' as u8);
     }
 }
 
-pub fn set_request(key: u64, opaque: u32, buf: &mut Vec<u8>) {
+static UDP_HEADER: &'static [u8] = &[0, 0, 0, 0, 0, 1, 0, 0];
 
-    PacketHeader {
-        magic: Magic::Request as u8,
-        opcode: Opcode::Set as u8,
-        key_length: KEY_SIZE as u16,
-        extras_length: 8,
-        total_body_length: (8 + KEY_SIZE + VALUE_SIZE) as u32,
-        opaque: opaque,
-        ..Default::default()
-    }.write(buf).unwrap();
+#[derive(Copy, Clone, Debug)]
+pub struct MemcachedProtocol;
 
-    buf.write_u64::<BigEndian>(0).unwrap();
+impl MemcachedProtocol {
+    pub fn set_request(key: u64, opaque: u32, buf: &mut Vec<u8>, tport: Transport) {
 
-    write_key(buf, key);
+        if let Transport::Udp = tport {
+            buf.extend_from_slice(UDP_HEADER);
+        }
 
-    for i in 0..VALUE_SIZE {
-        buf.push((((key * i as u64) >> (i % 4)) & 0xff) as u8);
-    }
-}
+        PacketHeader {
+            magic: Magic::Request as u8,
+            opcode: Opcode::Set as u8,
+            key_length: KEY_SIZE as u16,
+            extras_length: 8,
+            total_body_length: (8 + KEY_SIZE + VALUE_SIZE) as u32,
+            opaque: opaque,
+            ..Default::default()
+        }.write(buf).unwrap();
 
-#[allow(dead_code)]
-pub fn create_request(i: usize, randomness: u64, buf: &mut Vec<u8>) {
+        buf.write_u64::<BigEndian>(0).unwrap();
 
-    // Use first 32 bits of randomness to determine if this is a SET or GET req
-    let low32 = randomness & 0xffffffff;
-    let key =  (randomness >> 32) % NVALUES;
+        write_key(buf, key);
 
-    if low32 % 1000 < PCT_SET {
-        set_request(key, i as u32, buf);
-        return;
+        for i in 0..VALUE_SIZE {
+            buf.push((((key * i as u64) >> (i % 4)) & 0xff) as u8);
+        }
     }
 
-    PacketHeader {
-        magic: Magic::Request as u8,
-        opcode: Opcode::Get as u8,
-        key_length: KEY_SIZE as u16,
-        total_body_length: KEY_SIZE as u32,
-        opaque: i as u32,
-        ..Default::default()
-    }.write(buf).unwrap();
+    pub fn gen_request(
+        i: usize,
+        p: &Packet,
+        buf: &mut Vec<u8>,
+        tport: Transport
+    ) {
+        // Use first 32 bits of randomness to determine if this is a SET or GET req
+        let low32 = p.randomness & 0xffffffff;
+        let key =  (p.randomness >> 32) % NVALUES;
 
-    write_key(buf, key);
-}
+        if low32 % 1000 < PCT_SET {
+            MemcachedProtocol::set_request(key, i as u32, buf, tport);
+            return;
+        }
 
-pub fn parse_response(buf: &[u8]) -> Result<usize, ()> {
-    if buf.len() < 8 {
-        return Err(());
+        if let Transport::Udp = tport {
+            buf.extend_from_slice(UDP_HEADER);
+        }
+
+        PacketHeader {
+            magic: Magic::Request as u8,
+            opcode: Opcode::Get as u8,
+            key_length: KEY_SIZE as u16,
+            total_body_length: KEY_SIZE as u32,
+            opaque: i as u32,
+            ..Default::default()
+        }.write(buf).unwrap();
+
+        write_key(buf, key);
     }
-    let (_, mut l) = buf.split_at(8);
-    match PacketHeader::read(&mut l) {
-        Ok(hdr) => {
-            if hdr.vbucket_id_or_status != ResponseStatus::NoError as u16 {
-                println!("Not NoError {}", hdr.vbucket_id_or_status);
-                return Err(());
+
+    pub fn read_response(
+        mut sock: &Connection,
+        tport: Transport,
+        scratch: &mut [u8]
+    ) -> io::Result<usize> {
+
+        let hdr = match tport {
+            Transport::Udp => {
+                let len = sock.read(&mut scratch[..32])?;
+                if len == 0 {
+                    return Err(Error::new(ErrorKind::UnexpectedEof, "eof"));
+                }
+                if len < 8 {
+                    return Err(Error::new(ErrorKind::Other,
+                        format!("Short packet received: {} bytes", len),
+                    ));
+                }
+                PacketHeader::read(&mut &scratch[8..])?
+            },
+            Transport::Tcp => {
+                sock.read_exact(&mut scratch[..24])?;
+                let hdr = PacketHeader::read(&mut &scratch[..])?;
+                sock.read_exact(&mut scratch[..hdr.total_body_length as usize])?;
+                hdr
             }
-            return Ok(hdr.opaque as usize);
-        },
-        Err(_) => Err(()),
+        };
+
+        if hdr.vbucket_id_or_status != ResponseStatus::NoError as u16 {
+            return Err(Error::new(ErrorKind::Other,
+                format!("Not NoError {}", hdr.vbucket_id_or_status),
+            ));
+        }
+        Ok(hdr.opaque as usize)
     }
 }
 

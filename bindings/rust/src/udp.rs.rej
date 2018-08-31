@@ -1,0 +1,13 @@
+--- bindings/rust/src/udp.rs
++++ bindings/rust/src/udp.rs
+@@ -74,6 +74,10 @@ impl UdpConnection {
+         })
+     }
+ 
++    pub fn try_clone(&self) -> io::Result<UdpConnection> {
++        Ok(UdpConnection(self.0))
++    }
++
+     /// Same as read, but doesn't take a &mut self.
+     pub fn recv(&self, buf: &mut [u8]) -> io::Result<usize> {
+         isize_to_result(unsafe {

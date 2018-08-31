@@ -1,6 +1,7 @@
 use Packet;
 
 use std::io;
+use std::io::Read;
 use byteorder::{WriteBytesExt, ReadBytesExt, BigEndian};
 
 pub struct Payload {
@@ -8,34 +9,48 @@ pub struct Payload {
     pub index: u64,
 }
 
-pub fn parse_response(buf: &[u8]) -> Result<usize, ()> {
-    match deserialize(buf) {
-        Ok(payload) => Ok(payload.index as usize),
-        Err(_) => Err(()),
-    }
-}
+use Connection;
+use Transport;
 
-pub fn create_request(i: usize, p: &mut Packet, buf: &mut Vec<u8>) {
-    serialize(
+#[derive(Clone, Copy)]
+pub struct SyntheticProtocol;
+
+impl SyntheticProtocol {
+    pub fn gen_request(
+        i: usize,
+        p: &Packet,
+        buf: &mut Vec<u8>,
+        _tport: Transport
+    ) {
         Payload {
             work_iterations: p.work_iterations,
             index: i as u64,
-        },
-        buf
-    ).unwrap();
+        }.serialize_into(buf).unwrap();
+    }
+
+    pub fn read_response(
+        mut sock: &Connection,
+        _tport: Transport,
+        scratch: &mut [u8]
+    ) -> io::Result<usize> {
+        sock.read_exact(&mut scratch[..16])?;
+        let payload = Payload::deserialize(&mut &scratch[..])?;
+        Ok(payload.index as usize)
+    }
 }
 
-pub fn serialize(p: Payload, buf: &mut Vec<u8>) -> Result<(), io::Error>{
-    buf.write_u64::<BigEndian>(p.work_iterations)?;
-    buf.write_u64::<BigEndian>(p.index)?;
-    return Ok(());
-}
+impl Payload {
+    pub fn serialize_into<W: io::Write>(&self, writer: &mut W) -> io::Result<()> {
+        writer.write_u64::<BigEndian>(self.work_iterations)?;
+        writer.write_u64::<BigEndian>(self.index)?;
+        Ok(())
+    }
 
-pub fn deserialize(buf: &[u8]) -> Result<Payload, io::Error> {
-    let mut buf = buf;
-    let p = Payload {
-        work_iterations: buf.read_u64::<BigEndian>()?,
-        index: buf.read_u64::<BigEndian>()?,
-    };
-    return Ok(p);
+    pub fn deserialize<R: io::Read>(reader: &mut R) -> io::Result<Payload> {
+        let p = Payload {
+            work_iterations: reader.read_u64::<BigEndian>()?,
+            index: reader.read_u64::<BigEndian>()?,
+        };
+        return Ok(p);
+    }
 }

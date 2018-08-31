@@ -76,44 +76,17 @@ impl TcpConnection {
         unsafe { ffi::tcp_shutdown(self.0, how); return }
     }
 
-    pub fn read_immut(&self, buf: &mut [u8]) -> io::Result<usize> {
+    pub fn abort(&self) {
+        unsafe { ffi::tcp_abort(self.0); return }
+    }
+}
+
+impl<'a> Read for &'a TcpConnection {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         isize_to_result(unsafe {
             ffi::tcp_read(self.0, buf.as_mut_ptr() as *mut c_void, buf.len())
         })
     }
-
-    pub fn read_exact_immut(&self, buf: &mut [u8]) -> io::Result<()> {
-        let mut n = 0;
-        while n < buf.len() {
-            match self.read_immut(&mut buf[n..]) {
-                Ok(len) => {
-                    n += len;
-                    continue;
-                }
-                Err(e) => return Err(e)
-            }
-        }
-        Ok(())
-    }
-
-    pub fn write_immut(&self, buf: &[u8]) -> io::Result<usize> {
-        isize_to_result(unsafe { ffi::tcp_write(self.0, buf.as_ptr() as *const c_void, buf.len()) })
-    }
-
-    pub fn write_all_immut(&self, buf: &[u8]) -> io::Result<()> {
-        let mut n = 0;
-        while n < buf.len() {
-            match self.write_immut(&buf[n..]) {
-                Ok(len) => {
-                    n += len;
-                    continue;
-                }
-                Err(e) => return Err(e)
-            }
-        }
-        Ok(())
-    }
-
 }
 
 impl Read for TcpConnection {
@@ -124,13 +97,19 @@ impl Read for TcpConnection {
     }
 }
 
+impl<'a> Write for &'a TcpConnection {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        isize_to_result(unsafe { ffi::tcp_write(self.0, buf.as_ptr() as *const c_void, buf.len()) })
+    }
+    fn flush(&mut self) -> io::Result<()> { Ok(()) }
+}
+
+
 impl Write for TcpConnection {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         isize_to_result(unsafe { ffi::tcp_write(self.0, buf.as_ptr() as *const c_void, buf.len()) })
     }
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
+    fn flush(&mut self) -> io::Result<()> { Ok(()) }
 }
 
 impl Drop for TcpConnection {
