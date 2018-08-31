@@ -11,6 +11,7 @@
 #include <runtime/preempt.h>
 #include <runtime/smalloc.h>
 #include <runtime/sync.h>
+#include <runtime/tcp.h>
 #include <runtime/thread.h>
 #include <runtime/timer.h>
 #include <runtime/udp.h>

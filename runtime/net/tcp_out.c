@@ -28,6 +28,7 @@ tcp_push_tcphdr(struct mbuf *m, tcpconn_t *c, uint8_t flags, uint16_t l4len)
 
 	/* write the tcp header */
 	tcphdr = mbuf_push_hdr(m, *tcphdr);
+	mbuf_mark_transport_offset(m);
 	tcphdr->sport = hton16(c->e.laddr.port);
 	tcphdr->dport = hton16(c->e.raddr.port);
 	tcphdr->ack = hton32(ack);

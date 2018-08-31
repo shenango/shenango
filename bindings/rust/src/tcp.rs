@@ -1,0 +1,144 @@
+use std::io::{self, Read, Write};
+use std::ptr;
+use std::net::SocketAddrV4;
+
+use byteorder::{ByteOrder, NetworkEndian};
+
+use super::*;
+
+fn isize_to_result(i: isize) -> io::Result<usize> {
+    if i >= 0 {
+        Ok(i as usize)
+    } else {
+        Err(io::Error::from_raw_os_error(i as i32))
+    }
+}
+
+pub struct TcpConnection(*mut ffi::tcpconn_t);
+pub struct TcpQueue(*mut ffi::tcpqueue_t);
+
+impl TcpQueue {
+    pub fn listen(local_addr: SocketAddrV4, backlog: i32) -> Self {
+        let laddr = ffi::netaddr {
+            ip: NetworkEndian::read_u32(&local_addr.ip().octets()),
+            port: local_addr.port(),
+        };
+        let mut queue = ptr::null_mut();
+        unsafe { ffi::tcp_listen(laddr, backlog, &mut queue as *mut _) };
+        TcpQueue(queue)
+    }
+    pub fn accept(&self) -> TcpConnection {
+        let mut conn = ptr::null_mut();
+        unsafe { ffi::tcp_accept(self.0, &mut conn as *mut _) };
+        TcpConnection(conn)
+    }
+    pub fn shutdown(&self) {
+        unsafe { ffi::tcp_qshutdown(self.0) }
+    }
+}
+
+impl Drop for TcpQueue {
+    fn drop(&mut self) {
+        unsafe { ffi::tcp_qclose(self.0) }
+    }
+}
+
+unsafe impl Send for TcpQueue {}
+unsafe impl Sync for TcpQueue {}
+
+impl TcpConnection {
+    pub fn dial(local_addr: SocketAddrV4, remote_addr: SocketAddrV4) -> Self {
+        let laddr = ffi::netaddr {
+            ip: NetworkEndian::read_u32(&local_addr.ip().octets()),
+            port: local_addr.port(),
+        };
+        let raddr = ffi::netaddr {
+            ip: NetworkEndian::read_u32(&remote_addr.ip().octets()),
+            port: remote_addr.port(),
+        };
+
+        let mut conn = ptr::null_mut();
+        unsafe { ffi::tcp_dial(laddr, raddr, &mut conn as *mut _) };
+        TcpConnection(conn)
+    }
+
+    pub fn local_addr(&self) -> SocketAddrV4 {
+        let local_addr = unsafe { ffi::tcp_local_addr(self.0) };
+        SocketAddrV4::new(local_addr.ip.into(), local_addr.port)
+    }
+
+    pub fn remote_addr(&self) -> SocketAddrV4 {
+        let remote_addr = unsafe { ffi::tcp_remote_addr(self.0) };
+        SocketAddrV4::new(remote_addr.ip.into(), remote_addr.port)
+    }
+
+    pub fn shutdown(&self, how: c_int) {
+        unsafe { ffi::tcp_shutdown(self.0, how); return }
+    }
+
+    pub fn read_immut(&self, buf: &mut [u8]) -> io::Result<usize> {
+        isize_to_result(unsafe {
+            ffi::tcp_read(self.0, buf.as_mut_ptr() as *mut c_void, buf.len())
+        })
+    }
+
+    pub fn read_exact_immut(&self, buf: &mut [u8]) -> io::Result<()> {
+        let mut n = 0;
+        while n < buf.len() {
+            match self.read_immut(&mut buf[n..]) {
+                Ok(len) => {
+                    n += len;
+                    continue;
+                }
+                Err(e) => return Err(e)
+            }
+        }
+        Ok(())
+    }
+
+    pub fn write_immut(&self, buf: &[u8]) -> io::Result<usize> {
+        isize_to_result(unsafe { ffi::tcp_write(self.0, buf.as_ptr() as *const c_void, buf.len()) })
+    }
+
+    pub fn write_all_immut(&self, buf: &[u8]) -> io::Result<()> {
+        let mut n = 0;
+        while n < buf.len() {
+            match self.write_immut(&buf[n..]) {
+                Ok(len) => {
+                    n += len;
+                    continue;
+                }
+                Err(e) => return Err(e)
+            }
+        }
+        Ok(())
+    }
+
+}
+
+impl Read for TcpConnection {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        isize_to_result(unsafe {
+            ffi::tcp_read(self.0, buf.as_mut_ptr() as *mut c_void, buf.len())
+        })
+    }
+}
+
+impl Write for TcpConnection {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        isize_to_result(unsafe { ffi::tcp_write(self.0, buf.as_ptr() as *const c_void, buf.len()) })
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+impl Drop for TcpConnection {
+    fn drop(&mut self) {
+        unsafe { ffi::tcp_close(self.0) }
+    }
+}
+
+unsafe impl Send for TcpConnection {}
+unsafe impl Sync for TcpConnection {}
+
