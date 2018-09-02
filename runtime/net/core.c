@@ -9,7 +9,6 @@
 #include <base/slab.h>
 #include <base/hash.h>
 #include <base/thread.h>
-#include <runtime/smalloc.h>
 #include <asm/chksum.h>
 #include <runtime/net.h>
 

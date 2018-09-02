@@ -88,22 +88,6 @@ static __noreturn void jmp_runtime_nosave(runtime_fn_t fn, unsigned long arg)
 	__jmp_runtime_nosave(fn, runtime_stack, arg);
 }
 
-static bool rxq_spin_us(struct kthread *k, uint64_t us)
-{
-	uint64_t cycles = us * cycles_per_us;
-	unsigned long start = rdtsc();
-
-	while (rdtsc() - start < cycles) {
-		if (unlikely(preempt_needed()))
-			break;
-		if (!lrpc_empty(&k->rxq))
-			return true;
-		cpu_relax();
-	}
-
-	return false;
-}
-
 static void drain_overflow(struct kthread *l)
 {
 	thread_t *th;
@@ -275,29 +259,21 @@ again:
 
 	/* finally try to steal from every kthread */
 	for (i = 0; i < last_nrks; i++) {
-		if (unlikely(preempt_needed()))
-			break;
 		if (ks[i] == l)
 			continue;
 		if (steal_work(l, ks[i]))
 			goto done;
 	}
 
-	/*
-	 * Last try, spin poll on the RXQ for a little while.
-	 * If we don't, completions may arrive just after parking.
-	 */
-	if (rxq_spin_us(l, RUNTIME_PARK_POLL_US)) {
-		th = softirq_run_thread(l, RUNTIME_SOFTIRQ_BUDGET);
-		if (th) {
-			STAT(SOFTIRQS_LOCAL)++;
-			goto done;
-		}
-	}
+	/* keep trying to find work until the polling timeout expires */
+	if (rdtsc() - start_tsc <
+	    RUNTIME_SCHED_POLL_US * cycles_per_us * last_nrks &&
+	    !preempt_needed())
+		goto again;
 
 	/* did not find anything to run, park this kthread */
 	STAT(SCHED_CYCLES) += rdtsc() - start_tsc;
-	/* we may have got a preempt signal while voluntarily yielding */
+	/* we may have got a preempt signal before voluntarily yielding */
 	clear_preempt_needed();
 	kthread_park(true);
 	start_tsc = rdtsc();
