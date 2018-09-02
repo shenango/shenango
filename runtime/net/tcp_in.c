@@ -8,7 +8,6 @@
  */
 
 #include <base/stddef.h>
-#include <base/log.h>
 #include <runtime/smalloc.h>
 #include <net/ip.h>
 #include <net/tcp.h>
@@ -42,7 +41,7 @@ static bool is_snd_full(tcpconn_t *c)
 {
 	assert_spin_lock_held(&c->lock);
 
-	return c->pcb.snd_una + c->pcb.snd_wnd <= c->pcb.snd_nxt;
+	return wraps_lte(c->pcb.snd_una + c->pcb.snd_wnd, c->pcb.snd_nxt);
 }
 
 /* see reset generation (RFC 793) */
@@ -105,7 +104,6 @@ static bool tcp_rx_text(tcpconn_t *c, struct mbuf *m, bool *wake)
 		tcp_rx_append_text(c, m);
 	} else {
 		/* we got an out-of-order segment */
-		log_info_ratelimited("ooo packet");
 		list_for_each(&c->rxq_ooo, pos, link) {
 			if (wraps_lt(m->seg_seq, pos->seg_seq)) {
 				list_add_before(&pos->link, &m->link);
@@ -153,11 +151,12 @@ void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 {
 	tcpconn_t *c = container_of(e, tcpconn_t, e);
 	struct list_head q;
+	thread_t *rx_th = NULL, *tx_th = NULL;
 	const struct ip_hdr *iphdr;
 	const struct tcp_hdr *tcphdr;
 	uint32_t seq, ack, len, snd_nxt, hdr_len;
 	uint16_t win;
-	bool do_ack = false, do_drop = false;
+	bool do_ack = false, do_drop = true;
 	int ret;
 
 	assert_preempt_disabled();
@@ -191,17 +190,14 @@ void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 
 	spin_lock_np(&c->lock);
 
-	if (c->pcb.state == TCP_STATE_CLOSED) {
-		do_drop = true;
+	if (c->pcb.state == TCP_STATE_CLOSED)
 		goto done;
-	}
 
 	if (c->pcb.state == TCP_STATE_SYN_SENT) {
 		if ((tcphdr->flags & TCP_ACK) > 0) {
 			if (wraps_lte(ack, c->pcb.iss) ||
 			    wraps_gt(ack, snd_nxt)) {
 				send_rst(c, false, seq, ack, len);
-				do_drop = true;
 				goto done;
 			}
 			if ((tcphdr->flags & TCP_RST) > 0) {
@@ -209,16 +205,13 @@ void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 				if (wraps_lte(c->pcb.snd_una, ack) &&
 				    wraps_lte(ack, snd_nxt)) {
 					tcp_conn_fail(c, ECONNRESET);
-					do_drop = true;
 					goto done;
 				}
 			}
 		} else if ((tcphdr->flags & TCP_RST) > 0) {
-			do_drop = true;
 			goto done;
 		}
 		if ((tcphdr->flags & TCP_SYN) > 0) {
-			do_drop = true;
 			c->pcb.rcv_nxt = seq + 1;
 			c->pcb.irs = seq;
 			if ((tcphdr->flags & TCP_ACK) > 0) {
@@ -252,14 +245,12 @@ void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 	/* step 1 - acceptability testing */
 	if (!is_acceptable(c, len, seq)) {
 		do_ack = (tcphdr->flags & TCP_RST) == 0;
-		do_drop = true;
 		goto done;
 	}
 
 	/* step 2 - RST */
 	if ((tcphdr->flags & TCP_RST) > 0) {
 		tcp_conn_fail(c, ECONNRESET);
-		do_drop = true;
 		goto done;
 	}
 
@@ -269,13 +260,11 @@ void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 	if ((tcphdr->flags & TCP_SYN) > 0) {
 		send_rst(c, (tcphdr->flags & TCP_ACK) > 0, seq, ack, len);
 		tcp_conn_fail(c, ECONNRESET);
-		do_drop = true;
 		goto done;
 	}
 
 	/* step 5 - ACK */
 	if ((tcphdr->flags & TCP_ACK) == 0) {
-		do_drop = true;
 		goto done;
 	}
 	if (c->pcb.state == TCP_STATE_SYN_RECEIVED) {
@@ -304,10 +293,9 @@ void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 			c->pcb.snd_wl2 = ack;
 		}
 		if (snd_was_full && !is_snd_full(c))
-			waitq_signal_locked(&c->tx_wq, &c->lock);
+			tx_th = waitq_signal(&c->tx_wq, &c->lock);
 	} else if (wraps_gt(ack, snd_nxt)) {
 		do_ack = true;
-		do_drop = true;
 		goto done;
 	}
 	if (c->pcb.state == TCP_STATE_FIN_WAIT1 &&
@@ -320,7 +308,6 @@ void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 		   c->pcb.snd_una == snd_nxt) {
 		tcp_conn_set_state(c, TCP_STATE_CLOSED);
 		tcp_conn_put(c); /* safe because RCU + preempt is disabled */
-		do_drop = true;
 		goto done;
 	}
 
@@ -339,7 +326,7 @@ void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 		if (wake) {
 			assert(!list_empty(&c->rxq));
 			assert(do_drop == false);
-			waitq_signal_locked(&c->rx_wq, &c->lock);
+			rx_th = waitq_signal(&c->rx_wq, &c->lock);
 		}
 #if 0
 		/* delayed ack logic; can only delay at most one ack */
@@ -351,8 +338,6 @@ void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 			c->ack_ts = microtime();
 		}
 #endif
-	} else {
-		do_drop = true;
 	}
 
 	/* step 8 - FIN */
@@ -369,12 +354,17 @@ void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 		c->time_wait_ts = microtime();
 		tcp_conn_set_state(c, TCP_STATE_TIME_WAIT);
 	}
+	do_ack = true;
 
 done:
 	tcp_debug_ingress_pkt(c, m);
 	spin_unlock_np(&c->lock);
 
 	/* deferred work (delayed until after the lock was dropped) */
+	if (rx_th)
+		waitq_signal_finish(rx_th);
+	if (tx_th)
+		waitq_signal_finish(tx_th);
 	mbuf_list_free(&q);
 	if (do_ack)
 		tcp_tx_ack(c);

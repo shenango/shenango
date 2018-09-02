@@ -736,7 +736,7 @@ static int tcp_write_wait(tcpconn_t *c, size_t *winlen)
 	/* block until there is an actionable event */
 	while (!c->tx_closed &&
 	       (c->pcb.state < TCP_STATE_ESTABLISHED || c->tx_exclusive ||
-		(c->pcb.snd_una + c->pcb.snd_wnd <= c->pcb.snd_nxt &&
+		(wraps_lte(c->pcb.snd_una + c->pcb.snd_wnd, c->pcb.snd_nxt) &&
 		 !list_empty(&c->txq)))) {
 		waitq_wait(&c->tx_wq, &c->lock);
 	}
