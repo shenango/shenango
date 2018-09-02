@@ -9,6 +9,7 @@
 #include <base/slab.h>
 #include <base/hash.h>
 #include <base/thread.h>
+#include <runtime/smalloc.h>
 #include <asm/chksum.h>
 #include <runtime/net.h>
 
@@ -24,6 +25,11 @@ struct net_cfg netcfg __aligned(CACHE_LINE_SIZE);
 static struct slab net_mbuf_slab;
 static struct tcache *net_mbuf_tcache;
 static DEFINE_PERTHREAD(struct tcache_perthread, net_mbuf_pt);
+
+/* RX buffer allocation */
+static struct slab net_rx_buf_slab;
+static struct tcache *net_rx_buf_tcache;
+static DEFINE_PERTHREAD(struct tcache_perthread, net_rx_buf_pt);
 
 /* TX buffer allocation */
 static struct mempool net_tx_buf_mp;
@@ -74,33 +80,50 @@ void __noinline __net_recurrent(void)
 
 static void net_rx_release_mbuf(struct mbuf *m)
 {
-	struct rx_net_hdr *hdr = container_of((void *)m->head,
-					      struct rx_net_hdr, payload);
-	struct kthread *k = getk();
-
-	if (!lrpc_send(&k->txcmdq, TXCMD_NET_COMPLETE,
-		       hdr->completion_data)) {
-		mbufq_push_tail(&k->txcmdq_overflow, m);
-		putk();
-		return;
-	}
+	preempt_disable();
+	tcache_free(&perthread_get(net_rx_buf_pt), m->head);
 	tcache_free(&perthread_get(net_mbuf_pt), m);
+	preempt_enable();
+}
+
+static void net_rx_send_completion(unsigned long completion_data)
+{
+	struct kthread *k;
+
+	k = getk();
+	if (unlikely(!lrpc_send(&k->txcmdq, TXCMD_NET_COMPLETE,
+				completion_data))) {
+		WARN();
+	}
 	putk();
 }
 
 static struct mbuf *net_rx_alloc_mbuf(struct rx_net_hdr *hdr)
 {
 	struct mbuf *m;
+	void *buf;
 
 	preempt_disable();
+	/* allocate the mbuf struct */
 	m = tcache_alloc(&perthread_get(net_mbuf_pt));
 	if (unlikely(!m)) {
 		preempt_enable();
-		return NULL;
+		goto fail_mbuf;
+	}
+
+	/* allocate a buffer to store the payload */
+	buf = tcache_alloc(&perthread_get(net_rx_buf_pt));
+	if (unlikely(!buf)) {
+		preempt_enable();
+		goto fail_buf;
 	}
 	preempt_enable();
 
-	mbuf_init(m, (unsigned char *)hdr->payload, hdr->len, 0);
+	/* copy the payload and release the buffer back to the iokernel */
+	memcpy(buf, hdr->payload, hdr->len);
+	net_rx_send_completion(hdr->completion_data);
+
+	mbuf_init(m, buf, hdr->len, 0);
 	m->len = hdr->len;
 	m->csum_type = hdr->csum_type;
 	m->csum = hdr->csum;
@@ -108,6 +131,14 @@ static struct mbuf *net_rx_alloc_mbuf(struct rx_net_hdr *hdr)
 	m->release_data = 0;
 	m->release = net_rx_release_mbuf;
 	return m;
+
+fail_buf:
+	preempt_disable();
+	tcache_free(&perthread_get(net_mbuf_pt), m);
+	preempt_enable();
+fail_mbuf:
+	net_rx_send_completion(hdr->completion_data);
+	return NULL;
 }
 
 static inline bool ip_hdr_supported(const struct ip_hdr *iphdr)
@@ -531,6 +562,7 @@ int str_to_netaddr(const char *str, struct netaddr *addr)
 int net_init_thread(void)
 {
 	tcache_init_perthread(net_mbuf_tcache, &perthread_get(net_mbuf_pt));
+	tcache_init_perthread(net_rx_buf_tcache, &perthread_get(net_rx_buf_pt));
 	tcache_init_perthread(net_tx_buf_tcache, &perthread_get(net_tx_buf_pt));
 	return 0;
 }
@@ -566,6 +598,16 @@ int net_init(void)
 	net_mbuf_tcache = slab_create_tcache(&net_mbuf_slab,
 					     TCACHE_DEFAULT_MAG_SIZE);
 	if (!net_mbuf_tcache)
+		return -ENOMEM;
+
+	ret = slab_create(&net_rx_buf_slab, "runtime_rx_bufs",
+			  2048, 0);
+	if (ret)
+		return ret;
+
+	net_rx_buf_tcache = slab_create_tcache(&net_rx_buf_slab,
+					       TCACHE_DEFAULT_MAG_SIZE);
+	if (!net_rx_buf_tcache)
 		return -ENOMEM;
 
 	ret = mempool_create(&net_tx_buf_mp, iok.tx_buf, iok.tx_len,
