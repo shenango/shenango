@@ -237,6 +237,10 @@ static void tcp_conn_release(struct rcu_head *h)
 {
 	tcpconn_t *c = container_of(h, tcpconn_t, e.rcu);
 
+	spin_lock_np(&tcp_lock);
+	list_del_from(&tcp_conns, &c->global_link);
+	spin_unlock_np(&tcp_lock);
+
 	if (c->tx_pending)
 		mbuf_free(c->tx_pending);
 	mbuf_list_free(&c->rxq_ooo);
@@ -251,10 +255,6 @@ static void tcp_conn_release(struct rcu_head *h)
  */
 void tcp_conn_destroy(tcpconn_t *c)
 {
-	spin_lock_np(&tcp_lock);
-	list_del_from(&tcp_conns, &c->global_link);
-	spin_unlock_np(&tcp_lock);
-
 	trans_table_remove(&c->e);
 	rcu_free(&c->e.rcu, tcp_conn_release);
 }
