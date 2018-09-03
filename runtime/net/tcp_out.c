@@ -5,7 +5,6 @@
 #include <string.h>
 
 #include <base/stddef.h>
-#include <base/log.h>
 #include <net/ip.h>
 #include <net/tcp.h>
 #include <net/chksum.h>
@@ -173,6 +172,7 @@ int tcp_tx_ctl(tcpconn_t *c, uint8_t flags)
 	m->txflags = OLFLAG_TCP_CHKSUM;
 	m->seg_seq = c->pcb.snd_nxt;
 	m->seg_end = c->pcb.snd_nxt + 1;
+	m->flags = flags;
 	tcp_push_tcphdr(m, c, flags, 0);
 	store_release(&c->pcb.snd_nxt, c->pcb.snd_nxt + 1);
 	list_add_tail(&c->txq, &m->link);
@@ -212,9 +212,8 @@ ssize_t tcp_tx_send(tcpconn_t *c, const void *buf, size_t len, bool push)
 	const char *end = pos + len;
 	ssize_t ret = 0;
 	size_t seglen;
-	uint8_t flags;
 
-	assert(c->pcb.state == TCP_STATE_ESTABLISHED);
+	assert(c->pcb.state >= TCP_STATE_ESTABLISHED);
 	assert((c->tx_exclusive == true) || spin_lock_held(&c->lock));
 
 	pos = buf;
@@ -237,7 +236,7 @@ ssize_t tcp_tx_send(tcpconn_t *c, const void *buf, size_t len, bool push)
 			seglen = min(end - pos, TCP_MSS);
 			m->seg_seq = c->pcb.snd_nxt;
 			m->seg_end = c->pcb.snd_nxt + seglen;
-			m->push = false;
+			m->flags = TCP_ACK;
 			atomic_write(&m->ref, 2);
 			m->release = tcp_tx_release_mbuf;
 		}
@@ -254,12 +253,9 @@ ssize_t tcp_tx_send(tcpconn_t *c, const void *buf, size_t len, bool push)
 		}
 
 		/* initialize TCP header */
-		flags = TCP_ACK;
-		if (push && pos == end) {
-			flags |= TCP_PUSH;
-			m->push = true;
-		}
-		tcp_push_tcphdr(m, c, flags, m->seg_end - m->seg_seq);
+		if (push && pos == end)
+			m->flags |= TCP_PUSH;
+		tcp_push_tcphdr(m, c, m->flags, m->seg_end - m->seg_seq);
 
 		/* transmit the packet */
 		list_add_tail(&c->txq, &m->link);
@@ -289,10 +285,10 @@ void tcp_tx_retransmit(tcpconn_t *c)
 {
 	struct mbuf *m;
 	uint64_t now = microtime();
-	uint8_t flags;
+	uint16_t l4len;
 	int ret;
 
-	assert((c->tx_exclusive == true) || spin_lock_held(&c->lock));
+	assert_spin_lock_held(&c->lock);
 
 	list_for_each(&c->txq, m, link) {
 		/* check if still transmitting (probably a dishonest ACK) */
@@ -315,8 +311,10 @@ void tcp_tx_retransmit(tcpconn_t *c)
 		}
 
 		/* push the TCP header back on (now with fresher ack) */
-		flags = m->push ? TCP_ACK | TCP_PUSH : TCP_ACK;
-		tcp_push_tcphdr(m, c, flags, m->seg_end - m->seg_seq);
+		l4len = m->seg_end - m->seg_seq;
+		if (m->flags & (TCP_SYN | TCP_FIN))
+			l4len--;
+		tcp_push_tcphdr(m, c, m->flags, l4len);
 
 		/* transmit the packet */
 		tcp_debug_egress_pkt(c, m);

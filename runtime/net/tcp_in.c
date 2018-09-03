@@ -99,7 +99,7 @@ static bool tcp_rx_text(tcpconn_t *c, struct mbuf *m, bool *wake)
 
 	if (wraps_lte(m->seg_seq, c->pcb.rcv_nxt)) {
 		/* we got the next in-order segment */
-		if (m->push)
+		if ((m->flags & (TCP_PUSH | TCP_FIN)) > 0)
 			*wake = true;
 		tcp_rx_append_text(c, m);
 	} else {
@@ -135,7 +135,7 @@ drain:
 
 		/* we got the next in-order segment */
 		list_del(&pos->link);
-		if (pos->push)
+		if ((m->flags & (TCP_PUSH | TCP_FIN)) > 0)
 			*wake = true;
 		tcp_rx_append_text(c, pos);
 	}
@@ -186,6 +186,8 @@ void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 		mbuf_free(m);
 		return;
 	}
+	if (unlikely((tcphdr->flags & TCP_FIN) > 0))
+		len++;
 	mbuf_pull(m, hdr_len - sizeof(struct tcp_hdr)); /* strip off options */
 
 	spin_lock_np(&c->lock);
@@ -303,6 +305,7 @@ void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 		tcp_conn_set_state(c, TCP_STATE_FIN_WAIT2);
 	} else if (c->pcb.state == TCP_STATE_CLOSING &&
 		   c->pcb.snd_una == snd_nxt) {
+		c->time_wait_ts = microtime();
 		tcp_conn_set_state(c, TCP_STATE_TIME_WAIT);
 	} else if (c->pcb.state == TCP_STATE_LAST_ACK &&
 		   c->pcb.snd_una == snd_nxt) {
@@ -321,29 +324,22 @@ void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 		bool wake = false;
 		m->seg_seq = seq;
 		m->seg_end = seq + len;
-		m->push = (tcphdr->flags & TCP_PUSH) > 0;
+		m->flags = tcphdr->flags;
 		do_drop = !tcp_rx_text(c, m, &wake);
 		if (wake) {
 			assert(!list_empty(&c->rxq));
 			assert(do_drop == false);
 			rx_th = waitq_signal(&c->rx_wq, &c->lock);
 		}
-#if 0
-		/* delayed ack logic; can only delay at most one ack */
-		if (c->ack_delayed) {
-			do_ack = true;
-			c->ack_delayed = false;
-		} else {
+		if (!c->ack_delayed) {
 			c->ack_delayed = true;
 			c->ack_ts = microtime();
 		}
-#endif
 	}
 
 	/* step 8 - FIN */
-	if ((tcphdr->flags & TCP_FIN) == 0)
+	if (likely((tcphdr->flags & TCP_FIN) == 0))
 		goto done;
-	tcp_conn_shutdown_rx(c);
 	if (c->pcb.state == TCP_STATE_SYN_RECEIVED ||
 	    c->pcb.state == TCP_STATE_ESTABLISHED) {
 		tcp_conn_set_state(c, TCP_STATE_CLOSE_WAIT);
@@ -354,7 +350,6 @@ void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 		c->time_wait_ts = microtime();
 		tcp_conn_set_state(c, TCP_STATE_TIME_WAIT);
 	}
-	do_ack = true;
 
 done:
 	tcp_debug_ingress_pkt(c, m);

@@ -41,8 +41,9 @@ static void tcp_handle_timeouts(tcpconn_t *c, uint64_t now)
 		do_ack = true;
 	}
 #if 0
-	if (!c->tx_exclusive && !list_empty(&c->txq)) {
+	if (!list_empty(&c->txq)) {
 		struct mbuf *m = list_top(&c->txq, struct mbuf, link);
+		if (m && now - m->timestamp >= TCP_RETRANSMIT_TIMEOUT) {
 			log_debug("tcp: %p retransmission timeout", c);
 			do_retransmit = true;
 		}
@@ -53,7 +54,7 @@ static void tcp_handle_timeouts(tcpconn_t *c, uint64_t now)
 	if (do_ack)
 		tcp_tx_ack(c);
 	if (do_retransmit)
-		tcp_retransmit(c);
+		thread_spawn(tcp_retransmit, c);
 }
 
 /* a periodic background thread that handles timeout events */
@@ -191,7 +192,7 @@ tcpconn_t *tcp_conn_alloc(void)
 
 	/* initialize egress half of PCB */
 	c->pcb.state = TCP_STATE_CLOSED;
-	c->pcb.iss = microtime(); /* TODO: not secure */
+	c->pcb.iss = rand_crc32c(0x12345678); /* TODO: not enough */
 	c->pcb.snd_nxt = c->pcb.iss;
 	c->pcb.snd_una = c->pcb.iss;
 	c->pcb.rcv_wnd = TCP_WIN;
@@ -550,7 +551,7 @@ static ssize_t tcp_read_wait(tcpconn_t *c, size_t len,
 	}
 
 	/* is the socket closed? */
-	if (c->rx_closed && list_empty(&c->rxq)) {
+	if (c->rx_closed) {
 		spin_unlock_np(&c->lock);
 		return -c->err;
 	}
@@ -560,6 +561,12 @@ static ssize_t tcp_read_wait(tcpconn_t *c, size_t len,
 		m = list_top(&c->rxq, struct mbuf, link);
 		if (!m)
 			break;
+
+		if (unlikely((m->flags & TCP_FIN) > 0)) {
+			tcp_conn_shutdown_rx(c);
+			if (mbuf_length(m) == 0)
+				break;
+		}
 
 		if (len - readlen < mbuf_length(m)) {
 			c->rx_exclusive = true;
@@ -767,11 +774,10 @@ static void tcp_write_finish(tcpconn_t *c)
 	spin_lock_np(&c->lock);
 	c->tx_exclusive = false;
 	tcp_conn_ack(c, &q);
-#if 0
-	if (c->pcb.rcv_nxt != c->tx_last_ack) /* race condition check */
-		tcp_tx_ack(c);
-	c->ack_delayed = false;
-#endif
+	if (c->pcb.rcv_nxt == c->tx_last_ack) /* race condition check */
+		c->ack_delayed = false;
+	else
+		c->ack_ts = microtime();
 	th = waitq_signal(&c->tx_wq, &c->lock);
 	spin_unlock_np(&c->lock);
 
@@ -853,12 +859,8 @@ static void tcp_retransmit(void *arg)
 	spin_lock_np(&c->lock);
 	while (c->tx_exclusive)
 		waitq_wait(&c->tx_wq, &c->lock);
-	c->tx_exclusive = true;
-	spin_unlock_np(&c->lock);
-
 	tcp_tx_retransmit(c);
-
-	tcp_write_finish(c);
+	spin_unlock_np(&c->lock);
 }
 
 /**
