@@ -456,22 +456,15 @@ fn run_client(
         match output {
             OutputMode::Silent => {}
             OutputMode::Normal
-            | OutputMode::Buckets => {
+            | OutputMode::Buckets
+            | OutputMode::Trace => {
                 println!(
-                    "{}, {}, 0, {}, {}",
+                    "{}, {}, 0, {}, {}, {}",
                     distribution.name(),
                     packets_per_second,
                     dropped,
                     never_sent,
-                );
-            }
-            OutputMode::Trace => {
-                println!("Warning: missing *all* of the packets");
-                println!(
-                    "Dropped: {}, Never sent: {}, Total packets: {}",
-                    dropped,
-                    never_sent,
-                    packets.len()
+                    start_unix.duration_since(UNIX_EPOCH).unwrap().as_secs()
                 );
             }
         }
