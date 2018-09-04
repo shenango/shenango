@@ -112,7 +112,7 @@ impl ConnectionListener {
                 Ok(Connection::RuntimeTcp(s.accept())),
             ConnectionListener::LinuxTcp(ref s) => {
                 let (socket, _addr) = s.accept()?;
-		let _ = socket.set_nodelay(true);
+                socket.set_nodelay(true)?;
                 Ok(Connection::LinuxTcp(socket))
             }
         }
@@ -194,6 +194,14 @@ impl Read for Connection {
             Connection::LinuxTcp(ref mut s) => s.read(buf),
             Connection::RuntimeUdp(ref mut s) => s.read(buf),
             Connection::RuntimeTcp(ref mut s) => s.read(buf),
+        }
+    }
+}
+
+impl Drop for Connection {
+    fn drop(&mut self) {
+        if let Connection::RuntimeTcp(ref mut s) = *self {
+            s.abort();
         }
     }
 }

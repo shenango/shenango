@@ -197,14 +197,20 @@ fn run_server(backend: Backend, addr: SocketAddrV4, nthreads: usize) {
 
 
 fn socket_worker(socket: &mut Connection) {
+    let mut v = vec![0; 4096];
     #[inline(always)]
-    fn r(socket: &mut Connection) -> io::Result<()> {
+    fn r(socket: &mut Connection, v: &mut Vec<u8>) -> io::Result<()> {
+        v.clear();
         let payload = Payload::deserialize(socket)?;
         work(payload.work_iterations);
-        Ok(payload.serialize_into(socket)?)
-    }
+        payload.serialize_into(v)?;
+        Ok(socket.write_all(&v [..])?)
+    };
     loop {
-        if let Err(e) = r(socket) {
+        if let Err(e) = r(socket, &mut v) {
+            if let Some(-104) = e.raw_os_error() {
+                break;
+            }
             if e.kind() != ErrorKind::UnexpectedEof {
                 println!("Receive thread: {}", e);
             }
