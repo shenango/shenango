@@ -40,7 +40,6 @@ void __noinline __net_recurrent(void)
 {
 	shmptr_t shm;
 	struct mbuf *m;
-	struct rx_net_hdr *rxhdr;
 	struct kthread *k = myk();
 
 	assert_preempt_disabled();
@@ -57,6 +56,7 @@ void __noinline __net_recurrent(void)
 			return;
 	}
 
+#if 0
 	/* drain RX completions */
 	while (!mbufq_empty(&k->txcmdq_overflow)) {
 		m = mbufq_peak_head(&k->txcmdq_overflow);
@@ -70,6 +70,7 @@ void __noinline __net_recurrent(void)
 		if (unlikely(preempt_needed()))
 			return;
 	}
+#endif
 }
 
 
@@ -120,13 +121,16 @@ static struct mbuf *net_rx_alloc_mbuf(struct rx_net_hdr *hdr)
 
 	/* copy the payload and release the buffer back to the iokernel */
 	memcpy(buf, hdr->payload, hdr->len);
-	net_rx_send_completion(hdr->completion_data);
 
 	mbuf_init(m, buf, hdr->len, 0);
 	m->len = hdr->len;
 	m->csum_type = hdr->csum_type;
 	m->csum = hdr->csum;
 	m->rss_hash = hdr->rss_hash;
+
+	barrier();
+	net_rx_send_completion(hdr->completion_data);
+
 	m->release_data = 0;
 	m->release = net_rx_release_mbuf;
 	return m;
@@ -180,18 +184,8 @@ static struct mbuf *net_rx_one(struct rx_net_hdr *hdr)
 	uint16_t len;
 
 	m = net_rx_alloc_mbuf(hdr);
-	if (unlikely(!m)) {
-		struct kthread *k = getk();
-
-		while (!lrpc_send(&k->txcmdq, TXCMD_NET_COMPLETE,
-				  hdr->completion_data)) {
-			putk();
-			cpu_relax();
-			k = getk();
-		}
-		putk();
+	if (unlikely(!m))
 		return NULL;
-	}
 
 	STAT(RX_PACKETS)++;
 	STAT(RX_BYTES) += mbuf_length(m);
