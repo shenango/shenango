@@ -37,7 +37,6 @@
 #define RUNTIME_SCHED_POLL_US	1
 #define RUNTIME_WATCHDOG_US	50
 
-
 /*
  * Trap frame support
  */
@@ -405,6 +404,8 @@ static inline void rcu_recurrent(void)
 
 /* the maximum number of events to handle in a softirq invocation */
 #define SOFTIRQ_MAX_BUDGET	128
+
+extern bool disable_watchdog;
 
 extern thread_t *softirq_run_thread(struct kthread *k, unsigned int budget);
 extern void softirq_run(unsigned int budget);

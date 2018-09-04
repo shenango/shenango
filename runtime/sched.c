@@ -26,6 +26,9 @@ static __thread void *runtime_stack;
 /* a pointer to the bottom of the per-kthread (TLS) runtime stack */
 static __thread void *runtime_stack_base;
 
+/* Flag to prevent watchdog from running */
+bool disable_watchdog;
+
 /* fast allocation of struct thread */
 static struct slab thread_slab;
 static struct tcache *thread_tcache;
@@ -217,7 +220,7 @@ static __noreturn void schedule(void)
 	assert(l->detached == false);
 
 	/* if it's been too long, run the softirq handler */
-	if (unlikely(start_tsc - last_watchdog_tsc >
+	if (unlikely(!disable_watchdog && start_tsc - last_watchdog_tsc >
 	             cycles_per_us * RUNTIME_WATCHDOG_US)) {
 		last_watchdog_tsc = start_tsc;
 		th = do_watchdog(l);

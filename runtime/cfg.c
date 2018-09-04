@@ -162,6 +162,12 @@ static int parse_mac_address(const char *name, const char *val)
 	return ret;
 }
 
+static int parse_watchdog_flag(const char *name, const char *val)
+{
+	disable_watchdog = true;
+	return 0;
+}
+
 static int parse_static_arp_entry(const char *name, const char *val)
 {
 	int ret;
@@ -227,6 +233,7 @@ static const struct cfg_handler cfg_handlers[] = {
 			false },
 	{ "static_arp", parse_static_arp_entry, false },
 	{ "log_level", parse_log_level, false },
+	{ "disable_watchdog", parse_watchdog_flag, false },
 };
 
 /**
