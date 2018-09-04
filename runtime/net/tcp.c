@@ -981,14 +981,30 @@ int tcp_shutdown(tcpconn_t *c, int how)
  */
 void tcp_abort(tcpconn_t *c)
 {
+	int i;
+	uint32_t snd_nxt;
+	struct netaddr l, r;
+
 	spin_lock_np(&c->lock);
 	if (c->pcb.state == TCP_STATE_CLOSED) {
 		spin_unlock_np(&c->lock);
 		return;
 	}
-	tcp_tx_raw_rst(c->e.laddr, c->e.raddr, c->pcb.snd_nxt);
+
+	l = c->e.laddr;
+	r = c->e.raddr;
+	snd_nxt = c->pcb.snd_nxt;
 	tcp_conn_fail(c, ECONNABORTED);
 	spin_unlock_np(&c->lock);
+
+	for (i = 0; i < 10; i++) {
+		if (tcp_tx_raw_rst(l, r, snd_nxt) == 0)
+			return;
+		timer_sleep(10);
+	}
+
+	WARN();
+
 }
 
 /**
