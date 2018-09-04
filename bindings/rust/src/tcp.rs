@@ -72,12 +72,17 @@ impl TcpConnection {
         SocketAddrV4::new(remote_addr.ip.into(), remote_addr.port)
     }
 
-    pub fn shutdown(&self, how: c_int) {
-        unsafe { ffi::tcp_shutdown(self.0, how); return }
+    pub fn shutdown(&self, how: c_int) -> io::Result<()> {
+        let res = unsafe { ffi::tcp_shutdown(self.0, how) };
+        if res == 0 {
+            Ok(())
+        } else {
+            Err(io::Error::from_raw_os_error(res as i32))
+        }
     }
 
     pub fn abort(&self) {
-        unsafe { ffi::tcp_abort(self.0); return }
+        unsafe { ffi::tcp_abort(self.0) };
     }
 }
 
