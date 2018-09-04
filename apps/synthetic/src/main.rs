@@ -372,8 +372,9 @@ fn run_client(
                 match protocol.read_response(&socket, tport, &mut recv_buf[..]) {
                     Ok(idx) => receive_times[idx] = Some(start.elapsed()),
                     Err(e) => {
-                        if let Some(-103) = e.raw_os_error() {
-                            break;
+                        match e.raw_os_error() {
+                            Some(-103) | Some(-104) => break,
+                            _ => (),
                         }
                         if e.kind() != ErrorKind::UnexpectedEof {
                             println!("Receive thread: {}", e);
@@ -416,7 +417,7 @@ fn run_client(
                             backend.thread_yield();
                             continue;
                         }
-                        Some(-32) | Some(-103) => {}
+                        Some(-32) | Some(-103) | Some(-104) => {}
                         _ => println!("Send thread ({}/{}): {}", i, packets.len(), e),
                     }
                     break;

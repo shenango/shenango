@@ -182,7 +182,7 @@ impl Connection {
                 let _ = libc::shutdown(s.as_raw_fd(), libc::SHUT_RDWR);
             },
             Connection::RuntimeUdp(ref s) => s.shutdown(),
-            Connection::RuntimeTcp(ref s) => s.shutdown(libc::SHUT_RDWR),
+            Connection::RuntimeTcp(ref s) => s.abort(),
         }
     }
 }
