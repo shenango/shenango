@@ -112,6 +112,7 @@ impl ConnectionListener {
                 Ok(Connection::RuntimeTcp(s.accept())),
             ConnectionListener::LinuxTcp(ref s) => {
                 let (socket, _addr) = s.accept()?;
+		let _ = socket.set_nodelay(true);
                 Ok(Connection::LinuxTcp(socket))
             }
         }
