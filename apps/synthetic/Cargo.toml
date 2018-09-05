@@ -11,6 +11,7 @@ libc = "0.2"
 lockstep = { git = "https://github.com/fintelia/lockstep.git",  rev = "9be97f6ef9d75b1a28a79734df238c08b4de7013" }
 rand = "0.4"
 serde = "1.0"
+net2 = "0.2"
 shenango = { path = "../../bindings/rust" }
 
 [profile.release]

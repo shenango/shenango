@@ -12,6 +12,8 @@ use std::os::unix::io::AsRawFd;
 use std::thread;
 use std::time::Duration;
 
+use net2::TcpBuilder;
+
 #[derive(Copy, Clone)]
 pub enum Backend {
     Linux,
@@ -55,7 +57,11 @@ impl Backend {
     ) -> ConnectionListener {
         match *self {
             Backend::Linux =>
-                ConnectionListener::LinuxTcp(TcpListener::bind(local_addr).unwrap()),
+                ConnectionListener::LinuxTcp(
+                    TcpBuilder::new_v4().unwrap()
+                        .bind(local_addr).unwrap()
+                        .listen(1024).unwrap()
+                ),
             Backend::Runtime =>
                 ConnectionListener::RuntimeTcp(shenango::tcp::TcpQueue::listen(local_addr, 1024)),
         }

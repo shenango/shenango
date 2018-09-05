@@ -7,6 +7,7 @@ extern crate byteorder;
 extern crate dns_parser;
 extern crate libc;
 extern crate lockstep;
+extern crate net2;
 extern crate rand;
 extern crate shenango;
 extern crate test;
@@ -208,8 +209,9 @@ fn socket_worker(socket: &mut Connection) {
     };
     loop {
         if let Err(e) = r(socket, &mut v) {
-            if let Some(-104) = e.raw_os_error() {
-                break;
+            match e.raw_os_error() {
+              Some(-104) | Some(104) => break,
+              _ => {},
             }
             if e.kind() != ErrorKind::UnexpectedEof {
                 println!("Receive thread: {}", e);
@@ -273,9 +275,8 @@ fn run_memcached_preload(
                             ),
                     }
                 );
-
                 let socket = sock1.clone();
-                backend.spawn_thread(move || {
+                let timer = backend.spawn_thread(move || {
                     backend.sleep(Duration::from_secs(10));
                     if Arc::strong_count(&socket) > 1 {
                         println!("Timing out socket");
@@ -300,6 +301,7 @@ fn run_memcached_preload(
                     }
 
                 }
+                timer.join().unwrap();
             })
         })
         .collect();
@@ -389,7 +391,7 @@ fn run_client(
             // If the send or receive thread is still running 500 ms after it should have finished,
             // then stop it by triggering a shutdown on the socket.
             let socket = socket2.clone();
-            backend.spawn_thread(move || {
+            let timer = backend.spawn_thread(move || {
                 backend.sleep(runtime + Duration::from_millis(500));
                 if Arc::strong_count(&socket) > 1 {
                     socket.shutdown();
@@ -411,9 +413,9 @@ fn run_client(
 
                 packet.actual_start = Some(start.elapsed());
                 if let Err(e) = (&*socket2).write_all(&payload[..]) {
+                    packet.actual_start = None;
                     match e.raw_os_error() {
                         Some(-105) => {
-                            packet.actual_start = None;
                             backend.thread_yield();
                             continue;
                         }
@@ -423,6 +425,7 @@ fn run_client(
                     break;
                 }
             }
+            timer.join().unwrap();
 
             packets
         }))
@@ -477,6 +480,7 @@ fn run_client(
 
     let first_send = packets.iter().filter_map(|p| p.actual_start).min().unwrap();
     let last_send = packets.iter().filter_map(|p| p.actual_start).max().unwrap();
+
     let mut latencies: Vec<_> = packets
         .iter()
         .filter_map(|p| match (p.actual_start, p.completion_time) {
@@ -523,7 +527,7 @@ fn run_client(
                     println!(
                         "{} {} {}",
                         duration_to_ns(actual_start),
-                        duration_to_ns(actual_start - p.target_start),
+                        duration_to_ns(actual_start) as i64 - duration_to_ns(p.target_start) as i64,
                         duration_to_ns(completion_time - actual_start)
                     )
                 } else if p.actual_start.is_some() {
@@ -531,7 +535,7 @@ fn run_client(
                     println!(
                         "{} {} -1",
                         duration_to_ns(actual_start),
-                        duration_to_ns(actual_start - p.target_start),
+                        duration_to_ns(actual_start) as i64 - duration_to_ns(p.target_start) as i64,
                     )
                 } else {
                     println!("{} -1 -1", duration_to_ns(p.target_start))
