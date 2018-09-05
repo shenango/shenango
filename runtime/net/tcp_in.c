@@ -348,6 +348,7 @@ void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 		tcp_conn_set_state(c, TCP_STATE_CLOSING);
 	} else if (c->pcb.state == TCP_STATE_FIN_WAIT2) {
 		c->time_wait_ts = microtime();
+		do_ack = true;
 		tcp_conn_set_state(c, TCP_STATE_TIME_WAIT);
 	}
 
