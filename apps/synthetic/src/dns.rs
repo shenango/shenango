@@ -17,12 +17,14 @@ const NDOMAINS : usize = 100000;
 fn push_usize(mut i: usize, buf: &mut Vec<u8>) -> u8
 {
     let mut pushed = 0;
-    while {
+    loop {
         buf.push(48 + (i % 10) as u8);
         i /= 10;
         pushed += 1;
-        i == 0
-    } { }
+        if i == 0 {
+          break;
+        }
+    }
     pushed
 }
 

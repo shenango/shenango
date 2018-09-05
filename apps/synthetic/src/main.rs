@@ -276,7 +276,7 @@ fn run_memcached_preload(
                     }
                 );
                 let socket = sock1.clone();
-                let timer = backend.spawn_thread(move || {
+                backend.spawn_thread(move || {
                     backend.sleep(Duration::from_secs(10));
                     if Arc::strong_count(&socket) > 1 {
                         println!("Timing out socket");
@@ -301,7 +301,6 @@ fn run_memcached_preload(
                     }
 
                 }
-                timer.join().unwrap();
             })
         })
         .collect();

@@ -99,12 +99,14 @@ static KEY_SIZE    : usize = 20;
 fn write_key(buf: &mut Vec<u8>, key: u64) {
     let mut pushed = 0;
     let mut k = key;
-    while {
+    loop {
         buf.push(48 + (k % 10) as u8);
         k /= 10;
         pushed += 1;
-        k == 0
-    } {}
+        if k == 0 {
+            break;
+        }
+    }
     for _ in pushed..KEY_SIZE {
         buf.push('A' as u8);
     }
