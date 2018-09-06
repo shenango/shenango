@@ -13,6 +13,8 @@ use std::thread;
 use std::time::Duration;
 
 use net2::TcpBuilder;
+use net2::UdpBuilder;
+use net2::unix::UnixUdpBuilderExt;
 
 #[derive(Copy, Clone)]
 pub enum Backend {
@@ -26,7 +28,14 @@ impl Backend {
         remote_addr: Option<SocketAddrV4>,
     ) -> Connection {
         match (self, remote_addr) {
-            (&Backend::Linux, None) => Connection::LinuxUdp(UdpSocket::bind(local_addr).unwrap()),
+            (&Backend::Linux, None) => {
+                Connection::LinuxUdp(
+                    UdpBuilder::new_v4().unwrap()
+                    .reuse_address(true).unwrap()
+                    .reuse_port(true).unwrap()
+                    .bind(local_addr).unwrap()
+                )
+            }
             (&Backend::Runtime, None) => {
                 Connection::RuntimeUdp(UdpConnection::listen(local_addr))
             }

@@ -172,19 +172,18 @@ fn duration_to_ns(duration: Duration) -> u64 {
     (duration.as_secs() * 1000_000_000 + duration.subsec_nanos() as u64)
 }
 
-fn run_server(backend: Backend, addr: SocketAddrV4, nthreads: usize) {
-    let socket = Arc::new(backend.create_udp_connection(addr, None));
-    println!("Bound to address {}", socket.local_addr());
+fn run_linux_udp_server(backend: Backend, addr: SocketAddrV4, nthreads: usize) {
     let join_handles: Vec<_> = (0..nthreads)
         .map(|_| {
-            let socket2 = socket.clone();
             backend.spawn_thread(move || {
+                let socket = backend.create_udp_connection(addr, None);
+                println!("Bound to address {}", socket.local_addr());
                 let mut buf = vec![0; 4096];
                 loop {
-                    let (len, remote_addr) = socket2.recv_from(&mut buf[..]).unwrap();
+                    let (len, remote_addr) = socket.recv_from(&mut buf[..]).unwrap();
                     let payload = Payload::deserialize(&mut &buf[..len]).unwrap();
                     work(payload.work_iterations);
-                    socket2.send_to(&buf[..len], remote_addr).unwrap();
+                    socket.send_to(&buf[..len], remote_addr).unwrap();
                 }
             })
         })
@@ -277,7 +276,7 @@ fn run_memcached_preload(
                 );
                 let socket = sock1.clone();
                 backend.spawn_thread(move || {
-                    backend.sleep(Duration::from_secs(10));
+                    backend.sleep(Duration::from_secs(20));
                     if Arc::strong_count(&socket) > 1 {
                         println!("Timing out socket");
                         socket.shutdown();
@@ -581,7 +580,6 @@ fn main() {
                 .possible_values(&[
                     "linux-server",
                     "linux-client",
-                    "runtime-server",
                     "runtime-client",
                     "spawner-server",
                     "work-bench",
@@ -589,7 +587,6 @@ fn main() {
                 ])
                 .required(true)
                 .requires_ifs(&[
-                    ("runtime-server", "config"),
                     ("runtime-client", "config"),
                     ("spawner-server", "config"),
                 ])
@@ -722,7 +719,7 @@ fn main() {
     let mode = matches.value_of("mode").unwrap();
     let backend = match mode {
         "linux-server" | "linux-client" | "memcached-preload" => Backend::Linux,
-        "runtime-server" | "spawner-server" | "runtime-client" | "work-bench" => Backend::Runtime,
+        "spawner-server" | "runtime-client" | "work-bench" => Backend::Runtime,
         _ => unreachable!(),
     };
     let mut barrier_group = matches.value_of("barrier-leader").map(|leader| {
@@ -762,8 +759,8 @@ fn main() {
             Transport::Udp => backend.init_and_run(config, move || run_spawner_server(addr)),
             Transport::Tcp => backend.init_and_run(config, move || run_tcp_server(backend, addr)),
         },
-        "linux-server" | "runtime-server" => match tport {
-            Transport::Udp => backend.init_and_run(config, move || run_server(backend, addr, nthreads)),
+        "linux-server" => match tport {
+            Transport::Udp => backend.init_and_run(config, move || run_linux_udp_server(backend, addr, nthreads)),
             Transport::Tcp => backend.init_and_run(config, move || run_tcp_server(backend, addr)),
         },
         "linux-client" | "runtime-client" => {
