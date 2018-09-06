@@ -22,8 +22,10 @@ StridedMemtouchWorker::Create(std::size_t size, std::size_t stride) {
 }
 
 void StridedMemtouchWorker::Work(uint64_t n) {
-  for (uint64_t i = 0; i < n; ++i)
-    buf_[(stride_ * i) % size_]++;
+  for (uint64_t i = 0; i < n; ++i) {
+    volatile char c = buf_[(stride_ * i) % size_];
+    std::ignore = c; // silences compiler warning
+  }
 }
 
 RandomMemtouchWorker *
