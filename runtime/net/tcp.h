@@ -86,6 +86,7 @@ struct tcpconn {
 	bool			ack_delayed;
 	uint64_t		ack_ts;
 	uint64_t		time_wait_ts;
+	uint64_t		syn_sent_ts;
 };
 
 extern tcpconn_t *tcp_conn_alloc(void);

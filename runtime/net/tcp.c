@@ -27,6 +27,16 @@ static void tcp_handle_timeouts(tcpconn_t *c, uint64_t now)
 	bool do_ack = false, do_retransmit = false;
 
 	spin_lock_np(&c->lock);
+
+	if (c->pcb.state == TCP_STATE_SYN_SENT &&
+	    now - c->syn_sent_ts >= TCP_RETRANSMIT_TIMEOUT) {
+		c->syn_sent_ts = now;
+		tcp_tx_ctl(c, TCP_SYN);
+		spin_unlock_np(&c->lock);
+		log_debug("tcp: %p retransmit initial syn", c);
+		return;
+	}
+
 	if (c->pcb.state == TCP_STATE_TIME_WAIT &&
 	    now - c->time_wait_ts >= TCP_TIME_WAIT_TIMEOUT) {
 		log_debug("tcp: %p time wait timeout", c);
@@ -498,6 +508,7 @@ int tcp_dial(struct netaddr laddr, struct netaddr raddr, tcpconn_t **c_out)
 	}
 	tcp_conn_get(c); /* take a ref for the state machine */
 	tcp_conn_set_state(c, TCP_STATE_SYN_SENT);
+	c->syn_sent_ts = microtime();
 
 	/* wait until the connection is established or there is a failure */
 	while (!c->rx_closed && c->pcb.state < TCP_STATE_ESTABLISHED)
