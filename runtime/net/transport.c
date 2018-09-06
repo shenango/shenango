@@ -20,6 +20,9 @@
 /* a seed value for transport handler table hashing calculations */
 static uint32_t trans_seed;
 
+/* a simple counter used to further randomize ephemeral ports */
+static uint32_t ephemeral_offset;
+
 static inline uint32_t trans_hash_3tuple(uint8_t proto, struct netaddr laddr)
 {
 	return hash_crc32c_one(trans_seed,
@@ -85,6 +88,7 @@ int trans_table_add(struct trans_entry *e)
 		}
 	}
 	rcu_hlist_add_head(&trans_tbl[idx], &e->link);
+	store_release(&ephemeral_offset, ephemeral_offset + 1);
 	spin_unlock_np(&trans_lock);
 
 	return 0;
@@ -109,7 +113,8 @@ int trans_table_add_with_ephemeral_port(struct trans_entry *e)
 		return -EINVAL;
 
 	e->laddr.port = 0;
-	offset = trans_hash_5tuple(e->proto, e->laddr, e->raddr);
+	offset = trans_hash_5tuple(e->proto, e->laddr, e->raddr) +
+							load_acquire(&ephemeral_offset);
 	while (next_ephemeral < num_ephemeral) {
 		uint32_t port = MIN_EPHEMERAL +
 				(next_ephemeral++ + offset) % num_ephemeral;
