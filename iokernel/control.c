@@ -129,7 +129,7 @@ static struct proc *control_create_proc(mem_key_t key, size_t len, pid_t pid,
 	if (ret)
 		goto fail_free_just_proc;
 
-	p->max_overflows *= 2;
+	p->max_overflows *= 4;
 	p->nr_overflows = 0;
 	p->overflow_queue = malloc(sizeof(unsigned long) * p->max_overflows);
 	if (p->overflow_queue == NULL)
