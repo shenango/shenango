@@ -183,7 +183,7 @@ int tcp_tx_ctl(tcpconn_t *c, uint8_t flags)
 	ret = net_tx_ip(m, IPPROTO_TCP, c->e.raddr.ip);
 	if (unlikely(ret)) {
 		/* pretend the packet was sent */
-		mbuf_push(m, sizeof(struct eth_hdr) + sizeof(struct ip_hdr));
+		mbuf_push(m, sizeof(struct tx_net_hdr) + sizeof(struct eth_hdr) + sizeof(struct ip_hdr));
 		atomic_write(&m->ref, 1);
 	}
 	return ret;
@@ -265,7 +265,7 @@ ssize_t tcp_tx_send(tcpconn_t *c, const void *buf, size_t len, bool push)
 		ret = net_tx_ip(m, IPPROTO_TCP, c->e.raddr.ip);
 		if (unlikely(ret)) {
 			/* pretend the packet was sent */
-			mbuf_push(m, sizeof(struct eth_hdr) +
+			mbuf_push(m, sizeof(struct tx_net_hdr) + sizeof(struct eth_hdr) +
 				     sizeof(struct ip_hdr));
 			atomic_write(&m->ref, 1);
 		}
@@ -299,7 +299,7 @@ void tcp_tx_retransmit(tcpconn_t *c)
 			break;
 
 		/* strip headers and reset ref count */
-		mbuf_pull(m, sizeof(struct eth_hdr) + sizeof(struct ip_hdr) +
+		mbuf_pull(m, sizeof(struct tx_net_hdr) + sizeof(struct eth_hdr) + sizeof(struct ip_hdr) +
 			     sizeof(struct tcp_hdr));
 		atomic_write(&m->ref, 2);
 
@@ -322,7 +322,7 @@ void tcp_tx_retransmit(tcpconn_t *c)
 		ret = net_tx_ip(m, IPPROTO_TCP, c->e.raddr.ip);
 		if (unlikely(ret)) {
 			/* pretend the packet was sent */
-			mbuf_push(m, sizeof(struct eth_hdr) +
+			mbuf_push(m, sizeof(struct tx_net_hdr) + sizeof(struct eth_hdr) +
 				     sizeof(struct ip_hdr));
 			atomic_write(&m->ref, 1);
 		}
