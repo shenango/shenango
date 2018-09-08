@@ -302,6 +302,7 @@ static void tcp_tx_retransmit_one(tcpconn_t *c, struct mbuf *m)
 		newm->flags = m->flags;
 		newm->seg_seq = m->seg_seq;
 		newm->seg_end = m->seg_end;
+		newm->txflags = OLFLAG_TCP_CHKSUM;
 		m = newm;
 		copied = true;
 	} else {
