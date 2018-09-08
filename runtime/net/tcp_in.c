@@ -281,11 +281,19 @@ void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 		c->pcb.snd_wl2 = ack;
 		tcp_conn_set_state(c, TCP_STATE_ESTABLISHED);
 	}
+	if (ack == c->pcb.snd_una) {
+		c->rep_acks++;
+		if (c->rep_acks >= TCP_FAST_RETRANSMIT_THRESH) {
+			thread_spawn(tcp_fast_retransmit, c);
+			c->rep_acks = 0;
+		}
+	}
 	if (wraps_lte(c->pcb.snd_una, ack) &&
 	    wraps_lte(ack, snd_nxt)) {
 		bool snd_was_full = is_snd_full(c);
 		c->pcb.snd_una = ack;
-		c->rep_acks = 0;
+		if (c->pcb.snd_una != ack)
+			c->rep_acks = 0;
 		tcp_conn_ack(c, &q);
 		/* should we update the send window? */
 		if (wraps_lt(c->pcb.snd_wl1, seq) ||
@@ -300,13 +308,6 @@ void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 	} else if (wraps_gt(ack, snd_nxt)) {
 		do_ack = true;
 		goto done;
-	}
-	if (ack == c->pcb.snd_una) {
-		c->rep_acks++;
-		if (c->rep_acks >= TCP_FAST_RETRANSMIT_THRESH) {
-			tcp_tx_fast_retransmit(c);
-			c->rep_acks = 0;
-		}
 	}
 	if (c->pcb.state == TCP_STATE_FIN_WAIT1 &&
 	    c->pcb.snd_una == snd_nxt) {

@@ -145,6 +145,7 @@ extern ssize_t tcp_tx_send(tcpconn_t *c, const void *buf, size_t len,
 			   bool push);
 extern void tcp_tx_retransmit(tcpconn_t *c);
 extern void tcp_tx_fast_retransmit(tcpconn_t *c);
+extern void tcp_fast_retransmit(void *arg);
 
 
 /*

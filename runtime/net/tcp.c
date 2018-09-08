@@ -864,6 +864,18 @@ static void tcp_retransmit(void *arg)
 	spin_unlock_np(&c->lock);
 }
 
+/* resend just one pending egress packet */
+void tcp_fast_retransmit(void *arg)
+{
+	tcpconn_t *c = (tcpconn_t *)arg;
+
+	spin_lock_np(&c->lock);
+	while (c->tx_exclusive)
+		waitq_wait(&c->tx_wq, &c->lock);
+	tcp_tx_fast_retransmit(c);
+	spin_unlock_np(&c->lock);
+}
+
 /**
  * tcp_conn_fail - closes a TCP both sides of a connection with an error
  * @c: the TCP connection to shutdown
