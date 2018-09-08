@@ -285,6 +285,7 @@ void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 	    wraps_lte(ack, snd_nxt)) {
 		bool snd_was_full = is_snd_full(c);
 		c->pcb.snd_una = ack;
+		c->rep_acks = 0;
 		tcp_conn_ack(c, &q);
 		/* should we update the send window? */
 		if (wraps_lt(c->pcb.snd_wl1, seq) ||
