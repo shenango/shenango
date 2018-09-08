@@ -300,6 +300,13 @@ void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 		do_ack = true;
 		goto done;
 	}
+	if (ack == c->pcb.snd_una) {
+		c->rep_acks++;
+		if (c->rep_acks >= TCP_FAST_RETRANSMIT_THRESH) {
+			tcp_tx_fast_retransmit(c);
+			c->rep_acks = 0;
+		}
+	}
 	if (c->pcb.state == TCP_STATE_FIN_WAIT1 &&
 	    c->pcb.snd_una == snd_nxt) {
 		tcp_conn_set_state(c, TCP_STATE_FIN_WAIT2);

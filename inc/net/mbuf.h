@@ -126,6 +126,19 @@ static inline unsigned char *mbuf_trim(struct mbuf *m, unsigned int len)
 }
 
 /**
+ * mbuf_reset - forces an mbuf to reposition the data pointer to an offset
+ * @m: the packet
+ * @offset: the new data offset from @m->head
+ */
+static inline void mbuf_reset(struct mbuf *m, unsigned int offset)
+{
+	unsigned int total_len = m->data - m->head + m->len;
+	BUG_ON(offset > total_len);
+	m->data = m->head + offset;
+	m->len = total_len - offset;
+}
+
+/**
  * mbuf_headroom - returns the space available before the start of the buffer
  * @m: the packet
  */

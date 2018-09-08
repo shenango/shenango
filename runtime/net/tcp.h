@@ -21,6 +21,7 @@
 #define TCP_ACK_TIMEOUT (1 * ONE_MS)
 #define TCP_TIME_WAIT_TIMEOUT (1 * ONE_SECOND) /* FIXME: should be 8 minutes */
 #define TCP_RETRANSMIT_TIMEOUT (300 * ONE_MS) /* FIXME: should be dynamic */
+#define TCP_FAST_RETRANSMIT_THRESH 3
 
 /* connecion states (RFC 793 Section 3.2) */
 enum {
@@ -86,7 +87,7 @@ struct tcpconn {
 	bool			ack_delayed;
 	uint64_t		ack_ts;
 	uint64_t		time_wait_ts;
-	uint64_t		syn_sent_ts;
+	int			rep_acks;
 };
 
 extern tcpconn_t *tcp_conn_alloc(void);
@@ -143,6 +144,7 @@ extern int tcp_tx_ctl(tcpconn_t *c, uint8_t flags);
 extern ssize_t tcp_tx_send(tcpconn_t *c, const void *buf, size_t len,
 			   bool push);
 extern void tcp_tx_retransmit(tcpconn_t *c);
+extern void tcp_tx_fast_retransmit(tcpconn_t *c);
 
 
 /*
