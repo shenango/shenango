@@ -18,19 +18,27 @@ pub struct TcpConnection(*mut ffi::tcpconn_t);
 pub struct TcpQueue(*mut ffi::tcpqueue_t);
 
 impl TcpQueue {
-    pub fn listen(local_addr: SocketAddrV4, backlog: i32) -> Self {
+    pub fn listen(local_addr: SocketAddrV4, backlog: i32) -> io::Result<Self> {
         let laddr = ffi::netaddr {
             ip: NetworkEndian::read_u32(&local_addr.ip().octets()),
             port: local_addr.port(),
         };
         let mut queue = ptr::null_mut();
-        unsafe { ffi::tcp_listen(laddr, backlog, &mut queue as *mut _) };
-        TcpQueue(queue)
+        let ret = unsafe { ffi::tcp_listen(laddr, backlog, &mut queue as *mut _) };
+        if ret < 0 {
+            Err(io::Error::from_raw_os_error(ret as i32))
+        } else {
+            Ok(TcpQueue(queue))
+        }
     }
-    pub fn accept(&self) -> TcpConnection {
+    pub fn accept(&self) -> io::Result<TcpConnection> {
         let mut conn = ptr::null_mut();
-        unsafe { ffi::tcp_accept(self.0, &mut conn as *mut _) };
-        TcpConnection(conn)
+        let ret = unsafe { ffi::tcp_accept(self.0, &mut conn as *mut _) };
+        if ret < 0 {
+            Err(io::Error::from_raw_os_error(ret as i32))
+        } else {
+            Ok(TcpConnection(conn))
+        }
     }
     pub fn shutdown(&self) {
         unsafe { ffi::tcp_qshutdown(self.0) }
@@ -47,7 +55,7 @@ unsafe impl Send for TcpQueue {}
 unsafe impl Sync for TcpQueue {}
 
 impl TcpConnection {
-    pub fn dial(local_addr: SocketAddrV4, remote_addr: SocketAddrV4) -> Self {
+    pub fn dial(local_addr: SocketAddrV4, remote_addr: SocketAddrV4) -> io::Result<Self> {
         let laddr = ffi::netaddr {
             ip: NetworkEndian::read_u32(&local_addr.ip().octets()),
             port: local_addr.port(),
@@ -58,8 +66,12 @@ impl TcpConnection {
         };
 
         let mut conn = ptr::null_mut();
-        unsafe { ffi::tcp_dial(laddr, raddr, &mut conn as *mut _) };
-        TcpConnection(conn)
+        let ret = unsafe { ffi::tcp_dial(laddr, raddr, &mut conn as *mut _) };
+        if ret < 0 {
+            Err(io::Error::from_raw_os_error(ret as i32))
+        } else {
+            Ok(TcpConnection(conn))
+        }
     }
 
     pub fn local_addr(&self) -> SocketAddrV4 {

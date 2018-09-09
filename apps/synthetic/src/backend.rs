@@ -26,54 +26,54 @@ impl Backend {
         &self,
         local_addr: SocketAddrV4,
         remote_addr: Option<SocketAddrV4>,
-    ) -> Connection {
-        match (self, remote_addr) {
+    ) -> io::Result<Connection> {
+        Ok(match (self, remote_addr) {
             (&Backend::Linux, None) => {
                 Connection::LinuxUdp(
-                    UdpBuilder::new_v4().unwrap()
-                    .reuse_address(true).unwrap()
-                    .reuse_port(true).unwrap()
-                    .bind(local_addr).unwrap()
+                    UdpBuilder::new_v4()?
+                    .reuse_address(true)?
+                    .reuse_port(true)?
+                    .bind(local_addr)?
                 )
             }
             (&Backend::Runtime, None) => {
-                Connection::RuntimeUdp(UdpConnection::listen(local_addr))
+                Connection::RuntimeUdp(UdpConnection::listen(local_addr)?)
             }
             (&Backend::Linux, Some(remote_addr)) => {
-                let socket = UdpSocket::bind(local_addr).unwrap();
-                socket.connect(remote_addr).unwrap();
+                let socket = UdpSocket::bind(local_addr)?;
+                socket.connect(remote_addr)?;
                 Connection::LinuxUdp(socket)
             }
             (&Backend::Runtime, Some(remote_addr)) => {
-                Connection::RuntimeUdp(UdpConnection::dial(local_addr, remote_addr))
+                Connection::RuntimeUdp(UdpConnection::dial(local_addr, remote_addr)?)
             }
-        }
+        })
     }
 
     pub fn create_tcp_connection(
         &self,
         remote_addr: SocketAddrV4,
-    ) -> Connection {
-        match *self {
-            Backend::Linux => Connection::LinuxTcp(TcpStream::connect(remote_addr).unwrap()),
-            Backend::Runtime => Connection::RuntimeTcp(TcpConnection::dial("0.0.0.0:0".parse().unwrap(), remote_addr)),
-        }
+    ) -> io::Result<Connection> {
+        Ok(match *self {
+            Backend::Linux => Connection::LinuxTcp(TcpStream::connect(remote_addr)?),
+            Backend::Runtime => Connection::RuntimeTcp(TcpConnection::dial("0.0.0.0:0".parse().unwrap(), remote_addr)?),
+        })
     }
 
     pub fn create_tcp_listener(
         &self,
         local_addr: SocketAddrV4,
-    ) -> ConnectionListener {
-        match *self {
+    ) -> io::Result<ConnectionListener> {
+        Ok(match *self {
             Backend::Linux =>
                 ConnectionListener::LinuxTcp(
-                    TcpBuilder::new_v4().unwrap()
-                        .bind(local_addr).unwrap()
-                        .listen(1024).unwrap()
+                    TcpBuilder::new_v4()?
+                        .bind(local_addr)?
+                        .listen(1024)?
                 ),
             Backend::Runtime =>
-                ConnectionListener::RuntimeTcp(shenango::tcp::TcpQueue::listen(local_addr, 1024)),
-        }
+                ConnectionListener::RuntimeTcp(shenango::tcp::TcpQueue::listen(local_addr, 1024)?),
+        })
     }
 
     pub fn spawn_thread<T, F>(&self, f: F) -> JoinHandle<T>
@@ -124,7 +124,7 @@ impl ConnectionListener {
     pub fn accept(&self) -> io::Result<Connection> {
         match *self {
             ConnectionListener::RuntimeTcp(ref s) =>
-                Ok(Connection::RuntimeTcp(s.accept())),
+                Ok(Connection::RuntimeTcp(s.accept()?)),
             ConnectionListener::LinuxTcp(ref s) => {
                 let (socket, _addr) = s.accept()?;
                 socket.set_nodelay(true)?;

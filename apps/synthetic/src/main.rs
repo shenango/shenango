@@ -176,7 +176,7 @@ fn run_linux_udp_server(backend: Backend, addr: SocketAddrV4, nthreads: usize) {
     let join_handles: Vec<_> = (0..nthreads)
         .map(|_| {
             backend.spawn_thread(move || {
-                let socket = backend.create_udp_connection(addr, None);
+                let socket = backend.create_udp_connection(addr, None).unwrap();
                 println!("Bound to address {}", socket.local_addr());
                 let mut buf = vec![0; 4096];
                 loop {
@@ -221,7 +221,7 @@ fn socket_worker(socket: &mut Connection) {
 }
 
 fn run_tcp_server(backend: Backend, addr: SocketAddrV4) {
-    let tcpq = backend.create_tcp_listener(addr);
+    let tcpq = backend.create_tcp_listener(addr).unwrap();
     println!("Bound to address {}", addr);
     loop {
         match tcpq.accept() {
@@ -266,12 +266,12 @@ fn run_memcached_preload(
                 let sock1 = Arc::new(
                     match tport {
                         Transport::Tcp =>
-                            backend.create_tcp_connection(addr),
+                            backend.create_tcp_connection(addr).unwrap(),
                         Transport::Udp =>
                             backend.create_udp_connection(
                                 "0.0.0.0:0".parse().unwrap(),
                                 Some(addr)
-                            ),
+                            ).unwrap(),
                     }
                 );
                 let socket = sock1.clone();
@@ -342,12 +342,12 @@ fn run_client(
             }
             let socket = match tport {
                 Transport::Tcp =>
-                    backend.create_tcp_connection(addr),
+                    backend.create_tcp_connection(addr).unwrap(),
                 Transport::Udp =>
                     backend.create_udp_connection(
                         "0.0.0.0:0".parse().unwrap(),
                         Some(addr)
-                    ),
+                    ).unwrap(),
             };
             (packets, vec![None; packets_per_thread], socket)
         })

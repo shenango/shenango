@@ -16,7 +16,7 @@ fn isize_to_result(i: isize) -> io::Result<usize> {
 
 pub struct UdpConnection(*mut ffi::udpconn_t);
 impl UdpConnection {
-    pub fn dial(local_addr: SocketAddrV4, remote_addr: SocketAddrV4) -> Self {
+    pub fn dial(local_addr: SocketAddrV4, remote_addr: SocketAddrV4) -> io::Result<Self> {
         let laddr = ffi::netaddr {
             ip: NetworkEndian::read_u32(&local_addr.ip().octets()),
             port: local_addr.port(),
@@ -27,18 +27,26 @@ impl UdpConnection {
         };
 
         let mut conn = ptr::null_mut();
-        unsafe { ffi::udp_dial(laddr, raddr, &mut conn as *mut _) };
-        UdpConnection(conn)
+        let ret = unsafe { ffi::udp_dial(laddr, raddr, &mut conn as *mut _) };
+        if ret < 0 {
+            Err(io::Error::from_raw_os_error(ret as i32))
+        } else {
+            Ok(UdpConnection(conn))
+        }
     }
 
-    pub fn listen(local_addr: SocketAddrV4) -> Self {
+    pub fn listen(local_addr: SocketAddrV4) -> io::Result<Self> {
         let laddr = ffi::netaddr {
             ip: NetworkEndian::read_u32(&local_addr.ip().octets()),
             port: local_addr.port(),
         };
         let mut conn = ptr::null_mut();
-        unsafe { ffi::udp_listen(laddr, &mut conn as *mut _) };
-        UdpConnection(conn)
+        let ret = unsafe { ffi::udp_listen(laddr, &mut conn as *mut _) };
+        if ret < 0 {
+            Err(io::Error::from_raw_os_error(ret as i32))
+        } else {
+            Ok(UdpConnection(conn))
+        }
     }
 
     pub fn set_buffers(&self, read_mbufs: u32, write_mbufs: u32) -> Result<(), i32> {
