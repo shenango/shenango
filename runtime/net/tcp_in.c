@@ -284,6 +284,7 @@ void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 	if (ack == c->pcb.snd_una) {
 		c->rep_acks++;
 		if (c->rep_acks >= TCP_FAST_RETRANSMIT_THRESH) {
+			tcp_conn_get(c);
 			thread_spawn(tcp_fast_retransmit, c);
 			c->rep_acks = 0;
 		}
