@@ -900,12 +900,6 @@ void tcp_conn_fail(tcpconn_t *c, int err)
 		waitq_release(&c->tx_wq);
 	}
 
-	/* try to free up some memory */
-	if (c->tx_pending)
-		mbuf_free(c->tx_pending);
-	mbuf_list_free(&c->txq);
-	mbuf_list_free(&c->rxq_ooo);
-
 	/* state machine is disabled, drop ref */
 	tcp_conn_put(c);
 }
@@ -1040,6 +1034,13 @@ void tcp_close(tcpconn_t *c)
 		tcp_conn_fail(c, -ret);
 	tcp_conn_shutdown_rx(c);
 	spin_unlock_np(&c->lock);
+
+	/* try to free up some memory */
+	if (c->tx_pending)
+		mbuf_free(c->tx_pending);
+	mbuf_list_free(&c->txq);
+	mbuf_list_free(&c->rxq_ooo);
+
 	tcp_conn_put(c);
 }
 
