@@ -15,7 +15,7 @@ extern crate test;
 use std::io;
 use std::io::{Write, ErrorKind};
 use std::collections::BTreeMap;
-use std::net::SocketAddrV4;
+use std::net::{Ipv4Addr, SocketAddrV4};
 use std::slice;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -266,7 +266,7 @@ fn run_memcached_preload(
                 let sock1 = Arc::new(
                     match tport {
                         Transport::Tcp =>
-                            backend.create_tcp_connection(addr).unwrap(),
+                            backend.create_tcp_connection(None, addr).unwrap(),
                         Transport::Udp =>
                             backend.create_udp_connection(
                                 "0.0.0.0:0".parse().unwrap(),
@@ -320,6 +320,7 @@ fn run_client(
     tport: Transport,
     distribution: Distribution,
     barrier_group: &mut Option<lockstep::Group>,
+    index: usize,
 ) -> bool {
     let packets_per_thread =
         duration_to_ns(runtime) as usize * packets_per_second / (1000_000_000 * nthreads);
@@ -327,8 +328,9 @@ fn run_client(
 
     let exp = Exp::new(1.0 / ns_per_packet as f64);
     let mut rng = rand::thread_rng();
+    println!("Gen psched {}", packets_per_second);
     let packet_schedules: Vec<(Vec<Packet>, Vec<Option<Duration>>, Connection)> = (0..nthreads)
-        .map(|_| {
+        .map(|tidx| {
             let mut last = 100_000_000;
             let mut packets = Vec::with_capacity(packets_per_thread);
             for _ in 0..packets_per_thread {
@@ -340,9 +342,13 @@ fn run_client(
                     ..Default::default()
                 });
             }
+            let src_addr = SocketAddrV4::new(
+                Ipv4Addr::new(0, 0, 0, 0),
+                (100 + (index * nthreads) + tidx) as u16
+            );
             let socket = match tport {
                 Transport::Tcp =>
-                    backend.create_tcp_connection(addr).unwrap(),
+                    backend.create_tcp_connection(Some(src_addr), addr).unwrap(),
                 Transport::Udp =>
                     backend.create_udp_connection(
                         "0.0.0.0:0".parse().unwrap(),
@@ -608,6 +614,13 @@ fn main() {
                 .help("How many *million* packets should be sent per second"),
         )
         .arg(
+            Arg::with_name("start_mpps")
+                .long("start_mpps")
+                .takes_value(true)
+                .default_value("0.0")
+                .help("Initial rate to sample at"),
+            )
+        .arg(
             Arg::with_name("config")
                 .short("c")
                 .long("config")
@@ -701,6 +714,8 @@ fn main() {
     let nthreads = value_t_or_exit!(matches, "threads", usize);
     let runtime = Duration::from_secs(value_t!(matches, "runtime", u64).unwrap());
     let packets_per_second = (1.0e6 * value_t_or_exit!(matches, "mpps", f32)) as usize;
+    let start_packets_per_second = (1.0e6 * value_t_or_exit!(matches, "start_mpps", f32)) as usize;
+    assert!(start_packets_per_second <= packets_per_second);
     let config = matches.value_of("config");
     let dowarmup = matches.is_present("warmup");
     let proto = value_t_or_exit!(matches, "protocol", Protocol);
@@ -779,22 +794,26 @@ fn main() {
                             tport,
                             distribution,
                             &mut barrier_group,
+                            0,
                         );
                     }
                 }
+                let step_size = (packets_per_second - start_packets_per_second) / samples;
                 for j in 1..=samples {
                     run_client(
                         backend,
                         addr,
                         runtime,
-                        packets_per_second * j / samples,
+                        start_packets_per_second + step_size * j,
                         nthreads,
                         output,
                         proto,
                         tport,
                         distribution,
                         &mut barrier_group,
+                        j,
                     );
+                    backend.sleep(Duration::from_secs(3));
                 }
                 if let Some(ref mut g) = barrier_group {
                     g.barrier();

@@ -52,11 +52,16 @@ impl Backend {
 
     pub fn create_tcp_connection(
         &self,
+        local_addr: Option<SocketAddrV4>,
         remote_addr: SocketAddrV4,
     ) -> io::Result<Connection> {
+        let laddr = match local_addr {
+            Some(x) => x,
+            _ => "0.0.0.0:0".parse().unwrap(),
+        };
         Ok(match *self {
             Backend::Linux => Connection::LinuxTcp(TcpStream::connect(remote_addr)?),
-            Backend::Runtime => Connection::RuntimeTcp(TcpConnection::dial("0.0.0.0:0".parse().unwrap(), remote_addr)?),
+            Backend::Runtime => Connection::RuntimeTcp(TcpConnection::dial(laddr, remote_addr)?),
         })
     }
 
