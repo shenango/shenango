@@ -45,6 +45,7 @@ static void tcp_handle_timeouts(tcpconn_t *c, uint64_t now)
 		struct mbuf *m = list_top(&c->txq, struct mbuf, link);
 		if (m && now - m->timestamp >= TCP_RETRANSMIT_TIMEOUT) {
 			log_debug("tcp: %p retransmission timeout", c);
+			tcp_conn_get(c);
 			do_retransmit = true;
 		}
 	}
@@ -862,6 +863,8 @@ static void tcp_retransmit(void *arg)
 		waitq_wait(&c->tx_wq, &c->lock);
 	tcp_tx_retransmit(c);
 	spin_unlock_np(&c->lock);
+
+	tcp_conn_put(c);
 }
 
 /* resend just one pending egress packet */
@@ -874,6 +877,8 @@ void tcp_fast_retransmit(void *arg)
 		waitq_wait(&c->tx_wq, &c->lock);
 	tcp_tx_fast_retransmit(c);
 	spin_unlock_np(&c->lock);
+
+	tcp_conn_put(c);
 }
 
 /**
