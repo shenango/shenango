@@ -770,7 +770,6 @@ static int tcp_write_wait(tcpconn_t *c, size_t *winlen)
 static void tcp_write_finish(tcpconn_t *c)
 {
 	struct list_head q;
-	thread_t *th;
 
 	assert(c->tx_exclusive == true);
 	list_head_init(&q);
@@ -782,11 +781,17 @@ static void tcp_write_finish(tcpconn_t *c)
 		c->ack_delayed = false;
 	else
 		c->ack_ts = microtime();
-	th = waitq_signal(&c->tx_wq, &c->lock);
+	waitq_release(&c->tx_wq);
 	spin_unlock_np(&c->lock);
 
-	waitq_signal_finish(th);
 	mbuf_list_free(&q);
+	if (c->pcb.state == TCP_STATE_CLOSED) {
+		mbuf_list_free(&c->txq);
+		if (c->tx_pending) {
+			mbuf_free(c->tx_pending);
+			c->tx_pending = NULL;
+		}
+	}
 }
 
 /**
@@ -912,6 +917,18 @@ void tcp_conn_fail(tcpconn_t *c, int err)
 		waitq_release(&c->tx_wq);
 	}
 
+	/* will be freed by the writer if one is busy */
+	if (!c->tx_exclusive) {
+		mbuf_list_free(&c->txq);
+		if (c->tx_pending) {
+			mbuf_free(c->tx_pending);
+			c->tx_pending = NULL;
+		}
+	}
+	if (!c->rx_exclusive)
+		mbuf_list_free(&c->rxq);
+	mbuf_list_free(&c->rxq_ooo);
+
 	/* state machine is disabled, drop ref */
 	tcp_conn_put(c);
 }
@@ -1014,15 +1031,7 @@ void tcp_abort(tcpconn_t *c)
 	r = c->e.raddr;
 	snd_nxt = c->pcb.snd_nxt;
 	tcp_conn_fail(c, ECONNABORTED);
-	while (c->rx_exclusive)
-		waitq_wait(&c->rx_wq, &c->lock);
-	while (c->tx_exclusive)
-		waitq_wait(&c->tx_wq, &c->lock);
 	spin_unlock_np(&c->lock);
-
-	mbuf_list_free(&c->rxq);
-	mbuf_list_free(&c->rxq_ooo);
-	mbuf_list_free(&c->txq);
 
 	for (i = 0; i < 10; i++) {
 		if (tcp_tx_raw_rst(l, r, snd_nxt) == 0)
