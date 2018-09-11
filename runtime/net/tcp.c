@@ -127,7 +127,6 @@ void tcp_conn_set_state(tcpconn_t *c, int new_state)
 	/* unblock any threads waiting for the connection to be established */
 	if (c->pcb.state < TCP_STATE_ESTABLISHED &&
 	    new_state >= TCP_STATE_ESTABLISHED) {
-		waitq_release(&c->rx_wq);
 		waitq_release(&c->tx_wq);
 	}
 
@@ -508,11 +507,11 @@ int tcp_dial(struct netaddr laddr, struct netaddr raddr, tcpconn_t **c_out)
 	tcp_conn_set_state(c, TCP_STATE_SYN_SENT);
 
 	/* wait until the connection is established or there is a failure */
-	while (!c->rx_closed && c->pcb.state < TCP_STATE_ESTABLISHED)
+	while (!c->tx_closed && c->pcb.state < TCP_STATE_ESTABLISHED)
 		waitq_wait(&c->tx_wq, &c->lock);
 
 	/* check if the connection failed */
-	if (c->rx_closed) {
+	if (c->tx_closed) {
 		ret = -c->err;
 		spin_unlock_np(&c->lock);
 		tcp_conn_destroy(c);
@@ -552,11 +551,8 @@ static ssize_t tcp_read_wait(tcpconn_t *c, size_t len,
 	spin_lock_np(&c->lock);
 
 	/* block until there is an actionable event */
-	while (!c->rx_closed &&
-	       (c->pcb.state < TCP_STATE_ESTABLISHED || c->rx_exclusive ||
-		list_empty(&c->rxq))) {
+	while (!c->rx_closed && (c->rx_exclusive || list_empty(&c->rxq)))
 		waitq_wait(&c->rx_wq, &c->lock);
-	}
 
 	/* is the socket closed? */
 	if (c->rx_closed) {
@@ -590,6 +586,7 @@ static ssize_t tcp_read_wait(tcpconn_t *c, size_t len,
 
 	c->pcb.rcv_wnd += readlen;
 	spin_unlock_np(&c->lock);
+
 	return readlen;
 }
 
@@ -751,8 +748,7 @@ static int tcp_write_wait(tcpconn_t *c, size_t *winlen)
 	/* block until there is an actionable event */
 	while (!c->tx_closed &&
 	       (c->pcb.state < TCP_STATE_ESTABLISHED || c->tx_exclusive ||
-		(wraps_lte(c->pcb.snd_una + c->pcb.snd_wnd, c->pcb.snd_nxt) &&
-		 !list_empty(&c->txq)))) {
+		wraps_lte(c->pcb.snd_una + c->pcb.snd_wnd, c->pcb.snd_nxt))) {
 		waitq_wait(&c->tx_wq, &c->lock);
 	}
 
@@ -764,8 +760,8 @@ static int tcp_write_wait(tcpconn_t *c, size_t *winlen)
 
 	/* drop the lock to allow concurrent RX processing */
 	c->tx_exclusive = true;
-	/* must allow at least one byte to avoid zero window deadlock */
-	*winlen = max(c->pcb.snd_una + c->pcb.snd_wnd - c->pcb.snd_nxt, 1);
+	/* TODO: must allow at least one byte to avoid zero window deadlock */
+	*winlen = c->pcb.snd_una + c->pcb.snd_wnd - c->pcb.snd_nxt;
 	spin_unlock_np(&c->lock);
 
 	return 0;
@@ -1018,7 +1014,15 @@ void tcp_abort(tcpconn_t *c)
 	r = c->e.raddr;
 	snd_nxt = c->pcb.snd_nxt;
 	tcp_conn_fail(c, ECONNABORTED);
+	while (c->rx_exclusive)
+		waitq_wait(&c->rx_wq, &c->lock);
+	while (c->tx_exclusive)
+		waitq_wait(&c->tx_wq, &c->lock);
 	spin_unlock_np(&c->lock);
+
+	mbuf_list_free(&c->rxq);
+	mbuf_list_free(&c->rxq_ooo);
+	mbuf_list_free(&c->txq);
 
 	for (i = 0; i < 10; i++) {
 		if (tcp_tx_raw_rst(l, r, snd_nxt) == 0)
@@ -1043,7 +1047,6 @@ void tcp_close(tcpconn_t *c)
 	int ret;
 
 	spin_lock_np(&c->lock);
-	BUG_ON(!waitq_empty(&c->tx_wq));
 	BUG_ON(!waitq_empty(&c->rx_wq));
 	ret = tcp_conn_shutdown_tx(c);
 	if (ret)

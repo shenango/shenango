@@ -151,7 +151,7 @@ void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 {
 	tcpconn_t *c = container_of(e, tcpconn_t, e);
 	struct list_head q;
-	thread_t *rx_th = NULL, *tx_th = NULL;
+	thread_t *rx_th = NULL;
 	const struct ip_hdr *iphdr;
 	const struct tcp_hdr *tcphdr;
 	uint32_t seq, ack, len, snd_nxt, hdr_len;
@@ -305,7 +305,7 @@ void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 			c->pcb.snd_wl2 = ack;
 		}
 		if (snd_was_full && !is_snd_full(c))
-			tx_th = waitq_signal(&c->tx_wq, &c->lock);
+			waitq_release(&c->tx_wq);
 	} else if (wraps_gt(ack, snd_nxt)) {
 		do_ack = true;
 		goto done;
@@ -369,8 +369,6 @@ done:
 	/* deferred work (delayed until after the lock was dropped) */
 	if (rx_th)
 		waitq_signal_finish(rx_th);
-	if (tx_th)
-		waitq_signal_finish(tx_th);
 	mbuf_list_free(&q);
 	if (do_ack)
 		tcp_tx_ack(c);

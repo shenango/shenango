@@ -270,7 +270,7 @@ again:
 
 	/* keep trying to find work until the polling timeout expires */
 	if (rdtsc() - start_tsc <
-	    RUNTIME_SCHED_POLL_US * cycles_per_us * last_nrks &&
+	    min(max(last_nrks, 2), 10) * cycles_per_us &&
 	    !preempt_needed())
 		goto again;
 

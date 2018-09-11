@@ -83,7 +83,7 @@ static inline void waitq_release(waitq_t *q)
  * waitq_empty - returns true if there are no waiters
  * @q: the wait queue to check
  */
-static inline bool waitq_empty(waitq_t * q)
+static inline bool waitq_empty(waitq_t *q)
 {
 	return list_empty(&q->waiters);
 }
