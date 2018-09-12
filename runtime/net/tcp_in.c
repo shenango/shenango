@@ -283,7 +283,16 @@ void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 		c->pcb.snd_wl2 = ack;
 		tcp_conn_set_state(c, TCP_STATE_ESTABLISHED);
 	}
-	if (ack == c->pcb.snd_una) {
+	/*
+	 * Detect a duplicate ACK if:
+	 * 1. The ACK number is the same as the largest seen.
+	 * 2. There is unacknowledged data pending.
+	 * 3. There is no data payload included with the ACK.
+	 * 4. There is no window update.
+	 */
+	if (ack == c->pcb.snd_una &&
+	    c->pcb.snd_una != c->pcb.snd_nxt &&
+	    len == 0) {
 		c->rep_acks++;
 		if (c->rep_acks >= TCP_FAST_RETRANSMIT_THRESH) {
 			tcp_conn_get(c);
@@ -305,6 +314,7 @@ void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 			c->pcb.snd_wnd = win;
 			c->pcb.snd_wl1 = seq;
 			c->pcb.snd_wl2 = ack;
+			c->rep_acks = 0;
 		}
 		if (snd_was_full && !is_snd_full(c))
 			waitq_release(&c->tx_wq);
