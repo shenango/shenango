@@ -192,6 +192,7 @@ tcpconn_t *tcp_conn_alloc(void)
 
 	/* timeouts */
 	c->ack_delayed = false;
+	c->rcv_wnd_full = false;
 	c->ack_ts = 0;
 	c->time_wait_ts = 0;
 	c->rep_acks = 0;
@@ -585,6 +586,10 @@ static ssize_t tcp_read_wait(tcpconn_t *c, size_t len,
 	}
 
 	c->pcb.rcv_wnd += readlen;
+	if (unlikely(c->rcv_wnd_full && c->pcb.rcv_wnd >= TCP_WIN / 4)) {
+		tcp_tx_ack(c);
+		c->rcv_wnd_full = false;
+	}
 	spin_unlock_np(&c->lock);
 
 	return readlen;
@@ -781,17 +786,17 @@ static void tcp_write_finish(tcpconn_t *c)
 		c->ack_delayed = false;
 	else
 		c->ack_ts = microtime();
+	if (c->pcb.state == TCP_STATE_CLOSED) {
+		list_append_list(&q, &c->txq);
+		if (c->tx_pending) {
+			list_add_tail(&q, &c->tx_pending->link);
+			c->tx_pending = NULL;
+		}
+	}
 	waitq_release(&c->tx_wq);
 	spin_unlock_np(&c->lock);
 
 	mbuf_list_free(&q);
-	if (c->pcb.state == TCP_STATE_CLOSED) {
-		mbuf_list_free(&c->txq);
-		if (c->tx_pending) {
-			mbuf_free(c->tx_pending);
-			c->tx_pending = NULL;
-		}
-	}
 }
 
 /**

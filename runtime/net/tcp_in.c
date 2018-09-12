@@ -83,6 +83,8 @@ static void tcp_rx_append_text(tcpconn_t *c, struct mbuf *m)
 	c->pcb.rcv_nxt = m->seg_end;
 	assert(c->pcb.rcv_wnd >= m->seg_end - m->seg_seq);
 	c->pcb.rcv_wnd -= m->seg_end - m->seg_seq;
+	if (c->pcb.rcv_wnd == 0)
+		c->rcv_wnd_full = true;
 	list_add_tail(&c->rxq, &m->link);
 }
 

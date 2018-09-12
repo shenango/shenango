@@ -85,6 +85,7 @@ struct tcpconn {
 
 	/* timeouts */
 	bool			ack_delayed;
+	bool			rcv_wnd_full;
 	uint64_t		ack_ts;
 	uint64_t		time_wait_ts;
 	int			rep_acks;
