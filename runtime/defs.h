@@ -4,8 +4,6 @@
 
 #pragma once
 
-#include <ucontext.h>
-
 #include <base/stddef.h>
 #include <base/list.h>
 #include <base/mem.h>
@@ -34,7 +32,7 @@
 #define RUNTIME_RQ_SIZE		32
 #define RUNTIME_SOFTIRQ_BUDGET	32
 #define RUNTIME_MAX_TIMERS	4096
-#define RUNTIME_SCHED_POLL_US	1
+#define RUNTIME_SCHED_POLL_ITERS	4
 #define RUNTIME_WATCHDOG_US	50
 
 /*

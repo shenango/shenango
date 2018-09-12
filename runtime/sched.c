@@ -198,6 +198,7 @@ static __noreturn void schedule(void)
 	uint64_t start_tsc, end_tsc;
 	thread_t *th = NULL;
 	unsigned int last_nrks;
+	unsigned int iters = 0;
 	int i, sibling;
 
 	/* detect misuse of preempt disable */
@@ -269,9 +270,7 @@ again:
 	}
 
 	/* keep trying to find work until the polling timeout expires */
-	if (rdtsc() - start_tsc <
-	    min(max(last_nrks, 2), 10) * cycles_per_us &&
-	    !preempt_needed())
+	if (!preempt_needed() && ++iters < RUNTIME_SCHED_POLL_ITERS)
 		goto again;
 
 	/* did not find anything to run, park this kthread */
