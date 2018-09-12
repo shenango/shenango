@@ -82,6 +82,7 @@ struct proc {
 	struct thread		*active_threads[NCPU];
 	DEFINE_BITMAP(available_threads, NCPU);
 	struct list_head	idle_threads;
+	unsigned int		inflight_preempts;
 
 	/* network data */
 	struct eth_addr		mac;

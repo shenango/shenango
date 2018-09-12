@@ -59,14 +59,17 @@ bool rx_send_to_runtime(struct proc *p, uint32_t hash, uint64_t cmd,
 {
 	struct thread *th;
 
-	/* if there are no threads running, wake one */
-	if (p->active_thread_count == 0) {
+	/* if there are no threads running and we are guaranteed one, wake one */
+	if (p->active_thread_count == 0 && p->sched_cfg.guaranteed_cores > 0) {
 		th = cores_add_core(p);
 		if (unlikely(!th))
 			return false;
-	} else {
+	} else if (p->active_thread_count > 0) {
 		/* load balance between active threads */
 		th = p->active_threads[hash % p->active_thread_count];
+	} else {
+		/* enqueue to the first idle thread, which will be woken next */
+		th = list_top(&p->idle_threads, struct thread, idle_link);
 	}
 
 	return lrpc_send(&th->rxq, cmd, payload);

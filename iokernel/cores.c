@@ -162,7 +162,7 @@ static inline struct proc *get_overloaded_proc()
 static LIST_HEAD(bursting_procs);
 
 /**
- * proc_set_overloaded - marks a process as bursting
+ * proc_set_bursting - marks a process as bursting
  * p: the process to mark as bursting
  */
 static inline void proc_set_bursting(struct proc *p)
@@ -311,6 +311,11 @@ static struct thread *pick_thread_for_proc(struct proc *p, int core)
 		return list_top(&p->idle_threads, struct thread, idle_link);
 	}
 
+	/* if this proc was preempted down to 0 threads, reuse the kthread that
+	   ran most recently, because it has all the queued threads and packets */
+	if (proc_is_overloaded(p) && p->active_thread_count == 0)
+		return list_top(&p->idle_threads, struct thread, idle_link);
+
 	/* try to reuse the same kthread on this core */
 	lastth = core_history[core].current;
 	if (lastth && lastth->p == p && lastth->parked)
@@ -406,8 +411,10 @@ static struct thread *pick_thread_for_core(int core)
 	/* if this core was preempted, grant it to the thread that is waiting for
 	 * it */
 	th_next = core_history[core].next;
-	if (th_next != NULL && !th_next->p->removed)
+	if (th_next != NULL && !th_next->p->removed) {
+		core_history[core].current->p->inflight_preempts--;
 		return th_next;
+	}
 
 	/* try to find an overloaded proc to grant this core to */
 	if (no_overloaded_procs())
@@ -565,6 +572,7 @@ struct thread *cores_add_core(struct proc *p)
 	thread_reserve(th, core);
 	th_current = core_history[core].current;
 	proc_set_overloaded(th_current->p);
+	th_current->p->inflight_preempts++;
 	BUG_ON(core_history[core].next);
 	core_history[core].next = th;
 	if (unlikely(syscall(SYS_tgkill, th_current->p->pid,
@@ -610,6 +618,7 @@ void cores_init_proc(struct proc *p)
 	p->active_thread_count = 0;
 	bitmap_init(p->available_threads, p->thread_count, true);
 	list_head_init(&p->idle_threads);
+	p->inflight_preempts = 0;
 	for (i = 0; i < p->thread_count; i++) {
 		ret = cores_pin_thread(p->threads[i].tid, core_assign.linux_core);
 		if (ret < 0) {
@@ -708,7 +717,12 @@ void cores_adjust_assignments(void)
 	   which procs want more burstable cores */
 	for (i = 0; i < dp.nr_clients; i++) {
 		p = dp.clients[i];
-		proc_clear_overloaded(p);
+
+		/* clear overloaded flag as long as we haven't been preempted
+		   down to 0 cores */
+		if (p->active_thread_count - p->inflight_preempts > 0)
+			proc_clear_overloaded(p);
+
 		if (!cores_is_proc_congested(p))
 			continue;
 
