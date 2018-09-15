@@ -6,6 +6,8 @@ stress_linux
 tbench
 tbench_linux
 netbench
+netbench2
+netbench_udp
 netbench_linux
 netperf
 linux_mech_bench
