@@ -270,7 +270,9 @@ again:
 	}
 
 	/* keep trying to find work until the polling timeout expires */
-	if (!preempt_needed() && ++iters < RUNTIME_SCHED_POLL_ITERS)
+	if (!preempt_needed() &&
+	    (++iters < RUNTIME_SCHED_POLL_ITERS ||
+	     rdtsc() - start_tsc < cycles_per_us * 2))
 		goto again;
 
 	/* did not find anything to run, park this kthread */
