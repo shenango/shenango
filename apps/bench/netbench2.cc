@@ -33,8 +33,6 @@ struct payload {
 using namespace std::chrono;
 using sec = duration<double, std::micro>;
 
-// The number of samples to discard from the start and end.
-constexpr uint64_t kDiscardSamples = 1000;
 // The maximum lateness to tolerate before dropping egress samples.
 constexpr uint64_t kMaxCatchUpUS = 5;
 
@@ -259,14 +257,6 @@ void SteadyStateExperiment(int threads, double req_rate, double service_time) {
   w.erase(std::remove_if(w.begin(), w.end(),
                          [](const work_unit& s){return s.duration_us == 0;}),
           w.end());
-#if 0
-  std::sort(w.begin(), w.end(),
-            [](const work_unit& s1, work_unit& s2){
-              return s1.start_us < s2.start_us;});
-  w.erase(w.begin(), w.begin() + kDiscardSamples);
-  w.erase(w.end() - kDiscardSamples, w.end());
-#endif
-
   reqs_per_sec /= kRounds;
   std::sort(w.begin(), w.end(),
             [](const work_unit& s1, work_unit& s2){
@@ -297,7 +287,7 @@ void SteadyStateExperiment(int threads, double req_rate, double service_time) {
 void LoadShiftExperiment(int threads, double req_rate1, double req_rate2,
                          double service_time) {
   auto w = RunExperiment(threads, nullptr, [=]{
-    std::mt19937 g(microtime());
+    std::mt19937 g(rand());
     std::exponential_distribution<double> wd(1.0 / service_time);
     std::exponential_distribution<double>
       rd1(1.0 / (1000000.0 / (req_rate1 / static_cast<double>(threads))));
