@@ -20,6 +20,7 @@ extern "C" {
 #include <algorithm>
 #include <numeric>
 #include <random>
+#include <utility>
 
 namespace {
 
@@ -40,10 +41,15 @@ constexpr uint64_t kMaxCatchUpUS = 5;
 int threads;
 // the remote UDP address of the server.
 netaddr raddr;
-// the number of samples to gather.
-uint64_t n;
 // the mean service time in us.
 double st;
+// number of iterations required for 1us on target server
+int iterations_per_us = 83;
+
+// Number of seconds to warmup at rate 0
+constexpr uint64_t kWarmupUpSeconds = 5;
+
+static std::vector<std::pair<double, uint64_t>> rates;
 
 void ServerWorker(std::unique_ptr<rt::TcpConn> c) {
   payload p;
@@ -88,9 +94,8 @@ struct work_unit {
 };
 
 template <class Arrival, class Service>
-std::vector<work_unit> GenerateWork(Arrival a, Service s, double last_us) {
+std::vector<work_unit> GenerateWork(Arrival a, Service s, double cur_us, double last_us) {
   std::vector<work_unit> w;
-  double cur_us = 0;
   while (cur_us < last_us) {
     cur_us += a();
     w.emplace_back(work_unit{cur_us, s(), 0});
@@ -135,8 +140,9 @@ ClientWorker(rt::TcpConn *c, rt::WaitGroup *starter,
 
   payload p[kBatchSize];
   int j = 0;
+  auto wsize = w.size();
 
-  for (unsigned int i = 0; i < w.size(); ++i) {
+  for (unsigned int i = 0; i < wsize; ++i) {
     barrier();
     auto now = steady_clock::now();
     barrier();
@@ -157,17 +163,19 @@ ClientWorker(rt::TcpConn *c, rt::WaitGroup *starter,
     barrier();
 
     // Enqueue a network request.
-    p[j].work_iterations = hton64(static_cast<uint64_t>(w[i].work_us * 83));
+    p[j].work_iterations = hton64(static_cast<uint64_t>(w[i].work_us * iterations_per_us));
     p[j].index = hton64(i);
     j++;
 
-    if (j >= kBatchSize || i == n - 1) {
+    if (j >= kBatchSize || i == wsize - 1) {
       ssize_t ret = c->WriteFull(p, sizeof(payload) * j);
       if (ret != static_cast<ssize_t>(sizeof(payload) * j))
         panic("write failed, ret = %ld", ret);
       j = 0;
     }
   }
+
+  rt::Sleep(5000 * rt::kMilliseconds);
 
   c->Shutdown(SHUT_RDWR);
   th.Join();
@@ -247,7 +255,7 @@ void SteadyStateExperiment(int threads, double req_rate, double service_time) {
       std::exponential_distribution<double>
         rd(1.0 / (1000000.0 / (req_rate / static_cast<double>(threads))));
       std::exponential_distribution<double> wd(1.0 / service_time);
-      return GenerateWork(std::bind(rd, g), std::bind(wd, g), 1000000); 
+      return GenerateWork(std::bind(rd, g), std::bind(wd, g), 0, 1000000); 
     });
     w.insert(w.end(), t.begin(), t.end());
     reqs_per_sec += tmp;
@@ -284,30 +292,25 @@ void SteadyStateExperiment(int threads, double req_rate, double service_time) {
             << " max: "    << max << std::endl;
 }
 
-void LoadShiftExperiment(int threads, double req_rate1, double req_rate2,
+void LoadShiftExperiment(int threads, const std::vector<std::pair<double, uint64_t>> &rates,
                          double service_time) {
   auto w = RunExperiment(threads, nullptr, [=]{
     std::mt19937 g(rand());
     std::exponential_distribution<double> wd(1.0 / service_time);
-    std::exponential_distribution<double>
-      rd1(1.0 / (1000000.0 / (req_rate1 / static_cast<double>(threads))));
     std::vector<work_unit> w1;
-    double cur_us = 0;
-    while (cur_us < 1000) {
-      cur_us += rd1(g);
-      w1.emplace_back(work_unit{cur_us, wd(g), 0});
-    }
-    std::exponential_distribution<double>
-      rd2(1.0 / (1000000.0 / (req_rate2 / static_cast<double>(threads))));
-    while (cur_us < 2000) {
-      cur_us += rd2(g);
-      w1.emplace_back(work_unit{cur_us, wd(g), 0});
+    uint64_t last_us = 0;
+    for (auto &r : rates) {
+      std::exponential_distribution<double>
+        rd(1.0 / (1000000.0 / (r.first / static_cast<double>(threads))));
+      auto work = GenerateWork(std::bind(rd, g), std::bind(wd, g), last_us, last_us + r.second);
+      last_us = work.back().start_us;
+      w1.insert(w1.end(), work.begin(), work.end()); 
     }
     return w1;
   });
 
   w.erase(std::remove_if(w.begin(), w.end(),
-                         [](const work_unit& s){return s.duration_us == 0;}),
+                         [](const work_unit& s){return s.duration_us == 0 || s.start_us < kWarmupUpSeconds * 1e6;}),
           w.end());
   std::sort(w.begin(), w.end(), [](const work_unit& s1, work_unit& s2){
     return s1.start_us < s2.start_us;
@@ -320,8 +323,8 @@ void LoadShiftExperiment(int threads, double req_rate1, double req_rate2,
 }
 
 void ClientHandler(void *arg) {
-  LoadShiftExperiment(threads, 100000, 600000, 10);
-#if 1
+  LoadShiftExperiment(threads, rates, st);
+#if 0
   for (double i = 100000; i <= 8000000; i += 100000)
     SteadyStateExperiment(threads, i, st);
 #endif
@@ -337,10 +340,21 @@ int StringToAddr(const char *str, uint32_t *addr) {
   return 0;
 }
 
+std::vector<std::string> split(const std::string &text, char sep) {
+  std::vector<std::string> tokens;
+  std::string::size_type start = 0, end = 0;
+  while ((end = text.find(sep, start)) != std::string::npos) {
+    tokens.push_back(text.substr(start, end - start));
+    start = end + 1;
+  }
+  tokens.push_back(text.substr(start));
+  return tokens;
+}
+
 } // anonymous namespace
 
 int main(int argc, char *argv[]) {
-  int ret;
+  int i, ret;
 
   if (argc < 3) {
     std::cerr << "usage: [cfg_file] [cmd] ..." << std::endl;
@@ -359,9 +373,8 @@ int main(int argc, char *argv[]) {
     return -EINVAL;
   }
 
-  if (argc != 7) {
-    std::cerr << "usage: [cfg_file] client [#threads] [remote_ip] [n] [service_us]"
-              << std::endl;
+  if (argc < 7) {
+    std::cerr << "usage: [cfg_file] client [#threads] [remote_ip] [service_us] [<request_rate>:<us_duration>]..." << std::endl;
     return -EINVAL;
   }
 
@@ -371,8 +384,19 @@ int main(int argc, char *argv[]) {
   if (ret) return -EINVAL;
   raddr.port = kNetbenchPort;
 
-  n = std::stoll(argv[5], nullptr, 0);
-  st = std::stod(argv[6], nullptr);
+  st = std::stod(argv[5], nullptr);
+
+  for (i = 6; i < argc; i++) {
+    std::vector<std::string> tokens = split(argv[i], ':');
+    if (tokens.size() != 2)
+      return -EINVAL;
+    double rate = std::stod(tokens[0], nullptr);
+    uint64_t duration = std::stoll(tokens[1], nullptr, 0);
+    if (i == 6) {
+      rates.emplace_back(rate, kWarmupUpSeconds * 1e6); 
+    }
+    rates.emplace_back(rate, duration);
+  }
 
   ret = runtime_init(argv[1], ClientHandler, NULL);
   if (ret) {
