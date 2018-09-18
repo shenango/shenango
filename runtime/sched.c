@@ -272,7 +272,7 @@ again:
 	/* keep trying to find work until the polling timeout expires */
 	if (!preempt_needed() &&
 	    (++iters < RUNTIME_SCHED_POLL_ITERS ||
-	     rdtsc() - start_tsc < cycles_per_us * 2))
+	     rdtsc() - start_tsc < cycles_per_us * RUNTIME_SCHED_MIN_POLL_US))
 		goto again;
 
 	/* did not find anything to run, park this kthread */
