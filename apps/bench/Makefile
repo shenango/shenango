@@ -5,6 +5,8 @@ CXXPATH = ../../bindings/cc
 INC     = -I../../inc -I../../bindings/cc -I./
 CXXFLAGS  = -g -Wall -std=gnu++11 -D_GNU_SOURCE $(INC) -mssse3
 LDFLAGS = -T../../base/base.ld -no-pie
+ARACHNE ?= /home/friedj/memcached-arachne/arachne-all/Arachne
+
 LD	= g++
 CC	= g++
 AR	= ar
@@ -61,6 +63,10 @@ netperf_obj = $(netperf_src:.cc=.o)
 linux_mech_bench_src = linux_mech_bench.cc
 linux_mech_bench_obj = $(linux_mech_bench_src:.cc=.o)
 
+LIBS_ARACHNE=-I$(ARACHNE)/include -I$(ARACHNE)/../CoreArbiter/include  -I$(ARACHNE)/../PerfUtils/include \
+	-L$(ARACHNE)/lib -lArachne -L$(ARACHNE)/../CoreArbiter/lib -lCoreArbiter \
+	$(ARACHNE)/../PerfUtils/lib/libPerfUtils.a -lpcrecpp -pthread
+
 # must be first
 all: tbench tbench_linux callibrate stress efficiency efficiency_linux \
      netbench netbench2 netbench_udp netbench_linux netperf linux_mech_bench \
@@ -73,6 +79,10 @@ tbench: $(tbench_obj)
 
 tbench_linux: $(tbench_linux_obj)
 	$(LD) -o $@ $(LDFLAGS) $(tbench_linux_obj) -lpthread
+
+tbench_arachne: tbench_arachne.cc
+	$(LD) -o $@ $(LDFLAGS) tbench_arachne.cc $(LIBS_ARACHNE)
+
 
 callibrate: $(fake_worker_obj) $(callibrate_obj)
 	$(LD) -o $@ $(LDFLAGS) $(fake_worker_obj) $(callibrate_obj) -lpthread
@@ -146,4 +156,4 @@ endif
 clean:
 	rm -f $(obj) $(dep) tbench tbench_linux callibrate stress efficiency \
 	efficiency_linux netbench netbench2 netbench_udp netbench_linux \
-	netperf linux_mech_bench stress_linux
+	netperf linux_mech_bench stress_linux tbench_arachne
