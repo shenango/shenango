@@ -577,9 +577,9 @@ fn run_local(
                 let (work_iterations, completion_time_ns) = {
                     let packet = &mut packets[i];
 
-                    let t = start.elapsed();
-                    if t < packet.target_start {
-                        backend.sleep(packet.target_start - t);
+                    let mut t = start.elapsed();
+                    while t < packet.target_start {
+                        t = start.elapsed();
                     }
                     // if start.elapsed() > packet.target_start + Duration::from_micros(5) {
                     //     continue;
