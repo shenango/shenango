@@ -566,7 +566,7 @@ fn run_local(
     let start_unix = SystemTime::now();
     let start = Instant::now();
 
-    struct AtomicU64Pointer(*mut AtomicU64);
+    struct AtomicU64Pointer(*const AtomicU64);
     unsafe impl Send for AtomicU64Pointer {}
 
     let mut send_threads = Vec::new();
@@ -588,7 +588,7 @@ fn run_local(
                     packet.actual_start = Some(start.elapsed());
                     (
                         packet.work_iterations,
-                        AtomicU64Pointer(&mut packet.completion_time_ns as *mut AtomicU64),
+                        AtomicU64Pointer(&packet.completion_time_ns as *const AtomicU64),
                     )
                 };
 
