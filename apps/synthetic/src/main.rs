@@ -1,3 +1,5 @@
+#![feature(duration_as_u128)]
+#![feature(integer_atomics)]
 #![feature(nll)]
 #![feature(test)]
 #[macro_use]
@@ -12,15 +14,16 @@ extern crate rand;
 extern crate shenango;
 extern crate test;
 
-use std::io;
-use std::io::{Write, ErrorKind};
 use std::collections::BTreeMap;
+use std::f32::INFINITY;
+use std::io;
+use std::io::{ErrorKind, Write};
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::slice;
 use std::str::FromStr;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use std::f32::INFINITY;
 
 use clap::{App, Arg};
 use rand::distributions::{Exp, IndependentSample};
@@ -39,6 +42,7 @@ pub struct Packet {
     randomness: u64,
     target_start: Duration,
     actual_start: Option<Duration>,
+    completion_time_ns: AtomicU64,
     completion_time: Option<Duration>,
 }
 
@@ -105,20 +109,11 @@ enum Protocol {
 }}
 
 impl Protocol {
-    fn gen_request(
-        &self,
-        i: usize,
-        p: &Packet,
-        buf: &mut Vec<u8>,
-        tport: Transport
-    ) {
+    fn gen_request(&self, i: usize, p: &Packet, buf: &mut Vec<u8>, tport: Transport) {
         match *self {
-            Protocol::Memcached =>
-                MemcachedProtocol::gen_request(i, p, buf, tport),
-            Protocol::Synthetic =>
-                SyntheticProtocol::gen_request(i, p, buf, tport),
-            Protocol::Dns =>
-                DnsProtocol::gen_request(i, p, buf, tport),
+            Protocol::Memcached => MemcachedProtocol::gen_request(i, p, buf, tport),
+            Protocol::Synthetic => SyntheticProtocol::gen_request(i, p, buf, tport),
+            Protocol::Dns => DnsProtocol::gen_request(i, p, buf, tport),
         }
     }
 
@@ -126,15 +121,12 @@ impl Protocol {
         &self,
         sock: &Connection,
         tport: Transport,
-        scratch: &mut [u8]
+        scratch: &mut [u8],
     ) -> io::Result<usize> {
         match *self {
-           Protocol::Synthetic =>
-                SyntheticProtocol::read_response(sock, tport, scratch),
-            Protocol::Memcached =>
-                MemcachedProtocol::read_response(sock, tport, scratch),
-            Protocol::Dns =>
-                DnsProtocol::read_response(sock, tport, scratch)
+            Protocol::Synthetic => SyntheticProtocol::read_response(sock, tport, scratch),
+            Protocol::Memcached => MemcachedProtocol::read_response(sock, tport, scratch),
+            Protocol::Dns => DnsProtocol::read_response(sock, tport, scratch),
         }
     }
 }
@@ -186,15 +178,12 @@ fn run_linux_udp_server(backend: Backend, addr: SocketAddrV4, nthreads: usize) {
                     socket.send_to(&buf[..len], remote_addr).unwrap();
                 }
             })
-        })
-        .collect();
+        }).collect();
 
     for j in join_handles {
         j.join().unwrap();
     }
 }
-
-
 
 fn socket_worker(socket: &mut Connection) {
     let mut v = vec![0; 4096];
@@ -204,13 +193,13 @@ fn socket_worker(socket: &mut Connection) {
         let payload = Payload::deserialize(socket)?;
         work(payload.work_iterations);
         payload.serialize_into(v)?;
-        Ok(socket.write_all(&v [..])?)
+        Ok(socket.write_all(&v[..])?)
     };
     loop {
         if let Err(e) = r(socket, &mut v) {
             match e.raw_os_error() {
-              Some(-104) | Some(104) => break,
-              _ => {},
+                Some(-104) | Some(104) => break,
+                _ => {}
             }
             if e.kind() != ErrorKind::UnexpectedEof {
                 println!("Receive thread: {}", e);
@@ -227,7 +216,7 @@ fn run_tcp_server(backend: Backend, addr: SocketAddrV4) {
         match tcpq.accept() {
             Ok(mut c) => {
                 backend.spawn_thread(move || socket_worker(&mut c));
-            },
+            }
             Err(e) => {
                 println!("Listener: {}", e);
             }
@@ -253,27 +242,17 @@ fn run_spawner_server(addr: SocketAddrV4) {
     }
 }
 
-fn run_memcached_preload(
-    backend: Backend,
-    tport: Transport,
-    addr: SocketAddrV4,
-    nthreads: usize,
-) {
+fn run_memcached_preload(backend: Backend, tport: Transport, addr: SocketAddrV4, nthreads: usize) {
     let perthread = (memcached::NVALUES as usize + nthreads - 1) / nthreads;
     let join_handles: Vec<JoinHandle<_>> = (0..nthreads)
         .map(|i| {
             backend.spawn_thread(move || {
-                let sock1 = Arc::new(
-                    match tport {
-                        Transport::Tcp =>
-                            backend.create_tcp_connection(None, addr).unwrap(),
-                        Transport::Udp =>
-                            backend.create_udp_connection(
-                                "0.0.0.0:0".parse().unwrap(),
-                                Some(addr)
-                            ).unwrap(),
-                    }
-                );
+                let sock1 = Arc::new(match tport {
+                    Transport::Tcp => backend.create_tcp_connection(None, addr).unwrap(),
+                    Transport::Udp => backend
+                        .create_udp_connection("0.0.0.0:0".parse().unwrap(), Some(addr))
+                        .unwrap(),
+                });
                 let socket = sock1.clone();
                 backend.spawn_thread(move || {
                     backend.sleep(Duration::from_secs(20));
@@ -287,22 +266,26 @@ fn run_memcached_preload(
                 let mut vec_r: Vec<u8> = vec![0; 4096];
                 for n in 0..perthread {
                     vec_s.clear();
-                    MemcachedProtocol::set_request((i * perthread + n) as u64, 0, &mut vec_s, tport);
+                    MemcachedProtocol::set_request(
+                        (i * perthread + n) as u64,
+                        0,
+                        &mut vec_s,
+                        tport,
+                    );
 
                     if let Err(e) = (&*sock1).write_all(&vec_s[..]) {
                         println!("Preload send ({}/{}): {}", n, perthread, e);
                         break;
                     }
 
-                    if let Err(e) = MemcachedProtocol::read_response(&sock1, tport, &mut vec_r[..]) {
+                    if let Err(e) = MemcachedProtocol::read_response(&sock1, tport, &mut vec_r[..])
+                    {
                         println!("preload receive ({}/{}): {}", n, perthread, e);
                         break;
                     }
-
                 }
             })
-        })
-        .collect();
+        }).collect();
 
     for j in join_handles {
         j.join().unwrap();
@@ -344,20 +327,16 @@ fn run_client(
             }
             let src_addr = SocketAddrV4::new(
                 Ipv4Addr::new(0, 0, 0, 0),
-                (100 + (index * nthreads) + tidx) as u16
+                (100 + (index * nthreads) + tidx) as u16,
             );
             let socket = match tport {
-                Transport::Tcp =>
-                    backend.create_tcp_connection(Some(src_addr), addr).unwrap(),
-                Transport::Udp =>
-                    backend.create_udp_connection(
-                        "0.0.0.0:0".parse().unwrap(),
-                        Some(addr)
-                    ).unwrap(),
+                Transport::Tcp => backend.create_tcp_connection(Some(src_addr), addr).unwrap(),
+                Transport::Udp => backend
+                    .create_udp_connection("0.0.0.0:0".parse().unwrap(), Some(addr))
+                    .unwrap(),
             };
             (packets, vec![None; packets_per_thread], socket)
-        })
-        .collect();
+        }).collect();
 
     if let Some(ref mut g) = *barrier_group {
         g.barrier();
@@ -368,7 +347,6 @@ fn run_client(
     let mut send_threads = Vec::new();
     let mut receive_threads = Vec::new();
     for (mut packets, mut receive_times, socket) in packet_schedules {
-
         let socket = Arc::new(socket);
         let socket2 = socket.clone();
 
@@ -443,12 +421,10 @@ fn run_client(
                 .unwrap()
                 .into_iter()
                 .zip(r.join().unwrap().into_iter())
-        })
-        .map(|(p, r)| Packet {
+        }).map(|(p, r)| Packet {
             completion_time: r,
             ..p
-        })
-        .collect();
+        }).collect();
     packets.sort_by_key(|p| p.target_start);
 
     // Discard the first 10% of the packets.
@@ -458,13 +434,12 @@ fn run_client(
     let dropped = packets
         .iter()
         .filter(|p| p.completion_time.is_none())
-        .count() - never_sent;
+        .count()
+        - never_sent;
     if packets.len() - dropped - never_sent <= 1 {
         match output {
             OutputMode::Silent => {}
-            OutputMode::Normal
-            | OutputMode::Buckets
-            | OutputMode::Trace => {
+            OutputMode::Normal | OutputMode::Buckets | OutputMode::Trace => {
                 println!(
                     "{}, {}, 0, {}, {}, {}",
                     distribution.name(),
@@ -490,28 +465,220 @@ fn run_client(
         .filter_map(|p| match (p.actual_start, p.completion_time) {
             (Some(ref start), Some(ref end)) => Some(*end - *start),
             _ => None,
-        })
-        .collect();
+        }).collect();
     latencies.sort();
-
 
     match output {
         OutputMode::Silent => {}
-        OutputMode::Normal
-        | OutputMode::Buckets => {
+        OutputMode::Normal | OutputMode::Buckets => {
             let percentile = |p| {
                 let idx = ((packets.len() - never_sent) as f32 * p / 100.0) as usize;
                 if idx >= latencies.len() {
                     return INFINITY;
                 }
-                duration_to_ns(latencies[idx]) as f32
-                    / 1000.0
+                duration_to_ns(latencies[idx]) as f32 / 1000.0
             };
 
             println!(
                 "{}, {}, {}, {}, {}, {:.1}, {:.1}, {:.1}, {:.1}, {:.1}, {}",
                 distribution.name(),
-                (packets.len() - never_sent) as u64 * 1000_000_000 / duration_to_ns(last_send - first_send),
+                (packets.len() - never_sent) as u64 * 1000_000_000
+                    / duration_to_ns(last_send - first_send),
+                latencies.len() as u64 * 1000_000_000 / duration_to_ns(last_send - first_send),
+                dropped,
+                never_sent,
+                percentile(50.0),
+                percentile(90.0),
+                percentile(99.0),
+                percentile(99.9),
+                percentile(99.99),
+                start_unix.duration_since(UNIX_EPOCH).unwrap().as_secs()
+            );
+        }
+        OutputMode::Trace => {
+            packets.sort_by_key(|p| p.actual_start.unwrap_or(p.target_start));
+            for p in packets {
+                if let Some(completion_time) = p.completion_time {
+                    let actual_start = p.actual_start.unwrap();
+                    println!(
+                        "{} {} {}",
+                        duration_to_ns(actual_start),
+                        duration_to_ns(actual_start) as i64 - duration_to_ns(p.target_start) as i64,
+                        duration_to_ns(completion_time - actual_start)
+                    )
+                } else if p.actual_start.is_some() {
+                    let actual_start = p.actual_start.unwrap();
+                    println!(
+                        "{} {} -1",
+                        duration_to_ns(actual_start),
+                        duration_to_ns(actual_start) as i64 - duration_to_ns(p.target_start) as i64,
+                    )
+                } else {
+                    println!("{} -1 -1", duration_to_ns(p.target_start))
+                }
+            }
+        }
+    }
+    if let OutputMode::Buckets = output {
+        let mut buckets = BTreeMap::new();
+
+        for l in latencies {
+            *buckets.entry(duration_to_ns(l) / 1000).or_insert(0) += 1;
+        }
+        print!("Latencies: ");
+        for k in buckets.keys() {
+            print!("{}:{} ", k, buckets[k]);
+        }
+        println!("");
+    }
+    true
+}
+fn run_local(
+    backend: Backend,
+    runtime: Duration,
+    packets_per_second: usize,
+    nthreads: usize,
+    output: OutputMode,
+    distribution: Distribution,
+) -> bool {
+    let packets_per_thread =
+        duration_to_ns(runtime) as usize * packets_per_second / (1000_000_000 * nthreads);
+    let ns_per_packet = nthreads * 1000_000_000 / packets_per_second;
+
+    let exp = Exp::new(1.0 / ns_per_packet as f64);
+    let mut rng = rand::thread_rng();
+    let packet_schedules: Vec<Vec<Packet>> = (0..nthreads)
+        .map(|_| {
+            let mut last = 100_000_000;
+            let mut packets = Vec::with_capacity(packets_per_thread);
+            for _ in 0..packets_per_thread {
+                last += exp.ind_sample(&mut rng) as u64;
+                packets.push(Packet {
+                    randomness: rng.gen::<u64>(),
+                    target_start: Duration::from_nanos(last),
+                    work_iterations: distribution.sample(&mut rng),
+                    ..Default::default()
+                });
+            }
+            packets
+        }).collect();
+
+    let start_unix = SystemTime::now();
+    let start = Instant::now();
+
+    struct AtomicU64Pointer(*mut AtomicU64);
+    unsafe impl Send for AtomicU64Pointer {}
+
+    let mut send_threads = Vec::new();
+    for mut packets in packet_schedules {
+        send_threads.push(backend.spawn_thread(move || {
+            let remaining = Arc::new(AtomicUsize::new(packets.len()));
+            for i in 0..packets.len() {
+                let (work_iterations, completion_time_ns) = {
+                    let packet = &mut packets[i];
+
+                    let t = start.elapsed();
+                    if t < packet.target_start {
+                        backend.sleep(packet.target_start - t);
+                    }
+                    // if start.elapsed() > packet.target_start + Duration::from_micros(5) {
+                    //     continue;
+                    // }
+
+                    packet.actual_start = Some(start.elapsed());
+                    (
+                        packet.work_iterations,
+                        AtomicU64Pointer(&mut packet.completion_time_ns as *mut AtomicU64),
+                    )
+                };
+
+                let remaining = remaining.clone();
+                backend.spawn_thread(move || {
+                    work(work_iterations);
+                    unsafe {
+                        (*completion_time_ns.0)
+                            .store(start.elapsed().as_nanos() as u64, Ordering::SeqCst);
+                    }
+                    remaining.fetch_sub(1, Ordering::SeqCst);
+                });
+            }
+
+            while remaining.load(Ordering::SeqCst) > 0 {
+                // do nothing
+            }
+
+            packets
+        }))
+    }
+
+    let mut packets: Vec<_> = send_threads
+        .into_iter()
+        .flat_map(|s| s.join().unwrap().into_iter())
+        .map(|mut p| {
+            p.completion_time = Some(Duration::from_nanos(
+                p.completion_time_ns.load(Ordering::SeqCst),
+            ));
+            p
+        }).collect();
+    packets.sort_by_key(|p| p.target_start);
+
+    // Discard the first 10% of the packets.
+    let mut packets = packets.split_off(packets.len() / 10);
+
+    let never_sent = packets.iter().filter(|p| p.actual_start.is_none()).count();
+    let dropped = packets
+        .iter()
+        .filter(|p| p.completion_time.is_none())
+        .count()
+        - never_sent;
+    if packets.len() - dropped - never_sent <= 1 {
+        match output {
+            OutputMode::Silent => {}
+            OutputMode::Normal | OutputMode::Buckets | OutputMode::Trace => {
+                println!(
+                    "{}, {}, 0, {}, {}, {}",
+                    distribution.name(),
+                    packets_per_second,
+                    dropped,
+                    never_sent,
+                    start_unix.duration_since(UNIX_EPOCH).unwrap().as_secs()
+                );
+            }
+        }
+        return false;
+    }
+
+    if let OutputMode::Silent = output {
+        return true;
+    }
+
+    let first_send = packets.iter().filter_map(|p| p.actual_start).min().unwrap();
+    let last_send = packets.iter().filter_map(|p| p.actual_start).max().unwrap();
+
+    let mut latencies: Vec<_> = packets
+        .iter()
+        .filter_map(|p| match (p.actual_start, p.completion_time) {
+            (Some(ref start), Some(ref end)) => Some(*end - *start),
+            _ => None,
+        }).collect();
+    latencies.sort();
+
+    match output {
+        OutputMode::Silent => {}
+        OutputMode::Normal | OutputMode::Buckets => {
+            let percentile = |p| {
+                let idx = ((packets.len() - never_sent) as f32 * p / 100.0) as usize;
+                if idx >= latencies.len() {
+                    return INFINITY;
+                }
+                duration_to_ns(latencies[idx]) as f32 / 1000.0
+            };
+
+            println!(
+                "{}, {}, {}, {}, {}, {:.1}, {:.1}, {:.1}, {:.1}, {:.1}, {}",
+                distribution.name(),
+                (packets.len() - never_sent) as u64 * 1000_000_000
+                    / duration_to_ns(last_send - first_send),
                 latencies.len() as u64 * 1000_000_000 / duration_to_ns(last_send - first_send),
                 dropped,
                 never_sent,
@@ -569,16 +736,14 @@ fn main() {
                 .index(1)
                 .help("Address and port to listen on")
                 .required(true),
-        )
-        .arg(
+        ).arg(
             Arg::with_name("threads")
                 .short("t")
                 .long("threads")
                 .value_name("T")
                 .default_value("1")
                 .help("Number of client threads"),
-        )
-        .arg(
+        ).arg(
             Arg::with_name("mode")
                 .short("m")
                 .long("mode")
@@ -590,43 +755,35 @@ fn main() {
                     "spawner-server",
                     "work-bench",
                     "memcached-preload",
-                ])
-                .required(true)
-                .requires_ifs(&[
-                    ("runtime-client", "config"),
-                    ("spawner-server", "config"),
-                ])
+                    "local-client",
+                ]).required(true)
+                .requires_ifs(&[("runtime-client", "config"), ("spawner-server", "config")])
                 .help("Which mode to run in"),
-        )
-        .arg(
+        ).arg(
             Arg::with_name("runtime")
                 .short("r")
                 .long("runtime")
                 .takes_value(true)
                 .default_value("10")
                 .help("How long the application should run for"),
-        )
-        .arg(
+        ).arg(
             Arg::with_name("mpps")
                 .long("mpps")
                 .takes_value(true)
                 .default_value("0.02")
                 .help("How many *million* packets should be sent per second"),
-        )
-        .arg(
+        ).arg(
             Arg::with_name("start_mpps")
                 .long("start_mpps")
                 .takes_value(true)
                 .default_value("0.0")
                 .help("Initial rate to sample at"),
-            )
-        .arg(
+        ).arg(
             Arg::with_name("config")
                 .short("c")
                 .long("config")
                 .takes_value(true),
-        )
-        .arg(
+        ).arg(
             Arg::with_name("protocol")
                 .short("p")
                 .long("protocol")
@@ -634,14 +791,12 @@ fn main() {
                 .possible_values(&["synthetic", "memcached", "dns"])
                 .default_value("synthetic")
                 .help("Server protocol"),
-        )
-        .arg(
+        ).arg(
             Arg::with_name("warmup")
                 .long("warmup")
                 .takes_value(false)
                 .help("Run the warmup routine"),
-        )
-        .arg(
+        ).arg(
             Arg::with_name("output")
                 .short("o")
                 .long("output")
@@ -649,8 +804,7 @@ fn main() {
                 .possible_values(&["silent", "normal", "buckets", "trace"])
                 .default_value("normal")
                 .help("How to display loadgen results"),
-        )
-        .arg(
+        ).arg(
             Arg::with_name("distribution")
                 .long("distribution")
                 .short("d")
@@ -658,57 +812,49 @@ fn main() {
                 .possible_values(&["zero", "constant", "exponential", "bimodal1", "bimodal2"])
                 .default_value("zero")
                 .help("Distribution of request lengths to use"),
-        )
-        .arg(
+        ).arg(
             Arg::with_name("mean")
                 .long("mean")
                 .takes_value(true)
                 .default_value("167")
                 .help("Mean number of work iterations per request"),
-        )
-        .arg(
+        ).arg(
             Arg::with_name("barrier-peers")
                 .long("barrier-peers")
                 .requires("barrier-leader")
                 .takes_value(true)
                 .help("Number of peers in barrier group"),
-        )
-        .arg(
+        ).arg(
             Arg::with_name("barrier-leader")
                 .long("barrier-leader")
                 .requires("barrier-peers")
                 .takes_value(true)
                 .help("Leader of barrier group"),
-        )
-        .arg(
+        ).arg(
             Arg::with_name("samples")
                 .long("samples")
                 .takes_value(true)
                 .default_value("20")
                 .help("Number of samples to collect"),
-        )
-        .arg(
+        ).arg(
             Arg::with_name("strided-size")
                 .long("strided-size")
                 .takes_value(true)
                 .default_value("1024")
                 .help("Amount of memory to use for strided-memtouch fake work"),
-        )
-        .arg(
+        ).arg(
             Arg::with_name("strided-stride")
                 .long("strided-stride")
                 .takes_value(true)
                 .default_value("7")
                 .help("Stride used for strided-memtouch fake work"),
-        )
-        .arg(
+        ).arg(
             Arg::with_name("transport")
                 .long("transport")
                 .takes_value(true)
                 .default_value("udp")
                 .help("udp or tcp"),
-        )
-        .get_matches();
+        ).get_matches();
 
     let addr: SocketAddrV4 = FromStr::from_str(matches.value_of("ADDR").unwrap()).unwrap();
     let nthreads = value_t_or_exit!(matches, "threads", usize);
@@ -734,7 +880,7 @@ fn main() {
     let mode = matches.value_of("mode").unwrap();
     let backend = match mode {
         "linux-server" | "linux-client" | "memcached-preload" => Backend::Linux,
-        "spawner-server" | "runtime-client" | "work-bench" => Backend::Runtime,
+        "spawner-server" | "runtime-client" | "work-bench" | "local-client" => Backend::Runtime,
         _ => unreachable!(),
     };
     let mut barrier_group = matches.value_of("barrier-leader").map(|leader| {
@@ -764,20 +910,49 @@ fn main() {
             let elapsed = duration_to_ns(start.elapsed());
             println!("Rate = {} ns/iteration", elapsed as f64 / iterations as f64);
         }
-        "memcached-preload" => {
-            backend.init_and_run(config, move || {
-                run_memcached_preload(backend, tport, addr, nthreads);
-                println!("Warmup done");
-            })
-        },
+        "memcached-preload" => backend.init_and_run(config, move || {
+            run_memcached_preload(backend, tport, addr, nthreads);
+            println!("Warmup done");
+        }),
         "spawner-server" => match tport {
             Transport::Udp => backend.init_and_run(config, move || run_spawner_server(addr)),
             Transport::Tcp => backend.init_and_run(config, move || run_tcp_server(backend, addr)),
         },
         "linux-server" => match tport {
-            Transport::Udp => backend.init_and_run(config, move || run_linux_udp_server(backend, addr, nthreads)),
+            Transport::Udp => backend.init_and_run(config, move || {
+                run_linux_udp_server(backend, addr, nthreads)
+            }),
             Transport::Tcp => backend.init_and_run(config, move || run_tcp_server(backend, addr)),
         },
+        "local-client" => {
+            backend.init_and_run(config, move || {
+                println!("Distribution, Target, Actual, Dropped, Never Sent, Median, 90th, 99th, 99.9th, 99.99th, Start");
+                if dowarmup {
+                    for packets_per_second in (1..3).map(|i| i * 100000) {
+                        run_local(
+                            backend,
+                            Duration::from_secs(1),
+                            packets_per_second,
+                            nthreads,
+                            OutputMode::Silent,
+                            distribution,
+                        );
+                    }
+                }
+                let step_size = (packets_per_second - start_packets_per_second) / samples;
+                for j in 1..=samples {
+                    run_local(
+                        backend,
+                        runtime,
+                        start_packets_per_second + step_size * j,
+                        nthreads,
+                        output,
+                        distribution,
+                    );
+                    backend.sleep(Duration::from_secs(3));
+                }
+            });
+        }
         "linux-client" | "runtime-client" => {
             backend.init_and_run(config, move || {
                 println!("Distribution, Target, Actual, Dropped, Never Sent, Median, 90th, 99th, 99.9th, 99.99th, Start");
