@@ -39,7 +39,6 @@ uint32_t kMagic = 0x6e626368; // 'nbch'
 struct nbench_req {
   uint32_t magic;
   int nports;
-  int measure_sec;
 };
 
 struct nbench_resp {
@@ -516,10 +515,26 @@ do_server(void *arg)
 						control_req->nports -
 						sizeof(struct nbench_req));
 				control_resp = (struct nbench_resp *) control_req;
+
+				/* add ports to response */
 				for (j = 0; j < control_req->nports; j++) {
 					/* simple port allocation */
-					control_resp->ports[j] = next_port++;
+					control_resp->ports[j] = rte_cpu_to_be_16(next_port++);
 				}
+
+				/* adjust lengths in UDP and IPv4 headers */
+				payload_len = sizeof(struct nbench_resp) +
+					sizeof(uint16_t) * control_req->nports;
+				udp_hdr->dgram_len = rte_cpu_to_be_16(sizeof(struct udp_hdr) +
+								payload_len);
+				ptr_ipv4_hdr->total_length = rte_cpu_to_be_16(sizeof(struct ipv4_hdr) +
+				sizeof(struct udp_hdr) + payload_len);
+
+				/* enable computation of IPv4 checksum in hardware */
+				ptr_ipv4_hdr->hdr_checksum = 0;
+				buf->l2_len = ETHER_HDR_LEN;
+				buf->l3_len = sizeof(struct ipv4_hdr);
+				buf->ol_flags = PKT_TX_IP_CKSUM | PKT_TX_IPV4;
 			}
 
 			tx_bufs[n_to_tx++] = buf;
