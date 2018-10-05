@@ -238,6 +238,7 @@ int ioqueues_register_iokernel(void)
 	/* initialize control header */
 	hdr = r->base;
 	hdr->magic = CONTROL_HDR_MAGIC;
+	hdr->egress_buf_count = EGRESS_POOL_SIZE(iok.thread_count) / MBUF_DEFAULT_LEN;
 	hdr->thread_count = iok.thread_count;
 	hdr->mac = netcfg.mac;
 

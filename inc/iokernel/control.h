@@ -51,6 +51,7 @@ struct sched_spec {
 struct control_hdr {
 	unsigned int		magic;
 	unsigned int		thread_count;
+	unsigned long		egress_buf_count;
 	struct eth_addr		mac;
 	struct sched_spec	sched_cfg;
 	struct thread_spec	threads[];

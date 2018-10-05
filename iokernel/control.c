@@ -82,7 +82,6 @@ static struct proc *control_create_proc(mem_key_t key, size_t len, pid_t pid,
 	p->mac = hdr.mac;
 	p->pending_timer = false;
 	p->uniqid = rdtsc();
-	p->max_overflows = 0;
 
 	/* initialize the threads */
 	for (i = 0; i < hdr.thread_count; i++) {
@@ -98,8 +97,6 @@ static struct proc *control_create_proc(mem_key_t key, size_t len, pid_t pid,
 		ret = shm_init_lrpc_in(&reg, &s->txpktq, &th->txpktq);
 		if (ret)
 			goto fail_free_proc;
-
-		p->max_overflows += s->txpktq.msg_count;
 
 		/* attach the TX command queue */
 		ret = shm_init_lrpc_in(&reg, &s->txcmdq, &th->txcmdq);
@@ -129,7 +126,7 @@ static struct proc *control_create_proc(mem_key_t key, size_t len, pid_t pid,
 	if (ret)
 		goto fail_free_just_proc;
 
-	p->max_overflows *= 4;
+	p->max_overflows = hdr.egress_buf_count;
 	p->nr_overflows = 0;
 	p->overflow_queue = malloc(sizeof(unsigned long) * p->max_overflows);
 	if (p->overflow_queue == NULL)
