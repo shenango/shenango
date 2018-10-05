@@ -488,8 +488,10 @@ static void wake_kthread_on_core(struct thread *th, int core)
  * cores_park_kthread - parks the given kthread and frees its core.
  * @th: thread to park
  * @force: true if this kthread should be parked regardless of pending tx pkts
+ *
+ * Returns true if the kthread is to remain parked
  */
-void cores_park_kthread(struct thread *th, bool force)
+bool cores_park_kthread(struct thread *th, bool force)
 {
 	struct proc *p = th->p;
 	unsigned int core = th->core;
@@ -512,7 +514,7 @@ void cores_park_kthread(struct thread *th, bool force)
 			val = th->core + 1;
 			s = write(th->park_efd, &val, sizeof(val));
 			BUG_ON(s != sizeof(uint64_t));
-			return;
+			return false;
 		}
 	}
 
@@ -535,6 +537,8 @@ void cores_park_kthread(struct thread *th, bool force)
 	th_new = pick_thread_for_core(core);
 	if (th_new)
 		wake_kthread_on_core(th_new, core);
+
+	return true;
 }
 
 /**
@@ -551,6 +555,9 @@ struct thread *cores_add_core(struct proc *p)
 	/* can't add cores if we're already using all available kthreads */
 	if (p->active_thread_count == p->thread_count)
 		return NULL;
+
+	/* Cancel pending timers */
+	p->pending_timer = false;
 
 	/* pick a core to add and a thread to run on it */
 	core = pick_core_for_proc(p);
@@ -698,8 +705,10 @@ static bool cores_is_proc_congested(struct proc *p)
 			continue;
 		}
 
-		/* TODO: check for timers */
 	}
+
+	if (p->pending_timer && microtime() >= p->deadline_us)
+		congested = true;
 
 	return congested;
 }

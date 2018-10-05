@@ -192,10 +192,19 @@ void kthread_park(bool voluntary)
 {
 	struct kthread *k = myk();
 	unsigned long payload = 0;
+	uint64_t cmd, deadline_us;
 
-	if (!voluntary || !mbufq_empty(&k->txpktq_overflow) ||
-	    !mbufq_empty(&k->txcmdq_overflow))
+	if (load_acquire(&nrks) > 1 || !mbufq_empty(&k->txpktq_overflow) ||
+	    !mbufq_empty(&k->txcmdq_overflow)) {
+		cmd = TXCMD_PARKED;
 		payload = (unsigned long)k;
+	} else {
+		/* all timers have been merged to the local kthread */
+		cmd = TXCMD_PARKED_LAST;
+		deadline_us = timer_earliest_deadline();
+		if (deadline_us)
+			payload = deadline_us - microtime();
+	}
 
 	assert_spin_lock_held(&k->lock);
 	assert(k->parked == false);
@@ -214,7 +223,7 @@ void kthread_park(bool voluntary)
 	spin_unlock(&k->lock);
 
 	/* signal to iokernel that we're about to park */
-	while (!lrpc_send(&k->txcmdq, TXCMD_PARKED, payload))
+	while (!lrpc_send(&k->txcmdq, cmd, payload))
 		cpu_relax();
 
 	kthread_yield_to_iokernel();

@@ -82,5 +82,6 @@ enum {
 enum {
 	TXCMD_NET_COMPLETE = 0,	/* contains rx_net_hdr.completion_data */
 	TXCMD_PARKED,		/* hint to iokernel that kthread is parked */
+	TXCMD_PARKED_LAST,	/* the last undetached kthread is parking */
 	TXCMD_NR,		/* number of commands */
 };

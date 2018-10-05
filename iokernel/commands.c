@@ -27,10 +27,16 @@ static int commands_drain_queue(struct thread *t, struct rte_mbuf **bufs, int n)
 			/* TODO: validate pointer @buf */
 			break;
 
+		case TXCMD_PARKED_LAST:
+			if (cores_park_kthread(t, false) &&
+			    t->p->active_thread_count == 0 && payload) {
+				t->p->pending_timer = true;
+				t->p->deadline_us = microtime() + payload;
+			}
+			break;
 		case TXCMD_PARKED:
-			cores_park_kthread(t, false);
 			/* notify another kthread if the park was involuntary */
-			if (payload != 0)
+			if (cores_park_kthread(t, false) && payload != 0)
 				rx_send_to_runtime(t->p, 0, RX_JOIN, payload);
 			break;
 
