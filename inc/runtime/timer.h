@@ -8,11 +8,14 @@
 
 typedef void (*timer_fn_t)(unsigned long arg);
 
+struct kthread;
+
 struct timer_entry {
 	bool		armed;
 	unsigned int	idx;
 	timer_fn_t	fn;
 	unsigned long	arg;
+	struct kthread *localk;
 };
 
 

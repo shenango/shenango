@@ -115,6 +115,7 @@ void timer_merge(struct kthread *r)
 	for (i = 0; i < r->timern; i++) {
 		k->timers[k->timern] = r->timers[i];
 		k->timers[k->timern].e->idx = k->timern;
+		k->timers[k->timern].e->localk = k;
 		k->timern++;
 
 		if (k->timern >= RUNTIME_MAX_TIMERS)
@@ -172,6 +173,7 @@ static void timer_start_locked(struct timer_entry *e, uint64_t deadline_us)
 	k->timers[i].deadline_us = deadline_us;
 	k->timers[i].e = e;
 	e->idx = i;
+	e->localk = k;
 	sift_up(k->timers, i);
 	e->armed = true;
 }
@@ -202,13 +204,16 @@ void timer_start(struct timer_entry *e, uint64_t deadline_us)
  */
 bool timer_cancel(struct timer_entry *e)
 {
-	struct kthread *k = getk();
+	struct kthread *k;
 	int last;
+
+	preempt_disable();
+	k = e->localk;
 
 	spin_lock_np(&k->timer_lock);
 	if (!e->armed) {
 		spin_unlock_np(&k->timer_lock);
-		putk();
+		preempt_enable();
 		return false;
 	}
 	e->armed = false;
@@ -216,7 +221,7 @@ bool timer_cancel(struct timer_entry *e)
 	last = --k->timern;
 	if (e->idx == last) {
 		spin_unlock_np(&k->timer_lock);
-		putk();
+		preempt_enable();
 		return true;
 	}
 
@@ -226,7 +231,7 @@ bool timer_cancel(struct timer_entry *e)
 	sift_down(k->timers, e->idx, k->timern);
 	spin_unlock_np(&k->timer_lock);
 
-	putk();
+	preempt_enable();
 	return true;
 }
 
