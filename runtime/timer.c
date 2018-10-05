@@ -207,10 +207,19 @@ bool timer_cancel(struct timer_entry *e)
 	struct kthread *k;
 	int last;
 
+try_again:
 	preempt_disable();
-	k = e->localk;
+	k = load_acquire(&e->localk);
 
 	spin_lock_np(&k->timer_lock);
+
+	if (e->localk != k) {
+		/* Timer was merged to a different heap */
+		spin_unlock_np(&k->timer_lock);
+		preempt_enable();
+		goto try_again;
+	}
+
 	if (!e->armed) {
 		spin_unlock_np(&k->timer_lock);
 		preempt_enable();
