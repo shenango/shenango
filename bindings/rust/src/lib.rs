@@ -25,19 +25,6 @@ pub mod udp;
 
 pub use asm::*;
 
-extern "C" {
-    #[link_name = "__self"]
-    #[thread_local]
-    pub static mut __self: *mut ffi::thread_t;
-}
-
-pub fn thread_yield() {
-    unsafe { ffi::thread_yield() }
-}
-pub fn thread_self() -> *mut ffi::thread_t {
-    unsafe { __self }
-}
-
 fn convert_error(ret: c_int) -> Result<(), i32> {
     if ret == 0 {
         Ok(())
@@ -46,16 +33,20 @@ fn convert_error(ret: c_int) -> Result<(), i32> {
     }
 }
 
-pub fn base_init() -> Result<(), i32> {
+#[allow(unused)]
+pub(crate) fn base_init() -> Result<(), i32> {
     convert_error(unsafe { ffi::base_init() })
 }
-pub fn base_init_thread() -> Result<(), i32> {
+
+#[allow(unused)]
+pub(crate) fn base_init_thread() -> Result<(), i32> {
     convert_error(unsafe { ffi::base_init_thread() })
 }
 
 pub fn delay_us(microseconds: u64) {
     unsafe { ffi::__time_delay_us(microseconds) }
 }
+
 #[inline]
 pub fn microtime() -> u64 {
     unsafe { (rdtsc() - ffi::start_tsc as u64) / ffi::cycles_per_us as u64 }

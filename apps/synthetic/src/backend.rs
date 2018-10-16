@@ -95,7 +95,7 @@ impl Backend {
     pub fn thread_yield(&self) {
         match *self {
             Backend::Linux => thread::yield_now(),
-            Backend::Runtime => shenango::thread_yield(),
+            Backend::Runtime => shenango::thread::thread_yield(),
         }
     }
 

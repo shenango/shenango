@@ -14,9 +14,7 @@ fn isize_to_result(i: isize) -> io::Result<usize> {
     }
 }
 
-pub struct TcpConnection(*mut ffi::tcpconn_t);
 pub struct TcpQueue(*mut ffi::tcpqueue_t);
-
 impl TcpQueue {
     pub fn listen(local_addr: SocketAddrV4, backlog: i32) -> io::Result<Self> {
         let laddr = ffi::netaddr {
@@ -44,16 +42,15 @@ impl TcpQueue {
         unsafe { ffi::tcp_qshutdown(self.0) }
     }
 }
-
 impl Drop for TcpQueue {
     fn drop(&mut self) {
         unsafe { ffi::tcp_qclose(self.0) }
     }
 }
-
 unsafe impl Send for TcpQueue {}
 unsafe impl Sync for TcpQueue {}
 
+pub struct TcpConnection(*mut ffi::tcpconn_t);
 impl TcpConnection {
     pub fn dial(local_addr: SocketAddrV4, remote_addr: SocketAddrV4) -> io::Result<Self> {
         let laddr = ffi::netaddr {
@@ -105,7 +102,6 @@ impl<'a> Read for &'a TcpConnection {
         })
     }
 }
-
 impl Read for TcpConnection {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         isize_to_result(unsafe {
@@ -113,7 +109,6 @@ impl Read for TcpConnection {
         })
     }
 }
-
 impl<'a> Write for &'a TcpConnection {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         isize_to_result(unsafe { ffi::tcp_write(self.0, buf.as_ptr() as *const c_void, buf.len()) })
@@ -122,7 +117,6 @@ impl<'a> Write for &'a TcpConnection {
         Ok(())
     }
 }
-
 impl Write for TcpConnection {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         isize_to_result(unsafe { ffi::tcp_write(self.0, buf.as_ptr() as *const c_void, buf.len()) })
@@ -131,12 +125,10 @@ impl Write for TcpConnection {
         Ok(())
     }
 }
-
 impl Drop for TcpConnection {
     fn drop(&mut self) {
         unsafe { ffi::tcp_close(self.0) }
     }
 }
-
 unsafe impl Send for TcpConnection {}
 unsafe impl Sync for TcpConnection {}

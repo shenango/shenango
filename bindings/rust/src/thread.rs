@@ -5,6 +5,20 @@ use std::{mem, panic, ptr};
 
 use super::*;
 
+extern "C" {
+    #[link_name = "__self"]
+    #[thread_local]
+    static mut __self: *mut ffi::thread_t;
+}
+
+pub(crate) fn thread_self() -> *mut ffi::thread_t {
+    unsafe { __self }
+}
+
+pub fn thread_yield() {
+    unsafe { ffi::thread_yield() }
+}
+
 pub(crate) extern "C" fn trampoline<F>(arg: *mut c_void)
 where
     F: FnOnce(),
