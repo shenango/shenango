@@ -1,6 +1,6 @@
 use std::io::{self, Read, Write};
-use std::ptr;
 use std::net::SocketAddrV4;
+use std::ptr;
 
 use byteorder::{ByteOrder, NetworkEndian};
 
@@ -118,15 +118,18 @@ impl<'a> Write for &'a TcpConnection {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         isize_to_result(unsafe { ffi::tcp_write(self.0, buf.as_ptr() as *const c_void, buf.len()) })
     }
-    fn flush(&mut self) -> io::Result<()> { Ok(()) }
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
 }
-
 
 impl Write for TcpConnection {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         isize_to_result(unsafe { ffi::tcp_write(self.0, buf.as_ptr() as *const c_void, buf.len()) })
     }
-    fn flush(&mut self) -> io::Result<()> { Ok(()) }
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
 }
 
 impl Drop for TcpConnection {
@@ -137,4 +140,3 @@ impl Drop for TcpConnection {
 
 unsafe impl Send for TcpConnection {}
 unsafe impl Sync for TcpConnection {}
-

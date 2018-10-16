@@ -9,19 +9,19 @@ extern crate byteorder;
 
 use std::cell::UnsafeCell;
 use std::ffi::CString;
+use std::mem;
 use std::os::raw::{c_int, c_void};
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::time::Duration;
-use std::mem;
 
 pub mod ffi {
     include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 }
 
 mod asm;
+pub mod tcp;
 pub mod thread;
 pub mod udp;
-pub mod tcp;
 
 pub use asm::*;
 
@@ -62,7 +62,9 @@ pub fn microtime() -> u64 {
 }
 
 pub fn sleep(duration: Duration) {
-    unsafe { ffi::timer_sleep(duration.as_secs() * 1000_000 + duration.subsec_nanos() as u64 / 1000) }
+    unsafe {
+        ffi::timer_sleep(duration.as_secs() * 1000_000 + duration.subsec_nanos() as u64 / 1000)
+    }
 }
 
 pub fn runtime_init<F>(cfgpath: String, f: F) -> Result<(), i32>

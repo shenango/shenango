@@ -1,20 +1,20 @@
-use shenango;
-use shenango::udp::UdpConnection;
-use shenango::tcp::TcpConnection;
-use std;
 use libc;
+use shenango;
+use shenango::tcp::TcpConnection;
+use shenango::udp::UdpConnection;
+use std;
 
 use std::any::Any;
 use std::io;
-use std::io::{Read, Write, Error, ErrorKind};
-use std::net::{SocketAddr, SocketAddrV4, UdpSocket, TcpStream, TcpListener};
+use std::io::{Error, ErrorKind, Read, Write};
+use std::net::{SocketAddr, SocketAddrV4, TcpListener, TcpStream, UdpSocket};
 use std::os::unix::io::AsRawFd;
 use std::thread;
 use std::time::Duration;
 
+use net2::unix::UnixUdpBuilderExt;
 use net2::TcpBuilder;
 use net2::UdpBuilder;
-use net2::unix::UnixUdpBuilderExt;
 
 #[derive(Copy, Clone)]
 pub enum Backend {
@@ -28,17 +28,13 @@ impl Backend {
         remote_addr: Option<SocketAddrV4>,
     ) -> io::Result<Connection> {
         Ok(match (self, remote_addr) {
-            (&Backend::Linux, None) => {
-                Connection::LinuxUdp(
-                    UdpBuilder::new_v4()?
+            (&Backend::Linux, None) => Connection::LinuxUdp(
+                UdpBuilder::new_v4()?
                     .reuse_address(true)?
                     .reuse_port(true)?
-                    .bind(local_addr)?
-                )
-            }
-            (&Backend::Runtime, None) => {
-                Connection::RuntimeUdp(UdpConnection::listen(local_addr)?)
-            }
+                    .bind(local_addr)?,
+            ),
+            (&Backend::Runtime, None) => Connection::RuntimeUdp(UdpConnection::listen(local_addr)?),
             (&Backend::Linux, Some(remote_addr)) => {
                 let socket = UdpSocket::bind(local_addr)?;
                 socket.connect(remote_addr)?;
@@ -65,19 +61,14 @@ impl Backend {
         })
     }
 
-    pub fn create_tcp_listener(
-        &self,
-        local_addr: SocketAddrV4,
-    ) -> io::Result<ConnectionListener> {
+    pub fn create_tcp_listener(&self, local_addr: SocketAddrV4) -> io::Result<ConnectionListener> {
         Ok(match *self {
-            Backend::Linux =>
-                ConnectionListener::LinuxTcp(
-                    TcpBuilder::new_v4()?
-                        .bind(local_addr)?
-                        .listen(1024)?
-                ),
-            Backend::Runtime =>
-                ConnectionListener::RuntimeTcp(shenango::tcp::TcpQueue::listen(local_addr, 1024)?),
+            Backend::Linux => {
+                ConnectionListener::LinuxTcp(TcpBuilder::new_v4()?.bind(local_addr)?.listen(1024)?)
+            }
+            Backend::Runtime => {
+                ConnectionListener::RuntimeTcp(shenango::tcp::TcpQueue::listen(local_addr, 1024)?)
+            }
         })
     }
 
@@ -128,8 +119,7 @@ pub enum ConnectionListener {
 impl ConnectionListener {
     pub fn accept(&self) -> io::Result<Connection> {
         match *self {
-            ConnectionListener::RuntimeTcp(ref s) =>
-                Ok(Connection::RuntimeTcp(s.accept()?)),
+            ConnectionListener::RuntimeTcp(ref s) => Ok(Connection::RuntimeTcp(s.accept()?)),
             ConnectionListener::LinuxTcp(ref s) => {
                 let (socket, _addr) = s.accept()?;
                 socket.set_nodelay(true)?;
@@ -148,7 +138,6 @@ impl ConnectionListener {
     }
 }
 
-
 pub enum Connection {
     LinuxTcp(TcpStream),
     LinuxUdp(UdpSocket),
@@ -156,14 +145,12 @@ pub enum Connection {
     RuntimeTcp(shenango::tcp::TcpConnection),
 }
 
-
 impl Connection {
-
     pub fn send_to(&self, buf: &[u8], addr: SocketAddrV4) -> io::Result<usize> {
         match *self {
             Connection::LinuxUdp(ref s) => s.send_to(buf, addr),
             Connection::RuntimeUdp(ref s) => s.write_to(buf, addr),
-            _ => Err(Error::new(ErrorKind::Other, "unimplemented"))
+            _ => Err(Error::new(ErrorKind::Other, "unimplemented")),
         }
     }
     pub fn recv_from(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddrV4)> {
@@ -173,7 +160,7 @@ impl Connection {
                 _ => unreachable!(),
             }),
             Connection::RuntimeUdp(ref s) => s.read_from(buf),
-            _ => Err(Error::new(ErrorKind::Other, "unimplemented"))
+            _ => Err(Error::new(ErrorKind::Other, "unimplemented")),
         }
     }
 
@@ -259,7 +246,6 @@ impl<'a> Write for &'a Connection {
             Connection::RuntimeTcp(ref s) => (&*s).flush(),
         }
     }
-
 }
 
 impl Write for Connection {

@@ -104,8 +104,7 @@ impl<T: Send + 'static> JoinHandle<T> {
 impl<T: Send + 'static> Drop for JoinHandle<T> {
     fn drop(&mut self) {
         if !self.join_data.is_null() {
-            let join_data: &mut JoinData<T> =
-                unsafe { &mut *(&*self.join_data).get() };
+            let join_data: &mut JoinData<T> = unsafe { &mut *(&*self.join_data).get() };
 
             join_data.lock.lock();
             if join_data.done {
