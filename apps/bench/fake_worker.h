@@ -41,6 +41,24 @@ class StridedMemtouchWorker : public FakeWorker {
   std::size_t stride_;
 };
 
+class MemStreamWorker : public FakeWorker {
+ public:
+  ~MemStreamWorker();
+
+  // Creates a memory streaming worker.
+  static MemStreamWorker *Create(std::size_t size);
+
+  // Performs n memory reads.
+  void Work(uint64_t n);
+
+ private:
+  MemStreamWorker(char *buf, std::size_t size) :
+  buf_(buf), size_(size) { }
+
+  volatile char *buf_;
+  std::size_t size_;
+};
+
 class RandomMemtouchWorker : public FakeWorker {
  public:
   ~RandomMemtouchWorker() {delete buf_;}

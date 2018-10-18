@@ -1,3 +1,13 @@
+
+extern "C" {
+#include <string.h>
+#include <sys/mman.h>
+#include <base/mem.h>
+#include <base/stddef.h>
+#undef min
+#undef max
+}
+
 #include <cmath>
 #include <algorithm>
 #include <numeric>
@@ -27,6 +37,36 @@ void StridedMemtouchWorker::Work(uint64_t n) {
     std::ignore = c; // silences compiler warning
   }
 }
+
+MemStreamWorker *
+MemStreamWorker::Create(std::size_t size) {
+  void *addr;
+  int prot, flags;
+
+  prot = PROT_READ | PROT_WRITE;
+  flags = MAP_PRIVATE | MAP_ANONYMOUS | MAP_POPULATE | MAP_HUGETLB |
+     (PGSHIFT_2MB << MAP_HUGE_SHIFT);
+
+  addr = mmap(NULL, align_up(size, PGSIZE_2MB), prot, flags, -1, 0);
+  if (addr == MAP_FAILED)
+    return nullptr;
+
+  memset(addr, 0xAB, size);
+  return new MemStreamWorker(static_cast<char*>(addr), size);
+}
+
+MemStreamWorker::~MemStreamWorker() {
+  munmap((void*)buf_, align_up(size_, PGSIZE_2MB));
+}
+
+void MemStreamWorker::Work(uint64_t n) {
+  if (n > size_) n = size_;
+  for (uint64_t i = 0; i < n; ++i) {
+    volatile char c = buf_[i];
+    std::ignore = c; // silences compiler warning
+  }
+}
+
 
 RandomMemtouchWorker *
 RandomMemtouchWorker::Create(std::size_t size, unsigned int seed) {
@@ -75,6 +115,10 @@ FakeWorker *FakeWorkerFactory(std::string s) {
     unsigned long seed = std::stoul(tokens[2], nullptr, 0);
     if (seed > std::numeric_limits<unsigned int>::max()) return nullptr;
     return RandomMemtouchWorker::Create(size, seed);
+  } else if (tokens[0] == "memstream") {
+    if (tokens.size() != 2) return nullptr;;
+    unsigned long size = std::stoul(tokens[1], nullptr, 0);
+    return MemStreamWorker::Create(size);
   }
 
   // invalid type of worker
