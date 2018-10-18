@@ -202,8 +202,12 @@ void kthread_park(bool voluntary)
 		/* all timers have been merged to the local kthread */
 		cmd = TXCMD_PARKED_LAST;
 		deadline_us = timer_earliest_deadline();
-		if (deadline_us)
+		if (deadline_us) {
 			payload = deadline_us - microtime();
+			if ((int64_t)payload <= 0)
+				/* Timer has just expired, return to scheduler */
+				return;
+		}
 	}
 
 	assert_spin_lock_held(&k->lock);
