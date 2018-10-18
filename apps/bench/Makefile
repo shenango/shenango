@@ -63,6 +63,8 @@ netperf_obj = $(netperf_src:.cc=.o)
 linux_mech_bench_src = linux_mech_bench.cc
 linux_mech_bench_obj = $(linux_mech_bench_src:.cc=.o)
 
+librt_libs = $(CXXPATH)/librt++.a $(BASEPATH)/libruntime.a $(BASEPATH)/libnet.a $(BASEPATH)/libbase.a
+
 LIBS_ARACHNE=-I$(ARACHNE)/include -I$(ARACHNE)/../CoreArbiter/include  -I$(ARACHNE)/../PerfUtils/include \
 	-L$(ARACHNE)/lib -lArachne -L$(ARACHNE)/../CoreArbiter/lib -lCoreArbiter \
 	$(ARACHNE)/../PerfUtils/lib/libPerfUtils.a -lpcrecpp -pthread
@@ -72,10 +74,8 @@ all: tbench tbench_linux callibrate stress efficiency efficiency_linux \
      netbench netbench2 netbench_udp netbench_linux netperf linux_mech_bench \
      stress_linux
 
-tbench: $(tbench_obj)
-	$(LD) -o $@ $(LDFLAGS) $(tbench_obj) $(CXXPATH)/librt++.a \
-	$(BASEPATH)/libruntime.a $(BASEPATH)/libnet.a $(BASEPATH)/libbase.a \
-	-lpthread
+tbench: $(tbench_obj) $(librt_libs)
+	$(LD) -o $@ $(LDFLAGS) $(tbench_obj) $(librt_libs) -lpthread
 
 tbench_linux: $(tbench_linux_obj)
 	$(LD) -o $@ $(LDFLAGS) $(tbench_linux_obj) -lpthread
@@ -87,51 +87,37 @@ tbench_arachne: tbench_arachne.cc
 callibrate: $(fake_worker_obj) $(callibrate_obj)
 	$(LD) -o $@ $(LDFLAGS) $(fake_worker_obj) $(callibrate_obj) -lpthread
 
-stress: $(fake_worker_obj) $(stress_obj)
-	$(LD) -o $@ $(LDFLAGS) $(fake_worker_obj) $(stress_obj) \
-        $(CXXPATH)/librt++.a $(BASEPATH)/libruntime.a $(BASEPATH)/libnet.a \
-        $(BASEPATH)/libbase.a -lpthread
+stress: $(fake_worker_obj) $(stress_obj) $(librt_libs)
+	$(LD) -o $@ $(LDFLAGS) $(fake_worker_obj) $(stress_obj) $(librt_libs) -lpthread
 
 stress_linux: $(fake_worker_obj) $(stress_linux_obj)
 	$(LD) -o $@ $(LDFLAGS) $(fake_worker_obj) $(stress_linux_obj) \
 	-lpthread
 
-efficiency: $(fake_worker_obj) $(efficiency_obj)
-	$(LD) -o $@ $(LDFLAGS) $(fake_worker_obj) $(efficiency_obj) \
-        $(CXXPATH)/librt++.a $(BASEPATH)/libruntime.a $(BASEPATH)/libnet.a \
-        $(BASEPATH)/libbase.a -lpthread
+efficiency: $(fake_worker_obj) $(efficiency_obj) $(librt_libs)
+	$(LD) -o $@ $(LDFLAGS) $(fake_worker_obj) $(efficiency_obj) $(librt_libs) -lpthread
 
 efficiency_linux: $(fake_worker_obj) $(efficiency_linux_obj)
 	$(LD) -o $@ $(LDFLAGS) $(fake_worker_obj) $(efficiency_linux_obj) \
 	-lpthread
 
-netbench: $(netbench_obj) $(fake_worker_obj)
-	$(LD) -o $@ $(LDFLAGS) $(fake_worker_obj) $(netbench_obj) \
-        $(CXXPATH)/librt++.a $(BASEPATH)/libruntime.a $(BASEPATH)/libnet.a \
-        $(BASEPATH)/libbase.a -lpthread
+netbench: $(netbench_obj) $(fake_worker_obj) $(librt_libs)
+	$(LD) -o $@ $(LDFLAGS) $(fake_worker_obj) $(netbench_obj) $(librt_libs) -lpthread
 
-netbench2: $(netbench2_obj) $(fake_worker_obj)
-	$(LD) -o $@ $(LDFLAGS) $(fake_worker_obj) $(netbench2_obj) \
-        $(CXXPATH)/librt++.a $(BASEPATH)/libruntime.a $(BASEPATH)/libnet.a \
-        $(BASEPATH)/libbase.a -lpthread
+netbench2: $(netbench2_obj) $(fake_worker_obj) $(librt_libs)
+	$(LD) -o $@ $(LDFLAGS) $(fake_worker_obj) $(netbench2_obj) $(librt_libs) -lpthread
 
-netbench_udp: $(netbench_udp_obj) $(fake_worker_obj)
-	$(LD) -o $@ $(LDFLAGS) $(fake_worker_obj) $(netbench_udp_obj) \
-        $(CXXPATH)/librt++.a $(BASEPATH)/libruntime.a $(BASEPATH)/libnet.a \
-        $(BASEPATH)/libbase.a -lpthread
+netbench_udp: $(netbench_udp_obj) $(fake_worker_obj) $(librt_libs)
+	$(LD) -o $@ $(LDFLAGS) $(fake_worker_obj) $(netbench_udp_obj) $(librt_libs) -lpthread
 
 netbench_linux: $(netbench_linux_obj) $(fake_worker_obj)
 	$(LD) -o $@ $(LDFLAGS) $(fake_worker_obj) $(netbench_linux_obj) -lpthread
 
-netperf: $(netperf_obj)
-	$(LD) -o $@ $(LDFLAGS) $(netperf_obj) \
-        $(CXXPATH)/librt++.a $(BASEPATH)/libruntime.a $(BASEPATH)/libnet.a \
-        $(BASEPATH)/libbase.a -lpthread
+netperf: $(netperf_obj) $(librt_libs)
+	$(LD) -o $@ $(LDFLAGS) $(netperf_obj) $(librt_libs) -lpthread
 
-linux_mech_bench: $(linux_mech_bench_obj)
-	$(LD) -o $@ $(LDFLAGS) $(linux_mech_bench_obj) \
-        $(CXXPATH)/librt++.a $(BASEPATH)/libruntime.a $(BASEPATH)/libnet.a \
-        $(BASEPATH)/libbase.a -lpthread
+linux_mech_bench: $(linux_mech_bench_obj) $(librt_libs)
+	$(LD) -o $@ $(LDFLAGS) $(linux_mech_bench_obj) $(librt_libs) -lpthread
 
 # general build rules for all targets
 src = $(fake_worker_src) $(tbench_src) $(tbench_linux_src) $(callibrate_src)

@@ -28,7 +28,7 @@ all: librt++.a test
 librt++.a: $(rt_obj)
 	$(AR) rcs $@ $^
 
-test: $(test_obj) librt++.a
+test: $(test_obj) librt++.a ../../libruntime.a ../../libnet.a ../../libbase.a
 	$(LD) $(LDFLAGS) -o $@ $(test_obj) librt++.a ../../libruntime.a \
 	../../libnet.a ../../libbase.a -lpthread
 
