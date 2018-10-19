@@ -239,7 +239,12 @@ fn run_spawner_server(addr: SocketAddrV4) {
     }
 }
 
-fn run_memcached_preload(backend: Backend, tport: Transport, addr: SocketAddrV4, nthreads: usize) {
+fn run_memcached_preload(
+    backend: Backend,
+    tport: Transport,
+    addr: SocketAddrV4,
+    nthreads: usize,
+) -> bool {
     let perthread = (memcached::NVALUES as usize + nthreads - 1) / nthreads;
     let join_handles: Vec<JoinHandle<_>> = (0..nthreads)
         .map(|i| {
@@ -272,22 +277,21 @@ fn run_memcached_preload(backend: Backend, tport: Transport, addr: SocketAddrV4,
 
                     if let Err(e) = (&*sock1).write_all(&vec_s[..]) {
                         println!("Preload send ({}/{}): {}", n, perthread, e);
-                        break;
+                        return false;
                     }
 
                     if let Err(e) = MemcachedProtocol::read_response(&sock1, tport, &mut vec_r[..])
                     {
                         println!("preload receive ({}/{}): {}", n, perthread, e);
-                        break;
+                        return false;
                     }
                 }
+                true
             })
         })
         .collect();
 
-    for j in join_handles {
-        j.join().unwrap();
-    }
+    return join_handles.into_iter().all(|j| j.join().unwrap());
 }
 
 fn run_client(
@@ -563,7 +567,6 @@ fn main() {
                     "runtime-client",
                     "spawner-server",
                     "work-bench",
-                    "memcached-preload",
                 ])
                 .required(true)
                 .requires_ifs(&[("runtime-client", "config"), ("spawner-server", "config")])
@@ -704,7 +707,7 @@ fn main() {
     let samples = value_t_or_exit!(matches, "samples", usize);
     let mode = matches.value_of("mode").unwrap();
     let backend = match mode {
-        "linux-server" | "linux-client" | "memcached-preload" => Backend::Linux,
+        "linux-server" | "linux-client" => Backend::Linux,
         "spawner-server" | "runtime-client" | "work-bench" => Backend::Runtime,
         _ => unreachable!(),
     };
@@ -736,10 +739,6 @@ fn main() {
             let elapsed = duration_to_ns(start.elapsed());
             println!("Rate = {} ns/iteration", elapsed as f64 / iterations as f64);
         }
-        "memcached-preload" => backend.init_and_run(config, move || {
-            run_memcached_preload(backend, tport, addr, nthreads);
-            println!("Warmup done");
-        }),
         "spawner-server" => match tport {
             Transport::Udp => backend.init_and_run(config, move || run_spawner_server(addr)),
             Transport::Tcp => backend.init_and_run(config, move || run_tcp_server(backend, addr)),
@@ -770,6 +769,17 @@ fn main() {
                         );
                     }
                 }
+
+                match (proto, &barrier_group) {
+                    (_, Some(lockstep::Group::Client(ref _c))) => (),
+                    (Protocol::Memcached, _) => {
+                        if !run_memcached_preload(backend, tport, addr, nthreads) {
+                            panic!("Could not preload memcached");
+                        }
+                    },
+                    _ => (),
+                };
+
                 let step_size = (packets_per_second - start_packets_per_second) / samples;
                 for j in 1..=samples {
                     run_client(
