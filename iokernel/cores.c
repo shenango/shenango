@@ -217,6 +217,8 @@ static inline void thread_reserve(struct thread *th, unsigned int core)
 	assert(th->parked == true);
 
 	bitmap_clear(p->available_threads, kthread);
+	if (unlikely(core != th->core))
+		th->reaffinitize = true;
 	th->core = core;
 	p->active_threads[p->active_thread_count] = th;
 	th->at_idx = p->active_thread_count++;
@@ -470,11 +472,15 @@ static void wake_kthread_on_core(struct thread *th, int core)
 		thread_reserve(th, core);
 
 	/* assign the kthread to its core */
-	ret = cores_pin_thread(th->tid, th->core);
-	if (unlikely(ret < 0)) {
-		log_err("cores: failed to pin tid %d to core %d",
-			th->tid, th->core);
-		/* continue running but performance is unpredictable */
+	if (th->reaffinitize) {
+		ret = cores_pin_thread(th->tid, th->core);
+		if (unlikely(ret < 0)) {
+			log_err("cores: failed to pin tid %d to core %d",
+				th->tid, th->core);
+			/* continue running but performance is unpredictable */
+		} else {
+			th->reaffinitize = false;
+		}
 	}
 
 

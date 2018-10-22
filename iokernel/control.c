@@ -108,6 +108,7 @@ static struct proc *control_create_proc(mem_key_t key, size_t len, pid_t pid,
 		th->p = p;
 		th->parked = true;
 		th->waking = false;
+		th->reaffinitize = true;
 		th->at_idx = -1;
 		th->ts_idx = -1;
 

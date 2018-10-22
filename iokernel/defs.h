@@ -39,6 +39,7 @@ struct thread {
 	struct proc		*p;
 	unsigned int		parked:1;
 	unsigned int		waking:1;
+	unsigned int		reaffinitize:1;
 	struct lrpc_chan_out	rxq;
 	struct lrpc_chan_in	txpktq;
 	struct lrpc_chan_in	txcmdq;
