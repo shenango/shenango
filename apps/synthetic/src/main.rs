@@ -7,6 +7,7 @@ extern crate byteorder;
 extern crate dns_parser;
 extern crate libc;
 extern crate lockstep;
+extern crate mersenne_twister;
 extern crate net2;
 extern crate rand;
 extern crate shenango;
@@ -41,6 +42,9 @@ pub struct Packet {
     actual_start: Option<Duration>,
     completion_time: Option<Duration>,
 }
+
+mod fakework;
+use fakework::FakeWorker;
 
 mod memcached;
 use memcached::MemcachedProtocol;
@@ -136,33 +140,14 @@ enum OutputMode {
     Trace
 }}
 
-#[allow(unused)]
-#[inline(always)]
-fn sqrt_work(iterations: u64) {
-    let k = 2350845.545;
-    for i in 0..iterations {
-        test::black_box(f64::sqrt(k * i as f64));
-    }
-}
-
-static mut STRIDED_MEMTOUCH_STRIDE: usize = 1;
-static mut STRIDED_MEMTOUCH_BUFFER: Option<Vec<u8>> = None;
-
-#[inline(always)]
-fn work(iterations: u64) {
-    let buffer = unsafe { STRIDED_MEMTOUCH_BUFFER.as_ref().unwrap() };
-    for i in 0..(iterations as usize) {
-        test::black_box::<u8>(unsafe { buffer[(i * STRIDED_MEMTOUCH_STRIDE) % buffer.len()] });
-    }
-}
-
 fn duration_to_ns(duration: Duration) -> u64 {
     (duration.as_secs() * 1000_000_000 + duration.subsec_nanos() as u64)
 }
 
-fn run_linux_udp_server(backend: Backend, addr: SocketAddrV4, nthreads: usize) {
+fn run_linux_udp_server(backend: Backend, addr: SocketAddrV4, nthreads: usize, worker: FakeWorker) {
     let join_handles: Vec<_> = (0..nthreads)
         .map(|_| {
+            let worker = worker.clone();
             backend.spawn_thread(move || {
                 let socket = backend.create_udp_connection(addr, None).unwrap();
                 println!("Bound to address {}", socket.local_addr());
@@ -170,7 +155,7 @@ fn run_linux_udp_server(backend: Backend, addr: SocketAddrV4, nthreads: usize) {
                 loop {
                     let (len, remote_addr) = socket.recv_from(&mut buf[..]).unwrap();
                     let payload = Payload::deserialize(&mut &buf[..len]).unwrap();
-                    work(payload.work_iterations);
+                    worker.work(payload.work_iterations);
                     socket.send_to(&buf[..len], remote_addr).unwrap();
                 }
             })
@@ -182,18 +167,17 @@ fn run_linux_udp_server(backend: Backend, addr: SocketAddrV4, nthreads: usize) {
     }
 }
 
-fn socket_worker(socket: &mut Connection) {
+fn socket_worker(socket: &mut Connection, worker: FakeWorker) {
     let mut v = vec![0; 4096];
-    #[inline(always)]
-    fn r(socket: &mut Connection, v: &mut Vec<u8>) -> io::Result<()> {
+    let mut r = || {
         v.clear();
         let payload = Payload::deserialize(socket)?;
-        work(payload.work_iterations);
-        payload.serialize_into(v)?;
+        worker.work(payload.work_iterations);
+        payload.serialize_into(&mut v)?;
         Ok(socket.write_all(&v[..])?)
     };
     loop {
-        if let Err(e) = r(socket, &mut v) {
+        if let Err(e) = r() as io::Result<()> {
             match e.raw_os_error() {
                 Some(-104) | Some(104) => break,
                 _ => {}
@@ -206,13 +190,14 @@ fn socket_worker(socket: &mut Connection) {
     }
 }
 
-fn run_tcp_server(backend: Backend, addr: SocketAddrV4) {
+fn run_tcp_server(backend: Backend, addr: SocketAddrV4, worker: FakeWorker) {
     let tcpq = backend.create_tcp_listener(addr).unwrap();
     println!("Bound to address {}", addr);
     loop {
         match tcpq.accept() {
             Ok(mut c) => {
-                backend.spawn_thread(move || socket_worker(&mut c));
+                let worker = worker.clone();
+                backend.spawn_thread(move || socket_worker(&mut c, worker));
             }
             Err(e) => {
                 println!("Listener: {}", e);
@@ -221,12 +206,17 @@ fn run_tcp_server(backend: Backend, addr: SocketAddrV4) {
     }
 }
 
-fn run_spawner_server(addr: SocketAddrV4) {
+fn run_spawner_server(addr: SocketAddrV4, worker: FakeWorker) {
+    static mut SPAWNER_WORKER: Option<FakeWorker> = None;
+    unsafe {
+        SPAWNER_WORKER = Some(worker);
+    }
     extern "C" fn echo(d: *mut shenango::ffi::udp_spawn_data) {
         unsafe {
             let buf = slice::from_raw_parts((*d).buf as *mut u8, (*d).len);
             let payload = Payload::deserialize(&mut &buf[..]).unwrap();
-            work(payload.work_iterations);
+            let worker = SPAWNER_WORKER.as_ref().unwrap();
+            worker.work(payload.work_iterations);
             let _ = UdpSpawner::reply(d, buf);
             UdpSpawner::release_data(d);
         }
@@ -234,9 +224,9 @@ fn run_spawner_server(addr: SocketAddrV4) {
 
     let _s = unsafe { UdpSpawner::new(addr, echo).unwrap() };
 
-    loop {
-        shenango::sleep(Duration::from_secs(10));
-    }
+    let wg = shenango::WaitGroup::new();
+    wg.add(1);
+    wg.wait();
 }
 
 fn run_memcached_preload(
@@ -662,18 +652,11 @@ fn main() {
                 .help("Number of samples to collect"),
         )
         .arg(
-            Arg::with_name("strided-size")
-                .long("strided-size")
+            Arg::with_name("fakework")
+                .long("fakework")
                 .takes_value(true)
-                .default_value("1024")
-                .help("Amount of memory to use for strided-memtouch fake work"),
-        )
-        .arg(
-            Arg::with_name("strided-stride")
-                .long("strided-stride")
-                .takes_value(true)
-                .default_value("7")
-                .help("Stride used for strided-memtouch fake work"),
+                .default_value("stridedmem:1024:7")
+                .help("fake worker spec"),
         )
         .arg(
             Arg::with_name("transport")
@@ -720,34 +703,32 @@ fn main() {
         .unwrap()
     });
 
-    let mut rng = rand::thread_rng();
-    unsafe {
-        STRIDED_MEMTOUCH_STRIDE = value_t_or_exit!(matches, "strided-stride", usize);
-        STRIDED_MEMTOUCH_BUFFER = Some(
-            (0..value_t_or_exit!(matches, "strided-size", usize))
-                .map(|_| rng.gen())
-                .collect(),
-        );
-    }
+    let fakeworker = FakeWorker::create(matches.value_of("fakework").unwrap()).unwrap();
 
     match mode {
         "work-bench" => {
             let iterations = 100_000_000;
             println!("Timing {} iterations of work()", iterations);
             let start = Instant::now();
-            work(iterations);
+            fakeworker.work(iterations);
             let elapsed = duration_to_ns(start.elapsed());
             println!("Rate = {} ns/iteration", elapsed as f64 / iterations as f64);
         }
         "spawner-server" => match tport {
-            Transport::Udp => backend.init_and_run(config, move || run_spawner_server(addr)),
-            Transport::Tcp => backend.init_and_run(config, move || run_tcp_server(backend, addr)),
+            Transport::Udp => {
+                backend.init_and_run(config, move || run_spawner_server(addr, fakeworker))
+            }
+            Transport::Tcp => {
+                backend.init_and_run(config, move || run_tcp_server(backend, addr, fakeworker))
+            }
         },
         "linux-server" => match tport {
             Transport::Udp => backend.init_and_run(config, move || {
-                run_linux_udp_server(backend, addr, nthreads)
+                run_linux_udp_server(backend, addr, nthreads, fakeworker)
             }),
-            Transport::Tcp => backend.init_and_run(config, move || run_tcp_server(backend, addr)),
+            Transport::Tcp => {
+                backend.init_and_run(config, move || run_tcp_server(backend, addr, fakeworker))
+            }
         },
         "linux-client" | "runtime-client" => {
             backend.init_and_run(config, move || {
@@ -773,7 +754,7 @@ fn main() {
                 match (proto, &barrier_group) {
                     (_, Some(lockstep::Group::Client(ref _c))) => (),
                     (Protocol::Memcached, _) => {
-                        if !run_memcached_preload(backend, tport, addr, nthreads) {
+                        if !run_memcached_preload(backend, Transport::Tcp, addr, nthreads) {
                             panic!("Could not preload memcached");
                         }
                     },

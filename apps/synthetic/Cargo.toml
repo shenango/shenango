@@ -12,6 +12,7 @@ lockstep = { git = "https://github.com/fintelia/lockstep.git",  rev = "9be97f6ef
 rand = "0.4"
 serde = "1.0"
 net2 = "0.2"
+mersenne_twister = "1.1.1"
 shenango = { path = "../../bindings/rust" }
 
 [profile.release]
