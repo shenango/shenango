@@ -454,10 +454,14 @@ static void thread_finish_yield_kthread(unsigned long data)
 	myth->state = THREAD_STATE_SLEEPING;
 	thread_ready(myth);
 
+	STAT(PROGRAM_CYCLES) += rdtsc() - last_tsc;
+
 	spin_lock(&k->lock);
 	clear_preempt_needed();
 	kthread_park(false);
 	spin_unlock(&k->lock);
+
+	last_tsc = rdtsc();
 
 	schedule();
 }

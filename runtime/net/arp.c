@@ -206,6 +206,9 @@ static void arp_update(uint32_t daddr, struct eth_addr dhost)
 		}
 
 		rcu_hlist_add_head(&arp_tbl[idx], &e->link);
+	} else if (load_acquire(&e->state) == ARP_STATE_STATIC) {
+		spin_unlock_np(&arp_lock);
+		return;
 	}
 	e->eth = dhost;
 	e->ts = microtime();
