@@ -11,6 +11,7 @@ use std::cell::UnsafeCell;
 use std::ffi::CString;
 use std::mem;
 use std::os::raw::{c_int, c_void};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::time::Duration;
 
@@ -73,19 +74,19 @@ where
 }
 
 pub struct WaitGroup {
-    inner: ffi::waitgroup,
+    inner: Arc<UnsafeCell<ffi::waitgroup>>,
 }
 impl WaitGroup {
     pub fn new() -> Self {
-        let mut inner: ffi::waitgroup = unsafe { std::mem::uninitialized() };
-        unsafe { ffi::waitgroup_init(&mut inner as *mut _) };
+        let inner = Arc::new(UnsafeCell::new(unsafe { std::mem::uninitialized() }));
+        unsafe { ffi::waitgroup_init(inner.get() as *mut _) };
         Self { inner }
     }
     pub fn add(&self, count: i32) {
-        unsafe { ffi::waitgroup_add(&self.inner as *const _ as *mut _, count as c_int) }
+        unsafe { ffi::waitgroup_add(self.inner.get() as *const _ as *mut _, count as c_int) }
     }
     pub fn wait(&self) {
-        unsafe { ffi::waitgroup_wait(&self.inner as *const _ as *mut _) }
+        unsafe { ffi::waitgroup_wait(self.inner.get() as *const _ as *mut _) }
     }
     pub fn done(&self) {
         self.add(-1)
