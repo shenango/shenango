@@ -297,3 +297,5 @@ extern int cores_pin_thread(pid_t tid, int core);
 extern bool cores_park_kthread(struct thread *t, bool force);
 extern struct thread *cores_add_core(struct proc *p);
 extern void cores_adjust_assignments();
+extern void proc_set_overloaded(struct proc *p);
+extern unsigned int nr_avail_cores;

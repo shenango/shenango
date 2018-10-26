@@ -110,7 +110,7 @@ static LIST_HEAD(overloaded_procs);
  * proc_set_overloaded - marks a process as overloaded
  * p: the process to mark as overloaded
  */
-static inline void proc_set_overloaded(struct proc *p)
+void proc_set_overloaded(struct proc *p)
 {
 	if (p->overloaded)
 		return;

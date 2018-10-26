@@ -62,14 +62,14 @@ bool rx_send_to_runtime(struct proc *p, uint32_t hash, uint64_t cmd,
 	if (likely(p->active_thread_count > 0)) {
 		/* load balance between active threads */
 		th = p->active_threads[hash % p->active_thread_count];
-	} else if (p->sched_cfg.guaranteed_cores > 0) {
+	} else if (p->sched_cfg.guaranteed_cores > 0 || nr_avail_cores > 0) {
 		th = cores_add_core(p);
 		if (unlikely(!th))
 			return false;
 	} else {
 		/* enqueue to the first idle thread, which will be woken next */
 		th = list_top(&p->idle_threads, struct thread, idle_link);
-		assert(p->overloaded == true);
+		proc_set_overloaded(p);
 	}
 
 	return lrpc_send(&th->rxq, cmd, payload);
