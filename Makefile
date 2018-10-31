@@ -6,6 +6,7 @@ LD	= gcc
 CC	= gcc
 AR	= ar
 SPARSE	= sparse
+MLX=$(shell lspci | grep Mellanox || echo "")
 
 CHECKFLAGS = -D__CHECKER__ -Waddress-space
 

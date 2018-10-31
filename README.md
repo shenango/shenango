@@ -22,8 +22,7 @@ cd shenango
 make clean && make
 ```
 
-To use Mellanox NICs, build with `make MLX=1`. You can also build with
-debugging enabled (`make DEBUG=1`).
+To enable debugging, build with `make DEBUG=1`.
 
 3) Install Rust and build a synthetic client-server application.
 
