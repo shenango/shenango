@@ -67,6 +67,7 @@ static int seconds;
 static size_t payload_len;
 static unsigned int client_port;
 static unsigned int server_port;
+static unsigned int num_queues = 1;
 struct ether_addr zero_mac = {
 		.addr_bytes = {0x0, 0x0, 0x0, 0x0, 0x0, 0x0}
 };
@@ -114,6 +115,8 @@ port_init(uint8_t port, struct rte_mempool *mbuf_pool, unsigned int n_queues)
 	uint16_t q;
 	struct rte_eth_dev_info dev_info;
 	struct rte_eth_txconf *txconf;
+
+	printf("initializing with %u queues\n", n_queues);
 
 	if (port >= rte_eth_dev_count())
 		return -1;
@@ -440,7 +443,7 @@ do_server(void *arg)
 	struct rte_mbuf *rx_bufs[BURST_SIZE];
 	struct rte_mbuf *tx_bufs[BURST_SIZE];
 	struct rte_mbuf *buf;
-	uint16_t nb_rx, n_to_tx, nb_tx, i, j;
+	uint16_t nb_rx, n_to_tx, nb_tx, i, j, q;
 	struct ether_hdr *ptr_mac_hdr;
 	struct ether_addr src_addr;
 	struct ipv4_hdr *ptr_ipv4_hdr;
@@ -466,91 +469,94 @@ do_server(void *arg)
 
 	/* Run until the application is quit or killed. */
 	for (;;) {
-		/* receive packets */
-		nb_rx = rte_eth_rx_burst(port, queue, rx_bufs, BURST_SIZE);
+		for (q = 0; q < num_queues; q++) {
 
-		if (nb_rx == 0)
-			continue;
+			/* receive packets */
+			nb_rx = rte_eth_rx_burst(port, q, rx_bufs, BURST_SIZE);
 
-		n_to_tx = 0;
-		for (i = 0; i < nb_rx; i++) {
-			buf = rx_bufs[i];
+			if (nb_rx == 0)
+				continue;
 
-			if (!check_eth_hdr(buf))
-				goto free_buf;
+			n_to_tx = 0;
+			for (i = 0; i < nb_rx; i++) {
+				buf = rx_bufs[i];
 
-			/* this packet is IPv4, check IP header */
-			if (!check_ip_hdr(buf))
-				goto free_buf;
+				if (!check_eth_hdr(buf))
+					goto free_buf;
 
-			/* swap src and dst ether addresses */
-			ptr_mac_hdr = rte_pktmbuf_mtod(buf, struct ether_hdr *);
-			ether_addr_copy(&ptr_mac_hdr->s_addr, &src_addr);
-			ether_addr_copy(&ptr_mac_hdr->d_addr, &ptr_mac_hdr->s_addr);
-			ether_addr_copy(&src_addr, &ptr_mac_hdr->d_addr);
+				/* this packet is IPv4, check IP header */
+				if (!check_ip_hdr(buf))
+					goto free_buf;
 
-			/* swap src and dst IP addresses */
-			ptr_ipv4_hdr = rte_pktmbuf_mtod_offset(buf, struct ipv4_hdr *,
-						ETHER_HDR_LEN);
-			src_ip_addr = ptr_ipv4_hdr->src_addr;
-			ptr_ipv4_hdr->src_addr = ptr_ipv4_hdr->dst_addr;
-			ptr_ipv4_hdr->dst_addr = src_ip_addr;
+				/* swap src and dst ether addresses */
+				ptr_mac_hdr = rte_pktmbuf_mtod(buf, struct ether_hdr *);
+				ether_addr_copy(&ptr_mac_hdr->s_addr, &src_addr);
+				ether_addr_copy(&ptr_mac_hdr->d_addr, &ptr_mac_hdr->s_addr);
+				ether_addr_copy(&src_addr, &ptr_mac_hdr->d_addr);
 
-			/* swap UDP ports */
-			struct udp_hdr *udp_hdr;
-			udp_hdr = rte_pktmbuf_mtod_offset(buf, struct udp_hdr *,
-					ETHER_HDR_LEN + sizeof(struct ipv4_hdr));
-			tmp_port = udp_hdr->src_port;
-			udp_hdr->src_port = udp_hdr->dst_port;
-			udp_hdr->dst_port = tmp_port;
+				/* swap src and dst IP addresses */
+				ptr_ipv4_hdr = rte_pktmbuf_mtod_offset(buf, struct ipv4_hdr *,
+								ETHER_HDR_LEN);
+				src_ip_addr = ptr_ipv4_hdr->src_addr;
+				ptr_ipv4_hdr->src_addr = ptr_ipv4_hdr->dst_addr;
+				ptr_ipv4_hdr->dst_addr = src_ip_addr;
 
-			/* check if this is a control message and we need to reply with
-			 * ports */
-			control_req = rte_pktmbuf_mtod_offset(buf, struct nbench_req *,
-					ETHER_HDR_LEN + sizeof(struct ipv4_hdr) +
-					sizeof(struct udp_hdr));
-			if (control_req->magic == kMagic) {
-				rte_pktmbuf_append(buf, sizeof(struct nbench_resp) +
-						sizeof(uint16_t) *
-						control_req->nports -
-						sizeof(struct nbench_req));
-				control_resp = (struct nbench_resp *) control_req;
+				/* swap UDP ports */
+				struct udp_hdr *udp_hdr;
+				udp_hdr = rte_pktmbuf_mtod_offset(buf, struct udp_hdr *,
+								ETHER_HDR_LEN + sizeof(struct ipv4_hdr));
+				tmp_port = udp_hdr->src_port;
+				udp_hdr->src_port = udp_hdr->dst_port;
+				udp_hdr->dst_port = tmp_port;
 
-				/* add ports to response */
-				for (j = 0; j < control_req->nports; j++) {
-					/* simple port allocation */
-					control_resp->ports[j] = rte_cpu_to_be_16(next_port++);
+				/* check if this is a control message and we need to reply with
+				 * ports */
+				control_req = rte_pktmbuf_mtod_offset(buf, struct nbench_req *,
+								ETHER_HDR_LEN + sizeof(struct ipv4_hdr) +
+								sizeof(struct udp_hdr));
+				if (control_req->magic == kMagic) {
+					rte_pktmbuf_append(buf, sizeof(struct nbench_resp) +
+							sizeof(uint16_t) *
+							control_req->nports -
+							sizeof(struct nbench_req));
+					control_resp = (struct nbench_resp *) control_req;
+
+					/* add ports to response */
+					for (j = 0; j < control_req->nports; j++) {
+						/* simple port allocation */
+						control_resp->ports[j] = rte_cpu_to_be_16(next_port++);
+					}
+
+					/* adjust lengths in UDP and IPv4 headers */
+					payload_len = sizeof(struct nbench_resp) +
+						sizeof(uint16_t) * control_req->nports;
+					udp_hdr->dgram_len = rte_cpu_to_be_16(sizeof(struct udp_hdr) +
+									payload_len);
+					ptr_ipv4_hdr->total_length = rte_cpu_to_be_16(sizeof(struct ipv4_hdr) +
+										sizeof(struct udp_hdr) + payload_len);
+
+					/* enable computation of IPv4 checksum in hardware */
+					ptr_ipv4_hdr->hdr_checksum = 0;
+					buf->l2_len = ETHER_HDR_LEN;
+					buf->l3_len = sizeof(struct ipv4_hdr);
+					buf->ol_flags = PKT_TX_IP_CKSUM | PKT_TX_IPV4;
 				}
 
-				/* adjust lengths in UDP and IPv4 headers */
-				payload_len = sizeof(struct nbench_resp) +
-					sizeof(uint16_t) * control_req->nports;
-				udp_hdr->dgram_len = rte_cpu_to_be_16(sizeof(struct udp_hdr) +
-								payload_len);
-				ptr_ipv4_hdr->total_length = rte_cpu_to_be_16(sizeof(struct ipv4_hdr) +
-				sizeof(struct udp_hdr) + payload_len);
+				tx_bufs[n_to_tx++] = buf;
+				continue;
 
-				/* enable computation of IPv4 checksum in hardware */
-				ptr_ipv4_hdr->hdr_checksum = 0;
-				buf->l2_len = ETHER_HDR_LEN;
-				buf->l3_len = sizeof(struct ipv4_hdr);
-				buf->ol_flags = PKT_TX_IP_CKSUM | PKT_TX_IPV4;
+			free_buf:
+				/* packet wasn't sent, free it */
+				rte_pktmbuf_free(buf);
 			}
 
-			tx_bufs[n_to_tx++] = buf;
-			continue;
+			/* transmit packets */
+			nb_tx = rte_eth_tx_burst(port, q, tx_bufs, n_to_tx);
 
-		free_buf:
-			/* packet wasn't sent, free it */
-			rte_pktmbuf_free(buf);
+			if (nb_tx != n_to_tx)
+				printf("error: could not transmit all packets: %d %d\n",
+					n_to_tx, nb_tx);
 		}
-
-		/* transmit packets */
-		nb_tx = rte_eth_tx_burst(port, queue, tx_bufs, n_to_tx);
-
-		if (nb_tx != n_to_tx)
-			printf("error: could not transmit all packets: %d %d\n",
-				n_to_tx, nb_tx);
 	}
 
 	return 0;
@@ -619,9 +625,14 @@ static int parse_netperf_args(int argc, char *argv[])
 		seconds = tmp;
 		str_to_long(argv[7], &tmp);
 		payload_len = tmp;
-	} else if (!strcmp(argv[1], "UDP_SERVER"))
+	} else if (!strcmp(argv[1], "UDP_SERVER")) {
 		mode = MODE_UDP_SERVER;
-	else {
+		argc -= 3;
+		if (argc >= 1) {
+			if (sscanf(argv[3], "%u", &num_queues) != 1)
+				return -EINVAL;
+		}
+	} else {
 		printf("invalid mode '%s'\n", argv[1]);
 		return -EINVAL;
 	}
@@ -652,7 +663,7 @@ main(int argc, char *argv[])
 	/* initialize port */
 	if (mode == MODE_UDP_CLIENT && rte_lcore_count() > 1)
 		printf("\nWARNING: Too many lcores enabled. Only 1 used.\n");
-	if (port_init(dpdk_port, rx_mbuf_pool, rte_lcore_count()) != 0)
+	if (port_init(dpdk_port, rx_mbuf_pool, num_queues) != 0)
 		rte_exit(EXIT_FAILURE, "Cannot init port %"PRIu8 "\n", dpdk_port);
 
 	if (mode == MODE_UDP_CLIENT)
