@@ -24,7 +24,14 @@ make clean && make
 
 To enable debugging, build with `make DEBUG=1`.
 
-3) Install Rust and build a synthetic client-server application.
+3) Setup hugepages. We require at least 64 2MB hugepages. Run the script below
+and follow the instructions for NUMA or non-NUMA systems, as appropriate.
+
+```
+./dpdk/usertools/dpdk-setup.sh
+```
+
+4) Install Rust and build a synthetic client-server application.
 
 ```
 curl https://sh.rustup.rs -sSf | sh
@@ -37,7 +44,7 @@ cargo update
 cargo build --release
 ```
 
-4) Run the synthetic application with a client and server. The client
+5) Run the synthetic application with a client and server. The client
 sends requests to the server, which performs a specified amount of
 fake work (e.g., computing square roots for 10us), before responding.
 
@@ -52,6 +59,14 @@ On the client:
 sudo ./iokerneld
 ./apps/synthetic/target/release/synthetic 192.168.1.3:5000 --config client.config --mode runtime-client
 ```
+
+### Supported Platforms
+
+This code has been tested most thoroughly on Ubuntu 17.10, with kernel
+4.14.0. It has been tested with Intel 82599ES 10 Gbit/s NICs and
+Mellanox ConnectX-3 Pro 10 Gbit/s NICs. If you use Mellanox NICs, you
+should install the Mellanox OFED as described in [DPDK's
+documentation](https://doc.dpdk.org/guides/nics/mlx4.html).
 
 ## How do I contribute?
 
