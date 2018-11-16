@@ -807,7 +807,7 @@ fn main() {
                         distribution,
                         &mut barrier_group,
                         j,
-                        50000,
+                        rampup,
                     );
                     backend.sleep(Duration::from_secs(3));
                 }
