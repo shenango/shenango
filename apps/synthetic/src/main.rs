@@ -296,27 +296,48 @@ fn run_client(
     distribution: Distribution,
     barrier_group: &mut Option<lockstep::Group>,
     index: usize,
+    ramp_up_rate: usize,
 ) -> bool {
-    let packets_per_thread =
-        duration_to_ns(runtime) as usize * packets_per_second / (1000_000_000 * nthreads);
-    let ns_per_packet = nthreads * 1000_000_000 / packets_per_second;
+    let packets = duration_to_ns(runtime) as usize * packets_per_second / 1000_000_000;
 
-    let exp = Exp::new(1.0 / ns_per_packet as f64);
+    let mut last = 100_000_000;
+    let mut send_schedule: Vec<u64> = Vec::with_capacity(packets);
+
+    /* Ramp up */
+    if ramp_up_rate > 0 {
+        for i in (ramp_up_rate..packets_per_second).step_by(ramp_up_rate) {
+            let ns_per_packet = 1000_000_000 / i as u64;
+            /* 1 second at rate i */
+            for _ in 0..i {
+                last += ns_per_packet;
+                send_schedule.push(last)
+            }
+        }
+    }
+
+    let discard_thresh = Duration::from_nanos(last);
+
     let mut rng = rand::thread_rng();
-    println!("Gen psched {}", packets_per_second);
+    let ns_per_packet = 1000_000_000 / packets_per_second;
+    let exp = Exp::new(1.0 / ns_per_packet as f64);
+    let end = last + duration_to_ns(runtime);
+
+    while last < end {
+        last += exp.ind_sample(&mut rng) as u64;
+        send_schedule.push(last);
+    }
     let packet_schedules: Vec<(Vec<Packet>, Vec<Option<Duration>>, Connection)> = (0..nthreads)
         .map(|tidx| {
-            let mut last = 100_000_000;
-            let mut packets = Vec::with_capacity(packets_per_thread);
-            for _ in 0..packets_per_thread {
-                last += exp.ind_sample(&mut rng) as u64;
-                packets.push(Packet {
+            let thread_packets: Vec<Packet> = (tidx..send_schedule.len())
+                .step_by(nthreads)
+                .map(|i| Packet {
                     randomness: rng.gen::<u64>(),
-                    target_start: Duration::from_nanos(last),
+                    target_start: Duration::from_nanos(send_schedule[i]),
                     work_iterations: distribution.sample(&mut rng),
                     ..Default::default()
-                });
-            }
+                })
+                .collect();
+
             let src_addr = SocketAddrV4::new(
                 Ipv4Addr::new(0, 0, 0, 0),
                 (100 + (index * nthreads) + tidx) as u16,
@@ -327,7 +348,8 @@ fn run_client(
                     .create_udp_connection("0.0.0.0:0".parse().unwrap(), Some(addr))
                     .unwrap(),
             };
-            (packets, vec![None; packets_per_thread], socket)
+            let packets_per_thread = thread_packets.len();
+            (thread_packets, vec![None; packets_per_thread], socket)
         })
         .collect();
 
@@ -367,7 +389,7 @@ fn run_client(
             // then stop it by triggering a shutdown on the socket.
             let socket = socket2.clone();
             let timer = backend.spawn_thread(move || {
-                backend.sleep(runtime + Duration::from_millis(500));
+                backend.sleep(runtime + Duration::from_millis(500) + discard_thresh);
                 if Arc::strong_count(&socket) > 1 {
                     socket.shutdown();
                 }
@@ -419,6 +441,7 @@ fn run_client(
             completion_time: r,
             ..p
         })
+        .filter(|p| p.target_start > discard_thresh)
         .collect();
     packets.sort_by_key(|p| p.target_start);
 
@@ -665,6 +688,13 @@ fn main() {
                 .default_value("udp")
                 .help("udp or tcp"),
         )
+        .arg(
+            Arg::with_name("rampup")
+                .long("rampup")
+                .takes_value(true)
+                .default_value("0")
+                .help("ramp up in increments of <rampup>"),
+        )
         .get_matches();
 
     let addr: SocketAddrV4 = FromStr::from_str(matches.value_of("ADDR").unwrap()).unwrap();
@@ -688,6 +718,7 @@ fn main() {
         _ => unreachable!(),
     };
     let samples = value_t_or_exit!(matches, "samples", usize);
+    let rampup = value_t_or_exit!(matches, "rampup", usize);
     let mode = matches.value_of("mode").unwrap();
     let backend = match mode {
         "linux-server" | "linux-client" => Backend::Linux,
@@ -747,6 +778,7 @@ fn main() {
                             distribution,
                             &mut barrier_group,
                             0,
+                            rampup,
                         );
                     }
                 }
@@ -775,6 +807,7 @@ fn main() {
                         distribution,
                         &mut barrier_group,
                         j,
+                        50000,
                     );
                     backend.sleep(Duration::from_secs(3));
                 }
