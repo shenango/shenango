@@ -296,22 +296,20 @@ fn run_client(
     distribution: Distribution,
     barrier_group: &mut Option<lockstep::Group>,
     index: usize,
-    ramp_up_rate: usize,
+    ramp_up_seconds: usize,
 ) -> bool {
     let packets = duration_to_ns(runtime) as usize * packets_per_second / 1000_000_000;
 
     let mut last = 100_000_000;
     let mut send_schedule: Vec<u64> = Vec::with_capacity(packets);
 
-    /* Ramp up */
-    if ramp_up_rate > 0 {
-        for i in (ramp_up_rate..packets_per_second).step_by(ramp_up_rate) {
-            let ns_per_packet = 1000_000_000 / i as u64;
-            /* 1 second at rate i */
-            for _ in 0..i {
-                last += ns_per_packet;
-                send_schedule.push(last)
-            }
+    /* Climb in 100ms increments */
+    for t in 1..(10 * ramp_up_seconds) {
+        let rate = t * packets_per_second / (ramp_up_seconds * 10);
+        let ns_per_packet = 1000_000_000 / rate;
+        for _ in 0..(rate / 10) {
+            last += ns_per_packet as u64;
+            send_schedule.push(last)
         }
     }
 
@@ -692,8 +690,8 @@ fn main() {
             Arg::with_name("rampup")
                 .long("rampup")
                 .takes_value(true)
-                .default_value("0")
-                .help("ramp up in increments of <rampup>"),
+                .default_value("4")
+                .help("per-sample ramp up seconds"),
         )
         .get_matches();
 
