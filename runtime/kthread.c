@@ -165,6 +165,8 @@ static void kthread_yield_to_iokernel(void)
 	ssize_t s;
 	uint64_t assigned_core, last_core = k->curr_cpu;
 
+	clear_preempt_needed();
+
 	/* yield to the iokernel */
 	s = read(k->park_efd, &assigned_core, sizeof(assigned_core));
 	while (unlikely(s != sizeof(uint64_t) && errno == EINTR)) {
@@ -194,7 +196,8 @@ void kthread_park(bool voluntary)
 	unsigned long payload = 0;
 	uint64_t cmd, deadline_us;
 
-	if (load_acquire(&nrks) > 1 || !mbufq_empty(&k->txpktq_overflow) ||
+	if (!voluntary || load_acquire(&nrks) > 1 ||
+	    !mbufq_empty(&k->txpktq_overflow) ||
 	    !mbufq_empty(&k->txcmdq_overflow)) {
 		cmd = TXCMD_PARKED;
 		payload = (unsigned long)k;

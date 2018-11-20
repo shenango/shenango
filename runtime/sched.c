@@ -278,8 +278,7 @@ again:
 	/* did not find anything to run, park this kthread */
 	STAT(SCHED_CYCLES) += rdtsc() - start_tsc;
 	/* we may have got a preempt signal before voluntarily yielding */
-	clear_preempt_needed();
-	kthread_park(true);
+	kthread_park(!preempt_needed());
 	start_tsc = rdtsc();
 
 	goto again;
