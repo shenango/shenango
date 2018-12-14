@@ -7,10 +7,10 @@ git submodule init
 git submodule update --recursive
 
 # Apply driver patches
-patch -p 1 -d dpdk/ < ixgbe.patch
+patch -p 1 -d dpdk/ < ixgbe_18_11.patch
 
 if lspci | grep -q Mellanox; then
-    patch -p 1 -d dpdk/ < mlx.patch
+    patch -p 1 -d dpdk/ < mlx4_18_11.patch
     sed -i 's/CONFIG_RTE_LIBRTE_MLX4_PMD=n/CONFIG_RTE_LIBRTE_MLX4_PMD=y/g' dpdk/config/common_base
 fi
 

@@ -1,0 +1,235 @@
+From 458bb8f0deab3c7fec6ed16706a7f2ad6a75e87c Mon Sep 17 00:00:00 2001
+From: Amy Ousterhout <aousterh@mit.edu>
+Date: Wed, 12 Dec 2018 17:44:10 -0500
+Subject: [PATCH] mlx4 patch for DPDK 18.11
+
+---
+ drivers/net/mlx4/mlx4_mr.c   | 110 +++++++++++++++++++++++++++++++++++
+ drivers/net/mlx4/mlx4_mr.h   |   9 +++
+ drivers/net/mlx4/mlx4_rxtx.c |   2 +-
+ drivers/net/mlx4/mlx4_rxtx.h |  46 +++++++++++++++
+ 4 files changed, 166 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/net/mlx4/mlx4_mr.c b/drivers/net/mlx4/mlx4_mr.c
+index a0094483a..d75d659f8 100644
+--- a/drivers/net/mlx4/mlx4_mr.c
++++ b/drivers/net/mlx4/mlx4_mr.c
+@@ -1358,3 +1358,113 @@ mlx4_mr_release(struct rte_eth_dev *dev)
+ 	/* Free all remaining MRs. */
+ 	mlx4_mr_garbage_collect(dev);
+ }
++
++/**
++ * Create a new memory region for a custom memory pool.
++ *
++ * @param dev
++ *   Pointer to Ethernet device
++ * @param addr
++ *   Start address of memory region
++ * @param len
++ *   Length of memory region
++ * @param socket_id
++ *   Socket to create the memory region description on
++ */
++struct mlx4_mr *
++mlx4_mr_create_custom(struct rte_eth_dev *dev, uintptr_t addr,
++		      uint32_t len, int socket_id)
++{
++	struct mlx4_mr *mr = NULL;
++	struct priv *priv = dev->data->dev_private;
++
++	mr = rte_zmalloc_socket(NULL,
++				RTE_ALIGN_CEIL(sizeof(*mr),
++					       RTE_CACHE_LINE_SIZE),
++				RTE_CACHE_LINE_SIZE, socket_id);
++	if (mr == NULL) {
++		WARN("port %u unable to allocate memory for a new MR",
++		     dev->data->port_id);
++		return NULL;
++	}
++	DEBUG("port %u register MR for custom mempool", dev->data->port_id);
++	mr->ibv_mr = mlx4_glue->reg_mr(priv->pd, (void *)addr, len,
++				       IBV_ACCESS_LOCAL_WRITE);
++	if (mr->ibv_mr == NULL) {
++		WARN("port %u fail to create a verbs MR for address (%p)",
++		     dev->data->port_id, (void *)addr);
++		rte_free(mr);
++		return NULL;
++	}
++	mr->msl = NULL; /* Mark it is external memory. */
++	mr->ms_bmp = NULL;
++	mr->ms_n = 1;
++	mr->ms_bmp_n = 1;
++	DEBUG("port %u MR CREATED (%p) for external memory %p:\n"
++	      "  [0x%" PRIxPTR ", 0x%" PRIxPTR "),"
++	      " lkey=0x%x base_idx=%u ms_n=%u, ms_bmp_n=%u",
++	      dev->data->port_id, (void *)mr, (void *)addr,
++	      addr, addr + len, rte_cpu_to_be_32(mr->ibv_mr->lkey),
++	      mr->ms_base_idx, mr->ms_n, mr->ms_bmp_n);
++
++	return mr;
++}
++
++/**
++ * Add memory region (MR) <-> memory id association to mr_ctrl->id2mr[].
++ * If id2mr[] is full, remove an entry first.
++ *
++ * @param txq
++ *   Pointer to Tx queue structure.
++ * @param[in] m
++ *   Info about region for which a memory region lkey must be added.
++ * @param[in] i
++ *   Index in memory pool (MP) where to add memory region (MR).
++ * @param mp
++ *   Mempool for which we're adding the mem region
++ *
++ * @return
++ *   Added mr->lkey on success, (uint32_t)-1 on failure.
++ */
++uint32_t
++mlx4_txq_add_mr_from_mem_info(struct txq *txq, struct mem_info *m, uint32_t i,
++			      struct rte_mempool *mp)
++{
++	struct mlx4_mr_ctrl *mr_ctrl = &txq->mr_ctrl;
++	struct mlx4_mr *mr;
++
++	if (i != RTE_DIM(mr_ctrl->id2mr) && mr_ctrl->id2mr[i].id != 0) {
++		/* Need to replace an existing entry. */
++		DEBUG("%p: replacing possibly stale MR", (void *)mr_ctrl);
++	        mr_free(mr_ctrl->id2mr[i].mr);
++	}
++
++	/* Add a new entry, register MR first. */
++	DEBUG("%p: discovered new mem info", (void *)mr_ctrl);
++	mr = mlx4_mr_create_custom(txq->priv->dev, m->start_addr,
++				   m->end_addr - m->start_addr, mp->socket_id);
++	if (unlikely(mr == NULL)) {
++		DEBUG("%p: unable to configure MR, mlx4_mr_get() failed",
++		      (void *)txq);
++		return (uint32_t)-1;
++	}
++	if (unlikely(i == RTE_DIM(mr_ctrl->id2mr))) {
++		/* Table is full, remove oldest entry. */
++		DEBUG("%p: MR <-> ID table full, dropping oldest entry.",
++		      (void *)mr_ctrl);
++		--i;
++		mr_free(mr_ctrl->id2mr[0].mr);
++		memmove(&mr_ctrl->id2mr[0], &mr_ctrl->id2mr[1],
++			(sizeof(mr_ctrl->id2mr) - sizeof(mr_ctrl->id2mr[0])));
++	}
++	/* Store the new entry. */
++	mr_ctrl->id2mr[i].id = m->unique_id;
++	mr_ctrl->id2mr[i].mr = mr;
++	mr_ctrl->id2mr[i].start = m->start_addr;
++	mr_ctrl->id2mr[i].end = m->end_addr;
++	mr_ctrl->id2mr[i].lkey = rte_cpu_to_be_32(mr->ibv_mr->lkey);
++	DEBUG("%p: new MR lkey for mem_info %p %p: 0x%08" PRIu32,
++		(void *)mr_ctrl, (void *) m->start_addr, (void *) m->end_addr,
++		mr_ctrl->id2mr[i].lkey);
++	return mr_ctrl->id2mr[i].lkey;
++}
+diff --git a/drivers/net/mlx4/mlx4_mr.h b/drivers/net/mlx4/mlx4_mr.h
+index 37a365a8b..d1b7ba0d9 100644
+--- a/drivers/net/mlx4/mlx4_mr.h
++++ b/drivers/net/mlx4/mlx4_mr.h
+@@ -64,6 +64,13 @@ struct mlx4_mr_ctrl {
+ 	uint16_t head; /* Index of the oldest entry in top-half cache. */
+ 	struct mlx4_mr_cache cache[MLX4_MR_CACHE_N]; /* Cache for top-half. */
+ 	struct mlx4_mr_btree cache_bh; /* Cache for bottom-half. */
++	struct {
++		uintptr_t id; /**< id of mem region (proc->uniqid). */
++		struct mlx4_mr *mr; /**< Memory region. */
++		uintptr_t start;
++		uintptr_t end;
++		uint32_t lkey; /**< mr->lkey copy. */
++	} __rte_packed id2mr[MLX4_MR_CACHE_N]; /**< id to MR translation table. */
+ } __rte_packed;
+ 
+ extern struct mlx4_dev_list  mlx4_mem_event_cb_list;
+@@ -81,6 +88,8 @@ int mlx4_mr_update_mp(struct rte_eth_dev *dev, struct mlx4_mr_ctrl *mr_ctrl,
+ 		      struct rte_mempool *mp);
+ void mlx4_mr_dump_dev(struct rte_eth_dev *dev);
+ void mlx4_mr_release(struct rte_eth_dev *dev);
++struct mlx4_mr *mlx4_mr_create_custom(struct rte_eth_dev *dev, uintptr_t addr,
++				      uint32_t len, int socket_id);
+ 
+ /**
+  * Look up LKey from given lookup table by linear search. Firstly look up the
+diff --git a/drivers/net/mlx4/mlx4_rxtx.c b/drivers/net/mlx4/mlx4_rxtx.c
+index 8c88effcd..9f98e6533 100644
+--- a/drivers/net/mlx4/mlx4_rxtx.c
++++ b/drivers/net/mlx4/mlx4_rxtx.c
+@@ -949,7 +949,7 @@ mlx4_tx_burst(void *dpdk_txq, struct rte_mbuf **pkts, uint16_t pkts_n)
+ 				elt->buf = NULL;
+ 				break;
+ 			}
+-			lkey = mlx4_tx_mb2mr(txq, buf);
++			lkey = mlx4_tx_mb2mr_custom(txq, buf);
+ 			if (unlikely(lkey == (uint32_t)-1)) {
+ 				/* MR does not exist. */
+ 				DEBUG("%p: unable to get MP <-> MR association",
+diff --git a/drivers/net/mlx4/mlx4_rxtx.h b/drivers/net/mlx4/mlx4_rxtx.h
+index d7ec4e0c5..2dbed57c7 100644
+--- a/drivers/net/mlx4/mlx4_rxtx.h
++++ b/drivers/net/mlx4/mlx4_rxtx.h
+@@ -165,6 +165,13 @@ uint32_t mlx4_rx_addr2mr_bh(struct rxq *rxq, uintptr_t addr);
+ uint32_t mlx4_tx_mb2mr_bh(struct txq *txq, struct rte_mbuf *mb);
+ uint32_t mlx4_tx_update_ext_mp(struct txq *txq, uintptr_t addr,
+ 			       struct rte_mempool *mp);
++struct mem_info {
++	uintptr_t unique_id;
++	uintptr_t start_addr;
++	uintptr_t end_addr;
++};
++uint32_t mlx4_txq_add_mr_from_mem_info(struct txq *txq, struct mem_info *m,
++				       uint32_t i, struct rte_mempool *mp);
+ 
+ /**
+  * Get Memory Pool (MP) from mbuf. If mbuf is indirect, the pool from which the
+@@ -243,4 +250,43 @@ mlx4_tx_mb2mr(struct txq *txq, struct rte_mbuf *mb)
+ 	return mlx4_tx_mb2mr_bh(txq, mb);
+ }
+ 
++#define __max(x,y) ((x) > (y) ? (x) : (y))
++#define __min(x,y) ((x) < (y) ? (x) : (y))
++/**
++ * Query LKey from a packet buffer for Tx. If not found, register the memory.
++ *
++ * @param txq
++ *   Pointer to Tx queue structure.
++ * @param mb
++ *   Buffer for which a memory region lkey must be returned.
++ *
++ * @return
++ *   Searched LKey on success, UINT32_MAX on no match.
++ */
++static __rte_always_inline uint32_t
++mlx4_tx_mb2mr_custom(struct txq *txq, struct rte_mbuf *mb)
++{
++	struct mlx4_mr_ctrl *mr_ctrl = &txq->mr_ctrl;
++	unsigned int i;
++	struct mem_info *m = (struct mem_info *)(((char *) mb) +
++						sizeof(struct rte_mbuf));
++
++	for (i = 0; (i != RTE_DIM(mr_ctrl->id2mr)); ++i) {
++		if (unlikely(mr_ctrl->id2mr[i].id == 0)) {
++			/* Unknown region, add a new MR for it. */
++			break;
++		}
++		if (mr_ctrl->id2mr[i].id == m->unique_id) {
++			/* Found region. */
++			return mr_ctrl->id2mr[i].lkey;
++		}
++		if (__max(mr_ctrl->id2mr[i].start, m->start_addr) <
++					__min(mr_ctrl->id2mr[i].end, m->end_addr)) {
++			/* Recreate lkey/mr for previously mapped regions */
++			return mlx4_txq_add_mr_from_mem_info(txq, m, i, mlx4_mb2mp(mb));
++		}
++	}
++	return mlx4_txq_add_mr_from_mem_info(txq, m, i, mlx4_mb2mp(mb));
++}
++
+ #endif /* MLX4_RXTX_H_ */
+-- 
+2.17.1
+

@@ -51,7 +51,7 @@
 static const struct rte_eth_conf port_conf_default = {
 	.rxmode = {
 		.max_rx_pkt_len = ETHER_MAX_LEN,
-		.hw_ip_checksum = 1,
+		.offloads = DEV_RX_OFFLOAD_IPV4_CKSUM,
 		.mq_mode = ETH_MQ_RX_RSS,
 	},
 	.rx_adv_conf = {
@@ -59,6 +59,9 @@ static const struct rte_eth_conf port_conf_default = {
 			.rss_key = NULL,
 			.rss_hf = ETH_RSS_UDP,
 		},
+	},
+	.txmode = {
+		.offloads = DEV_TX_OFFLOAD_IPV4_CKSUM | DEV_TX_OFFLOAD_UDP_CKSUM,
 	},
 };
 
@@ -78,7 +81,7 @@ static inline int dpdk_port_init(uint8_t port, struct rte_mempool *mbuf_pool)
 	struct rte_eth_txconf *txconf;
 	struct rte_eth_rxconf *rxconf;
 
-	if (port >= rte_eth_dev_count())
+	if (!rte_eth_dev_is_valid_port(port))
 		return -1;
 
 	/* Configure the Ethernet device. */
@@ -106,8 +109,6 @@ static inline int dpdk_port_init(uint8_t port, struct rte_mempool *mbuf_pool)
 	txconf = &dev_info.default_txconf;
 	txconf->tx_rs_thresh = 64;
 	txconf->tx_free_thresh = 64;
-	txconf->txq_flags &= ~(ETH_TXQ_FLAGS_NOXSUMUDP |
-			ETH_TXQ_FLAGS_NOXSUMTCP);
 
 	/* Allocate and set up 1 TX queue per Ethernet port. */
 	for (q = 0; q < tx_rings; q++) {
@@ -165,7 +166,6 @@ void dpdk_print_eth_stats()
  */
 int dpdk_init()
 {
-	unsigned nb_ports;
 	char *argv[4];
 	char buf[10];
 
@@ -185,8 +185,7 @@ int dpdk_init()
 	}
 
 	/* check that there is a port to send/receive on */
-	nb_ports = rte_eth_dev_count();
-	if (nb_ports < 1) {
+	if (!rte_eth_dev_is_valid_port(0)) {
 		log_err("dpdk: no available ports");
 		return -1;
 	}
