@@ -30,6 +30,7 @@ struct lrpc_params lrpc_control_to_data_params;
 struct lrpc_params lrpc_data_to_control_params;
 static struct lrpc_chan_out lrpc_control_to_data;
 static struct lrpc_chan_in lrpc_data_to_control;
+static int nr_guaranteed;
 
 static struct proc *control_create_proc(mem_key_t key, size_t len, pid_t pid,
 		int *fds, int n_fds)
@@ -56,6 +57,13 @@ static struct proc *control_create_proc(mem_key_t key, size_t len, pid_t pid,
 	if (hdr.thread_count > NCPU || hdr.thread_count == 0 ||
 			hdr.thread_count != n_fds)
 		goto fail_unmap;
+
+	if (hdr.sched_cfg.guaranteed_cores + nr_guaranteed > get_total_cores()) {
+		log_err("guaranteed cores exceeds total core count");
+		goto fail_unmap;
+	}
+
+	nr_guaranteed += hdr.sched_cfg.guaranteed_cores;
 
 	/* create the process */
 	nr_pages = div_up(len, PGSIZE_2MB);
@@ -154,6 +162,7 @@ static void control_destroy_proc(struct proc *p)
 	for (i = 0; i < p->thread_count; i++)
 		close(p->threads[i].park_efd);
 
+	nr_guaranteed -= p->sched_cfg.guaranteed_cores;
 	mem_unmap_shm(p->region.base);
 	free(p->overflow_queue);
 	free(p);

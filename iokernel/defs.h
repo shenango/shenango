@@ -298,4 +298,5 @@ extern bool cores_park_kthread(struct thread *t, bool force);
 extern struct thread *cores_add_core(struct proc *p);
 extern void cores_adjust_assignments();
 extern void proc_set_overloaded(struct proc *p);
-extern unsigned int nr_avail_cores;
+extern unsigned int get_nr_avail_cores(void);
+extern unsigned int get_total_cores(void);

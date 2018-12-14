@@ -17,7 +17,9 @@
 
 /*#define CORES_NOHT 1*/
 
-unsigned int nr_avail_cores = 0;
+static unsigned int nr_avail_cores;
+static unsigned int total_cores;
+
 DEFINE_BITMAP(avail_cores, NCPU);
 struct core_assignments core_assign;
 unsigned int nrts = 0;
@@ -25,6 +27,16 @@ struct thread *ts[NCPU];
 
 /* maps each cpu number to the number of its hyperthread buddy */
 static int cpu_siblings[NCPU];
+
+unsigned int get_nr_avail_cores(void)
+{
+	return nr_avail_cores;
+}
+
+unsigned int get_total_cores(void)
+{
+	return total_cores;
+}
 
 /**
  * cpu_to_sibling_cpu - gets the sibling (hyperthread pair) of a cpu
@@ -91,6 +103,7 @@ static inline void core_init(unsigned int core)
 {
 	bitmap_set(avail_cores, core);
 	nr_avail_cores++;
+	total_cores++;
 	core_history[core].current = NULL;
 	core_history[core].prev = NULL;
 }

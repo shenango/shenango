@@ -62,7 +62,7 @@ bool rx_send_to_runtime(struct proc *p, uint32_t hash, uint64_t cmd,
 	if (likely(p->active_thread_count > 0)) {
 		/* load balance between active threads */
 		th = p->active_threads[hash % p->active_thread_count];
-	} else if (p->sched_cfg.guaranteed_cores > 0 || nr_avail_cores > 0) {
+	} else if (p->sched_cfg.guaranteed_cores > 0 || get_nr_avail_cores() > 0) {
 		th = cores_add_core(p);
 		if (unlikely(!th))
 			return false;
