@@ -208,6 +208,7 @@ static struct trans_entry *trans_lookup(struct mbuf *m)
 void net_rx_trans(struct mbuf **ms, const unsigned int nr)
 {
 	int i;
+	const struct ip_hdr *iphdr;
 
 	/* deliver each packet to a L4 protocol handler */
 	for (i = 0; i < nr; i++) {
@@ -216,8 +217,11 @@ void net_rx_trans(struct mbuf **ms, const unsigned int nr)
 
 		rcu_read_lock();
 		e = trans_lookup(m);
-		if (!e) {
+		if (unlikely(!e)) {
 			rcu_read_unlock();
+			iphdr = mbuf_network_hdr(m, *iphdr);
+			if (iphdr->proto == IPPROTO_TCP)
+				tcp_rx_closed(m);
 			mbuf_free(m);
 			continue;
 		}

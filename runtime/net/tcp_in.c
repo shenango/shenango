@@ -196,8 +196,11 @@ void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 
 	spin_lock_np(&c->lock);
 
-	if (c->pcb.state == TCP_STATE_CLOSED)
+	if (c->pcb.state == TCP_STATE_CLOSED) {
+		if ((tcphdr->flags & TCP_RST) == 0)
+			send_rst(c, false, seq, ack, len);
 		goto done;
+	}
 
 	if (c->pcb.state == TCP_STATE_SYN_SENT) {
 		if ((tcphdr->flags & TCP_ACK) > 0) {
@@ -226,7 +229,7 @@ void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 			}
 			if (wraps_gt(c->pcb.snd_una, c->pcb.iss)) {
 				do_ack = true;
-				c->pcb.snd_wnd = win;
+				c->pcb.snd_wnd = win > 1 ? win - 2 : 0; // reserve 1 byte for FIN and one byte for the sequence number on an RST packet
 				c->pcb.snd_wl1 = seq;
 				c->pcb.snd_wl2 = ack;
 				tcp_conn_set_state(c, TCP_STATE_ESTABLISHED);
@@ -280,7 +283,7 @@ void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 			do_drop = true;
 			goto done;
 		}
-		c->pcb.snd_wnd = win;
+		c->pcb.snd_wnd = win > 1 ? win - 2 : 0; // reserve 1 byte for FIN and one byte for the sequence number on an RST packet
 		c->pcb.snd_wl1 = seq;
 		c->pcb.snd_wl2 = ack;
 		tcp_conn_set_state(c, TCP_STATE_ESTABLISHED);
@@ -313,7 +316,7 @@ void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 		if (wraps_lt(c->pcb.snd_wl1, seq) ||
 		    (c->pcb.snd_wl1 == seq &&
 		     wraps_lte(c->pcb.snd_wl2, ack))) {
-			c->pcb.snd_wnd = win;
+			c->pcb.snd_wnd = win > 1 ? win - 2 : 0; // reserve 1 byte for FIN and one byte for the sequence number on an RST packet
 			c->pcb.snd_wl1 = seq;
 			c->pcb.snd_wl2 = ack;
 			c->rep_acks = 0;
@@ -462,4 +465,33 @@ tcpconn_t *tcp_rx_listener(struct netaddr laddr, struct mbuf *m)
 	spin_unlock_np(&c->lock);
 
 	return c;
+}
+
+void tcp_rx_closed(struct mbuf *m)
+{
+	struct netaddr l, r;
+	uint32_t len;
+	const struct ip_hdr *iphdr;
+	const struct tcp_hdr *tcphdr;
+
+	iphdr = mbuf_network_hdr(m, *iphdr);
+	tcphdr = mbuf_pull_hdr_or_null(m, *tcphdr);
+	if (!tcphdr)
+		return;
+
+	if ((tcphdr->flags & TCP_RST) > 0)
+		return;
+
+	l.ip = ntoh32(iphdr->daddr);
+	l.port = ntoh16(tcphdr->dport);
+
+	r.ip = ntoh32(iphdr->saddr);
+	r.port = ntoh16(tcphdr->sport);
+
+	if ((tcphdr->flags & TCP_ACK) > 0) {
+		tcp_tx_raw_rst(l, r, ntoh32(tcphdr->ack));
+	} else {
+		len = ntoh16(iphdr->len) - sizeof(*iphdr) - tcphdr->off * 4;
+		tcp_tx_raw_rst_ack(l, r, 0, ntoh32(tcphdr->seq) + len);
+	}
 }

@@ -54,6 +54,9 @@ static void tcp_handle_timeouts(tcpconn_t *c, uint64_t now)
 			do_retransmit = true;
 		}
 	}
+
+	do_ack |= !list_empty(&c->rxq_ooo);
+
 	spin_unlock_np(&c->lock);
 
 	if (do_ack)
@@ -1034,8 +1037,12 @@ void tcp_abort(tcpconn_t *c)
 
 	l = c->e.laddr;
 	r = c->e.raddr;
-	snd_nxt = c->pcb.snd_nxt;
 	tcp_conn_fail(c, ECONNABORTED);
+
+	while (c->tx_exclusive)
+		waitq_wait(&c->tx_wq, &c->lock);
+
+	snd_nxt = c->pcb.snd_nxt;
 	spin_unlock_np(&c->lock);
 
 	for (i = 0; i < 10; i++) {
@@ -1044,7 +1051,7 @@ void tcp_abort(tcpconn_t *c)
 		timer_sleep(10);
 	}
 
-	WARN();
+	log_warn("tcp: failed to transmit TCP_RST");
 
 }
 
