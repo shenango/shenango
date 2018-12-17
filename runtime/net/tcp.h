@@ -18,7 +18,7 @@
 /* adjustable constants */
 #define TCP_MSS	(ETH_MTU - sizeof(struct ip_hdr) - sizeof(struct tcp_hdr))
 #define TCP_WIN	((65535 / TCP_MSS) * TCP_MSS)
-#define TCP_ACK_TIMEOUT (1 * ONE_MS)
+#define TCP_ACK_TIMEOUT (10 * ONE_MS)
 #define TCP_TIME_WAIT_TIMEOUT (1 * ONE_SECOND) /* FIXME: should be 8 minutes */
 #define TCP_RETRANSMIT_TIMEOUT (300 * ONE_MS) /* FIXME: should be dynamic */
 #define TCP_FAST_RETRANSMIT_THRESH 3
