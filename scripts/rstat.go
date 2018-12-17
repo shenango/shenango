@@ -14,9 +14,11 @@ func prettyPrint(m, lastm map[string]uint64, interval int) {
 	for i, v := range m {
 		dm[i] = float64(v - lastm[i]) / float64(interval)
 	}
-	fmt.Printf("net: RX %.1f pkts, %.1f bytes | TX %.1f pkts, %.1f bytes | %.1f drops\n",
+	fmt.Printf("net: RX %.1f pkts, %.1f bytes | TX %.1f pkts, %.1f bytes | %.1f drops | %.2f%% rx out of order (%.2f%% reorder time)\n",
 		   dm["rx_packets"], dm["rx_bytes"],
-		   dm["tx_packets"], dm["tx_bytes"], dm["drops"])
+		   dm["tx_packets"], dm["tx_bytes"], dm["drops"],
+		   dm["rx_tcp_out_of_order"] / (dm["rx_tcp_in_order"] + dm["rx_tcp_out_of_order"]) * 100,
+		   dm["rx_tcp_text_cycles"] / (dm["sched_cycles"] + dm["program_cycles"]) * 100)
 	fmt.Printf("sched: %.1f rescheds (%.1f%% sched time, %.1f%% local)," +
 		   " %.1f softirqs (%.1f%% stolen), %.1f %%CPU, %.1f parks" +
 		   " (%.1f%% migrated), %.1f preempts (%.1f stolen)\n",

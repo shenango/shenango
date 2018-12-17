@@ -257,6 +257,9 @@ enum {
 	STAT_TX_BYTES,
 	STAT_TX_PACKETS,
 	STAT_DROPS,
+	STAT_RX_TCP_IN_ORDER,
+	STAT_RX_TCP_OUT_OF_ORDER,
+	STAT_RX_TCP_TEXT_CYCLES,
 
 	/* total number of counters */
 	STAT_NR,

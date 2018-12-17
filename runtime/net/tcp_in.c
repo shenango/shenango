@@ -101,11 +101,13 @@ static bool tcp_rx_text(tcpconn_t *c, struct mbuf *m, bool *wake)
 
 	if (wraps_lte(m->seg_seq, c->pcb.rcv_nxt)) {
 		/* we got the next in-order segment */
+		STAT(RX_TCP_IN_ORDER)++;
 		if ((m->flags & (TCP_PUSH | TCP_FIN)) > 0)
 			*wake = true;
 		tcp_rx_append_text(c, m);
 	} else {
 		/* we got an out-of-order segment */
+		STAT(RX_TCP_OUT_OF_ORDER)++;
 		list_for_each(&c->rxq_ooo, pos, link) {
 			if (wraps_lt(m->seg_seq, pos->seg_seq)) {
 				list_add_before(&pos->link, &m->link);
@@ -347,7 +349,15 @@ void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 		m->seg_seq = seq;
 		m->seg_end = seq + len;
 		m->flags = tcphdr->flags;
+
+#ifdef TCP_RX_STATS
+		uint64_t before_tsc = rdtsc();
 		do_drop = !tcp_rx_text(c, m, &wake);
+		STAT(RX_TCP_TEXT_CYCLES) += rdtsc() - before_tsc;
+#else
+		do_drop = !tcp_rx_text(c, m, &wake);
+#endif
+
 		if (wake) {
 			assert(!list_empty(&c->rxq));
 			assert(do_drop == false);
