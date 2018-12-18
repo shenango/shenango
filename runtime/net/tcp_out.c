@@ -274,11 +274,10 @@ ssize_t tcp_tx_send(tcpconn_t *c, const void *buf, size_t len, bool push)
 	return ret;
 }
 
-static void tcp_tx_retransmit_one(tcpconn_t *c, struct mbuf *m)
+static int tcp_tx_retransmit_one(tcpconn_t *c, struct mbuf *m)
 {
 	int ret;
 	uint16_t l4len;
-	bool copied = false;
 
 	l4len = m->seg_end - m->seg_seq;
 	if (m->flags & (TCP_SYN | TCP_FIN))
@@ -293,7 +292,7 @@ static void tcp_tx_retransmit_one(tcpconn_t *c, struct mbuf *m)
 	if (unlikely(atomic_read(&m->ref) != 1)) {
 		struct mbuf *newm = net_tx_alloc_mbuf();
 		if (unlikely(!newm))
-			return;
+			return -ENOMEM;
 		memcpy(mbuf_put(newm, l4len),
 		       mbuf_transport_offset(m) + sizeof(struct tcp_hdr),
 		       l4len);
@@ -302,7 +301,6 @@ static void tcp_tx_retransmit_one(tcpconn_t *c, struct mbuf *m)
 		newm->seg_end = m->seg_end;
 		newm->txflags = OLFLAG_TCP_CHKSUM;
 		m = newm;
-		copied = true;
 	} else {
 		/* strip headers and reset ref count */
 		mbuf_reset(m, m->transport_off + sizeof(struct tcp_hdr));
@@ -313,7 +311,7 @@ static void tcp_tx_retransmit_one(tcpconn_t *c, struct mbuf *m)
 	uint32_t una = load_acquire(&c->pcb.snd_una);
 	if (unlikely(wraps_lte(m->seg_end, una))) {
 		mbuf_free(m);
-		return;
+		return 0;
 	} else if (unlikely(wraps_lt(m->seg_seq, una))) {
 		mbuf_pull(m, una - m->seg_seq);
 		m->seg_seq = una;
@@ -325,14 +323,9 @@ static void tcp_tx_retransmit_one(tcpconn_t *c, struct mbuf *m)
 	/* transmit the packet */
 	tcp_debug_egress_pkt(c, m);
 	ret = net_tx_ip(m, IPPROTO_TCP, c->e.raddr.ip);
-	if (unlikely(ret)) {
-		if (!copied) {
-			/* pretend the packet was sent */
-			atomic_write(&m->ref, 1);
-		} else {
-			mbuf_free(m);
-		}
-	}
+	if (unlikely(ret))
+		mbuf_free(m);
+	return ret;
 }
 
 /**
@@ -371,13 +364,21 @@ void tcp_tx_retransmit(tcpconn_t *c)
 	struct mbuf *m;
 	uint64_t now = microtime();
 
-	assert_spin_lock_held(&c->lock);
+	assert(spin_lock_held(&c->lock) || c->tx_exclusive);
+
+	int ret;
 
 	list_for_each(&c->txq, m, link) {
 		/* check if the timeout expired */
 		if (now - m->timestamp < TCP_RETRANSMIT_TIMEOUT)
 			break;
+
+		if (wraps_gte(load_acquire(&c->pcb.snd_una), m->seg_end))
+			continue;
+
 		m->timestamp = now;
-		tcp_tx_retransmit_one(c, m);
+		ret = tcp_tx_retransmit_one(c, m);
+		if (ret)
+			break;
 	}
 }

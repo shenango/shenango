@@ -888,10 +888,15 @@ static void tcp_retransmit(void *arg)
 	while (c->tx_exclusive && c->pcb.state != TCP_STATE_CLOSED)
 		waitq_wait(&c->tx_wq, &c->lock);
 
-	if (c->pcb.state != TCP_STATE_CLOSED)
+	if (c->pcb.state != TCP_STATE_CLOSED) {
+		c->tx_exclusive = true;
+		spin_unlock_np(&c->lock);
 		tcp_tx_retransmit(c);
+		tcp_write_finish(c);
+	} else {
+		spin_unlock_np(&c->lock);
+	}
 
-	spin_unlock_np(&c->lock);
 	tcp_conn_put(c);
 }
 
