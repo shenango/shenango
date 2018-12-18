@@ -280,8 +280,6 @@ static void tcp_tx_retransmit_one(tcpconn_t *c, struct mbuf *m)
 	uint16_t l4len;
 	bool copied = false;
 
-	assert_spin_lock_held(&c->lock);
-
 	l4len = m->seg_end - m->seg_seq;
 	if (m->flags & (TCP_SYN | TCP_FIN))
 		l4len--;
@@ -312,10 +310,13 @@ static void tcp_tx_retransmit_one(tcpconn_t *c, struct mbuf *m)
 	}
 
 	/* handle a partially acknowledged packet */
-	assert(wraps_gt(m->seg_end, c->pcb.snd_una));
-	if (wraps_lt(m->seg_seq, c->pcb.snd_una)) {
-		mbuf_pull(m, c->pcb.snd_una - m->seg_seq);
-		m->seg_seq = c->pcb.snd_una;
+	uint32_t una = load_acquire(&c->pcb.snd_una);
+	if (unlikely(wraps_lte(m->seg_end, una))) {
+		mbuf_free(m);
+		return;
+	} else if (unlikely(wraps_lt(m->seg_seq, una))) {
+		mbuf_pull(m, una - m->seg_seq);
+		m->seg_seq = una;
 	}
 
 	/* push the TCP header back on (now with fresher ack) */
@@ -338,7 +339,7 @@ static void tcp_tx_retransmit_one(tcpconn_t *c, struct mbuf *m)
  * tcp_tx_fast_retransmit - resend the first pending egress packet
  * @c: the TCP connection in which to send retransmissions
  */
-void tcp_tx_fast_retransmit(tcpconn_t *c)
+struct mbuf *tcp_tx_fast_retransmit_start(tcpconn_t *c)
 {
 	struct mbuf *m;
 
@@ -347,7 +348,17 @@ void tcp_tx_fast_retransmit(tcpconn_t *c)
 	m = list_top(&c->txq, struct mbuf, link);
 	if (m) {
 		m->timestamp = microtime();
+		atomic_inc(&m->ref);
+	}
+
+	return m;
+}
+
+void tcp_tx_fast_retransmit_finish(tcpconn_t *c, struct mbuf *m)
+{
+	if (m) {
 		tcp_tx_retransmit_one(c, m);
+		mbuf_free(m);
 	}
 }
 

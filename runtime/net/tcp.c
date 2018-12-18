@@ -192,6 +192,7 @@ tcpconn_t *tcp_conn_alloc(void)
 	c->tx_last_win = 0;
 	c->tx_pending = NULL;
 	list_head_init(&c->txq);
+	c->do_fast_retransmit = false;
 
 	/* timeouts */
 	c->ack_delayed = false;
@@ -779,6 +780,7 @@ static void tcp_write_finish(tcpconn_t *c)
 {
 	struct list_head q;
 	struct list_head waiters;
+	struct mbuf *retransmit = NULL;
 
 	assert(c->tx_exclusive == true);
 	list_head_init(&q);
@@ -797,10 +799,15 @@ static void tcp_write_finish(tcpconn_t *c)
 			list_add_tail(&q, &c->tx_pending->link);
 			c->tx_pending = NULL;
 		}
+	} else if (c->do_fast_retransmit) {
+		c->do_fast_retransmit = false;
+		if (c->fast_retransmit_last_ack == c->pcb.snd_una)
+			retransmit = tcp_tx_fast_retransmit_start(c);
 	}
 	waitq_release_start(&c->tx_wq, &waiters);
 	spin_unlock_np(&c->lock);
 
+	tcp_tx_fast_retransmit_finish(c, retransmit);
 	waitq_release_finish(&waiters);
 	mbuf_list_free(&q);
 }
@@ -888,21 +895,6 @@ static void tcp_retransmit(void *arg)
 	tcp_conn_put(c);
 }
 
-/* resend just one pending egress packet */
-void tcp_fast_retransmit(void *arg)
-{
-	tcpconn_t *c = (tcpconn_t *)arg;
-
-	spin_lock_np(&c->lock);
-	while (c->tx_exclusive && c->pcb.state != TCP_STATE_CLOSED)
-		waitq_wait(&c->tx_wq, &c->lock);
-
-	if (c->pcb.state != TCP_STATE_CLOSED)
-		tcp_tx_fast_retransmit(c);
-
-	spin_unlock_np(&c->lock);
-	tcp_conn_put(c);
-}
 
 /**
  * tcp_conn_fail - closes a TCP both sides of a connection with an error

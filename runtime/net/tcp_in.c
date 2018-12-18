@@ -156,6 +156,7 @@ void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 	tcpconn_t *c = container_of(e, tcpconn_t, e);
 	struct list_head q, waiters;
 	thread_t *rx_th = NULL;
+	struct mbuf *retransmit = NULL;
 	const struct ip_hdr *iphdr;
 	const struct tcp_hdr *tcphdr;
 	uint32_t seq, ack, len, snd_nxt, hdr_len;
@@ -301,8 +302,12 @@ void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 	    len == 0) {
 		c->rep_acks++;
 		if (c->rep_acks >= TCP_FAST_RETRANSMIT_THRESH) {
-			tcp_conn_get(c);
-			thread_spawn(tcp_fast_retransmit, c);
+			if (c->tx_exclusive) {
+				c->do_fast_retransmit = true;
+				c->fast_retransmit_last_ack = ack;
+			} else {
+				retransmit = tcp_tx_fast_retransmit_start(c);
+			}
 			c->rep_acks = 0;
 		}
 	}
@@ -397,6 +402,7 @@ done:
 	if (rx_th)
 		waitq_signal_finish(rx_th);
 	mbuf_list_free(&q);
+	tcp_tx_fast_retransmit_finish(c, retransmit);
 	if (do_ack)
 		tcp_tx_ack(c);
 	if (do_drop)
