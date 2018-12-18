@@ -394,6 +394,7 @@ void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 	}
 
 done:
+	tcp_timer_update(c);
 	tcp_debug_ingress_pkt(c, m);
 	spin_unlock_np(&c->lock);
 

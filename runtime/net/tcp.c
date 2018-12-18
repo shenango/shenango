@@ -21,6 +21,28 @@ static LIST_HEAD(tcp_conns);
 
 static void tcp_retransmit(void *arg);
 
+void tcp_timer_update(tcpconn_t *c)
+{
+	uint64_t next_timeout = -1L;
+	struct mbuf *m;
+	assert_spin_lock_held(&c->lock);
+
+	if (unlikely(c->pcb.state == TCP_STATE_TIME_WAIT))
+		next_timeout = c->time_wait_ts + TCP_TIME_WAIT_TIMEOUT;
+
+	if (c->ack_delayed)
+		next_timeout = min(next_timeout, c->ack_ts + TCP_ACK_TIMEOUT);
+
+	m = list_top(&c->txq, struct mbuf, link);
+	if (m)
+		next_timeout = min(next_timeout, m->timestamp + TCP_RETRANSMIT_TIMEOUT);
+
+	if (!list_empty(&c->rxq_ooo))
+		next_timeout = min(next_timeout, microtime() + TCP_OOQ_ACK_TIMEOUT);
+
+	store_release(&c->next_timeout, next_timeout);
+}
+
 /* check for timeouts in a TCP connection */
 static void tcp_handle_timeouts(tcpconn_t *c, uint64_t now)
 {
@@ -47,7 +69,7 @@ static void tcp_handle_timeouts(tcpconn_t *c, uint64_t now)
 	}
 	if (!list_empty(&c->txq)) {
 		struct mbuf *m = list_top(&c->txq, struct mbuf, link);
-		if (m && now - m->timestamp >= TCP_RETRANSMIT_TIMEOUT) {
+		if (now - m->timestamp >= TCP_RETRANSMIT_TIMEOUT) {
 			log_debug("tcp: %p retransmission timeout", c);
 			/* It is safe to take a reference, since state != closed */
 			tcp_conn_get(c);
@@ -56,6 +78,8 @@ static void tcp_handle_timeouts(tcpconn_t *c, uint64_t now)
 	}
 
 	do_ack |= !list_empty(&c->rxq_ooo);
+
+	tcp_timer_update(c);
 
 	spin_unlock_np(&c->lock);
 
@@ -75,8 +99,10 @@ static void tcp_worker(void *arg)
 		now = microtime();
 
 		spin_lock_np(&tcp_lock);
-		list_for_each(&tcp_conns, c, global_link)
-			tcp_handle_timeouts(c, now);
+		list_for_each(&tcp_conns, c, global_link) {
+			if (load_acquire(&c->next_timeout) <= now)
+				tcp_handle_timeouts(c, now);
+		}
 		spin_unlock_np(&tcp_lock);
 
 		timer_sleep(10 * ONE_MS);
@@ -135,6 +161,7 @@ void tcp_conn_set_state(tcpconn_t *c, int new_state)
 
 	tcp_debug_state_change(c, c->pcb.state, new_state);
 	c->pcb.state = new_state;
+	tcp_timer_update(c);
 }
 
 /* handles network errors for TCP sockets */
@@ -195,6 +222,7 @@ tcpconn_t *tcp_conn_alloc(void)
 	c->do_fast_retransmit = false;
 
 	/* timeouts */
+	c->next_timeout = -1L;
 	c->ack_delayed = false;
 	c->rcv_wnd_full = false;
 	c->ack_ts = 0;
@@ -804,6 +832,8 @@ static void tcp_write_finish(tcpconn_t *c)
 		if (c->fast_retransmit_last_ack == c->pcb.snd_una)
 			retransmit = tcp_tx_fast_retransmit_start(c);
 	}
+
+	tcp_timer_update(c);
 	waitq_release_start(&c->tx_wq, &waiters);
 	spin_unlock_np(&c->lock);
 

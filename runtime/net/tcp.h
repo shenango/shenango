@@ -19,6 +19,7 @@
 #define TCP_MSS	(ETH_MTU - sizeof(struct ip_hdr) - sizeof(struct tcp_hdr))
 #define TCP_WIN	((65535 / TCP_MSS) * TCP_MSS)
 #define TCP_ACK_TIMEOUT (10 * ONE_MS)
+#define TCP_OOQ_ACK_TIMEOUT (300 * ONE_MS)
 #define TCP_TIME_WAIT_TIMEOUT (1 * ONE_SECOND) /* FIXME: should be 8 minutes */
 #define TCP_RETRANSMIT_TIMEOUT (300 * ONE_MS) /* FIXME: should be dynamic */
 #define TCP_FAST_RETRANSMIT_THRESH 3
@@ -86,6 +87,7 @@ struct tcpconn {
 	uint32_t		fast_retransmit_last_ack;
 
 	/* timeouts */
+	uint64_t next_timeout;
 	bool			ack_delayed;
 	bool			rcv_wnd_full;
 	uint64_t		ack_ts;
@@ -101,6 +103,8 @@ extern void tcp_conn_set_state(tcpconn_t *c, int new_state);
 extern void tcp_conn_fail(tcpconn_t *c, int err);
 extern void tcp_conn_shutdown_rx(tcpconn_t *c);
 extern void tcp_conn_destroy(tcpconn_t *c);
+
+extern void tcp_timer_update(tcpconn_t *c);
 
 /**
  * tcp_conn_get - increments the connection ref count
@@ -149,7 +153,6 @@ extern ssize_t tcp_tx_send(tcpconn_t *c, const void *buf, size_t len,
 extern void tcp_tx_retransmit(tcpconn_t *c);
 extern struct mbuf *tcp_tx_fast_retransmit_start(tcpconn_t *c);
 extern void tcp_tx_fast_retransmit_finish(tcpconn_t *c, struct mbuf *m);
-
 
 /*
  * utilities
