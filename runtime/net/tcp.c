@@ -778,9 +778,11 @@ static int tcp_write_wait(tcpconn_t *c, size_t *winlen)
 static void tcp_write_finish(tcpconn_t *c)
 {
 	struct list_head q;
+	struct list_head waiters;
 
 	assert(c->tx_exclusive == true);
 	list_head_init(&q);
+	list_head_init(&waiters);
 
 	spin_lock_np(&c->lock);
 	c->tx_exclusive = false;
@@ -796,9 +798,10 @@ static void tcp_write_finish(tcpconn_t *c)
 			c->tx_pending = NULL;
 		}
 	}
-	waitq_release(&c->tx_wq);
+	waitq_release_start(&c->tx_wq, &waiters);
 	spin_unlock_np(&c->lock);
 
+	waitq_release_finish(&waiters);
 	mbuf_list_free(&q);
 }
 

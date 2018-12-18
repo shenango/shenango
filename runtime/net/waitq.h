@@ -79,6 +79,22 @@ static inline void waitq_release(waitq_t *q)
 	}
 }
 
+static inline void waitq_release_start(waitq_t *q, struct list_head *waiters)
+{
+	list_append_list(waiters, &q->waiters);
+}
+
+static inline void waitq_release_finish(struct list_head *waiters)
+{
+	while (true) {
+		thread_t *th = list_pop(waiters, thread_t, link);
+		if (!th)
+			break;
+		thread_ready(th);
+	}
+}
+
+
 /**
  * waitq_empty - returns true if there are no waiters
  * @q: the wait queue to check

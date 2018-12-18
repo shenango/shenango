@@ -154,7 +154,7 @@ drain:
 void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 {
 	tcpconn_t *c = container_of(e, tcpconn_t, e);
-	struct list_head q;
+	struct list_head q, waiters;
 	thread_t *rx_th = NULL;
 	const struct ip_hdr *iphdr;
 	const struct tcp_hdr *tcphdr;
@@ -166,6 +166,7 @@ void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 	assert_preempt_disabled();
 
 	list_head_init(&q);
+	list_head_init(&waiters);
 	snd_nxt = load_acquire(&c->pcb.snd_nxt);
 
 	/* find header offsets */
@@ -322,7 +323,7 @@ void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 			c->rep_acks = 0;
 		}
 		if (snd_was_full && !is_snd_full(c))
-			waitq_release(&c->tx_wq);
+			waitq_release_start(&c->tx_wq, &waiters);
 	} else if (wraps_gt(ack, snd_nxt)) {
 		do_ack = true;
 		goto done;
@@ -392,6 +393,7 @@ done:
 	spin_unlock_np(&c->lock);
 
 	/* deferred work (delayed until after the lock was dropped) */
+	waitq_release_finish(&waiters);
 	if (rx_th)
 		waitq_signal_finish(rx_th);
 	mbuf_list_free(&q);
