@@ -1,17 +1,17 @@
-From cb179332767d5f421e3bd446e7fc72133d44167e Mon Sep 17 00:00:00 2001
+From b1b97686d53957c1aeeb0ad9d6f8004bc3f5948c Mon Sep 17 00:00:00 2001
 From: Amy Ousterhout <aousterh@mit.edu>
 Date: Mon, 10 Dec 2018 16:02:53 -0500
 Subject: [PATCH] new ixgbe patch
 
 ---
- drivers/net/ixgbe/ixgbe_rxtx.c            | 48 +++++++++++++++++++++++++++++--
- drivers/net/ixgbe/ixgbe_rxtx.h            |  6 ++--
- drivers/net/ixgbe/ixgbe_rxtx_vec_common.h |  6 ++--
- drivers/net/ixgbe/ixgbe_rxtx_vec_sse.c    | 15 +++++++++-
+ drivers/net/ixgbe/ixgbe_rxtx.c            | 50 +++++++++++++++++++++--
+ drivers/net/ixgbe/ixgbe_rxtx.h            |  6 +--
+ drivers/net/ixgbe/ixgbe_rxtx_vec_common.h |  4 +-
+ drivers/net/ixgbe/ixgbe_rxtx_vec_sse.c    | 15 ++++++-
  4 files changed, 66 insertions(+), 9 deletions(-)
 
 diff --git a/drivers/net/ixgbe/ixgbe_rxtx.c b/drivers/net/ixgbe/ixgbe_rxtx.c
-index ddc7efa87..279d35086 100644
+index ddc7efa87..22f1e6172 100644
 --- a/drivers/net/ixgbe/ixgbe_rxtx.c
 +++ b/drivers/net/ixgbe/ixgbe_rxtx.c
 @@ -558,10 +558,10 @@ tx_desc_ol_flags_to_cmdtype(uint64_t ol_flags)
@@ -69,6 +69,15 @@ index ddc7efa87..279d35086 100644
  /* Takes an ethdev and a queue and sets up the tx function to be used based on
   * the queue parameters. Used in tx_queue_setup by primary process and then
   * in dev_init by secondary process when attaching to an existing ethdev.
+@@ -2382,7 +2417,7 @@ void __attribute__((cold))
+ ixgbe_set_tx_function(struct rte_eth_dev *dev, struct ixgbe_tx_queue *txq)
+ {
+ 	/* Use a simple Tx queue (no offloads, no multi segs) if possible */
+-	if ((txq->offloads == 0) &&
++	if ((txq->offloads & ~(DEV_TX_OFFLOAD_IPV4_CKSUM | DEV_TX_OFFLOAD_UDP_CKSUM | DEV_TX_OFFLOAD_TCP_CKSUM)) == 0 &&
+ #ifdef RTE_LIBRTE_SECURITY
+ 			!(txq->using_ipsec) &&
+ #endif
 @@ -2635,6 +2670,15 @@ ixgbe_dev_tx_queue_setup(struct rte_eth_dev *dev,
  
  	dev->data->tx_queues[queue_idx] = txq;
@@ -108,22 +117,20 @@ index 39378f754..f869fcec6 100644
  #endif
  
 diff --git a/drivers/net/ixgbe/ixgbe_rxtx_vec_common.h b/drivers/net/ixgbe/ixgbe_rxtx_vec_common.h
-index a97c27189..d2e02411e 100644
+index a97c27189..130c6fcad 100644
 --- a/drivers/net/ixgbe/ixgbe_rxtx_vec_common.h
 +++ b/drivers/net/ixgbe/ixgbe_rxtx_vec_common.h
-@@ -94,9 +94,9 @@ ixgbe_tx_free_bufs(struct ixgbe_tx_queue *txq)
+@@ -94,8 +94,8 @@ ixgbe_tx_free_bufs(struct ixgbe_tx_queue *txq)
  	 * tx_next_dd - (tx_rs_thresh-1)
  	 */
  	txep = &txq->sw_ring_v[txq->tx_next_dd - (n - 1)];
 -	m = rte_pktmbuf_prefree_seg(txep[0].mbuf);
 -	if (likely(m != NULL)) {
--		free[0] = m;
 +	if (likely(txep[0].mbuf &&
 +			(m = rte_pktmbuf_prefree_seg(txep[0].mbuf)) != NULL)) {
-+ 		free[0] = m;
+ 		free[0] = m;
  		nb_free = 1;
  		for (i = 1; i < n; i++) {
- 			m = rte_pktmbuf_prefree_seg(txep[i].mbuf);
 diff --git a/drivers/net/ixgbe/ixgbe_rxtx_vec_sse.c b/drivers/net/ixgbe/ixgbe_rxtx_vec_sse.c
 index c9ba48246..05c3130eb 100644
 --- a/drivers/net/ixgbe/ixgbe_rxtx_vec_sse.c
@@ -151,5 +158,5 @@ index c9ba48246..05c3130eb 100644
  			pkt->buf_iova + pkt->data_off);
  	_mm_store_si128((__m128i *)&txdp->read, descriptor);
 -- 
-2.13.0
+2.17.1
 

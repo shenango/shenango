@@ -61,7 +61,7 @@ static const struct rte_eth_conf port_conf_default = {
 		},
 	},
 	.txmode = {
-		.offloads = DEV_TX_OFFLOAD_IPV4_CKSUM | DEV_TX_OFFLOAD_UDP_CKSUM,
+		.offloads = DEV_TX_OFFLOAD_IPV4_CKSUM | DEV_TX_OFFLOAD_UDP_CKSUM | DEV_TX_OFFLOAD_TCP_CKSUM,
 	},
 };
 
