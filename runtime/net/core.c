@@ -321,6 +321,7 @@ struct mbuf *net_tx_alloc_mbuf(void)
 	if (unlikely(!buf)) {
 		tcache_free(&perthread_get(net_mbuf_pt), m);
 		preempt_enable();
+		log_warn_ratelimited("net: out of tx buffers");
 		return NULL;
 	}
 	preempt_enable();

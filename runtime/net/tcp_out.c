@@ -22,8 +22,9 @@ static struct tcp_hdr *
 tcp_push_tcphdr(struct mbuf *m, tcpconn_t *c, uint8_t flags, uint16_t l4len)
 {
 	struct tcp_hdr *tcphdr;
-	tcp_seq ack = c->tx_last_ack = load_acquire(&c->pcb.rcv_nxt);
-	uint16_t win = c->tx_last_win = load_acquire(&c->pcb.rcv_wnd);
+	uint64_t rcv_nxt_wnd = load_acquire(&c->pcb.rcv_nxt_wnd);
+	tcp_seq ack = c->tx_last_ack = (uint32_t)rcv_nxt_wnd;
+	uint16_t win = c->tx_last_win = rcv_nxt_wnd >> 32;
 
 	/* write the tcp header */
 	tcphdr = mbuf_push_hdr(m, *tcphdr);

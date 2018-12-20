@@ -54,8 +54,13 @@ struct tcp_pcb {
 	uint32_t	iss;		/* initial send sequence number */
 
 	/* receive sequence variables (RFC 793 Section 3.2) */
-	uint32_t	rcv_nxt;	/* receive next */
-	uint32_t	rcv_wnd;	/* receive window */
+	union {
+		struct {
+			uint32_t	rcv_nxt;	/* receive next */
+			uint32_t	rcv_wnd;	/* receive window */
+		};
+		uint64_t	rcv_nxt_wnd;
+	};
 	uint32_t	rcv_up;		/* receive urgent pointer */
 	uint32_t	irs;		/* initial receive sequence number */
 };

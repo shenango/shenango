@@ -80,9 +80,9 @@ static void tcp_rx_append_text(tcpconn_t *c, struct mbuf *m)
 	}
 
 	/* enqueue the text */
-	c->pcb.rcv_nxt = m->seg_end;
 	assert(c->pcb.rcv_wnd >= m->seg_end - m->seg_seq);
-	c->pcb.rcv_wnd -= m->seg_end - m->seg_seq;
+	uint64_t nxt_wnd =  (uint64_t)m->seg_end | ((uint64_t)(c->pcb.rcv_wnd - (m->seg_end - m->seg_seq)) << 32);
+	store_release(&c->pcb.rcv_nxt_wnd, nxt_wnd);
 	if (c->pcb.rcv_wnd == 0)
 		c->rcv_wnd_full = true;
 	list_add_tail(&c->rxq, &m->link);
@@ -113,7 +113,7 @@ static bool tcp_rx_text(tcpconn_t *c, struct mbuf *m, bool *wake)
 			if (wraps_lt(m->seg_seq, pos->seg_seq)) {
 				list_add_before(&pos->link, &m->link);
 				goto drain;
-			} else if (m->seg_seq == pos->seg_seq) {
+			} else if (wraps_lte(m->seg_end, pos->seg_end)) {
 				return false;
 			}
 			size++;
@@ -317,28 +317,29 @@ void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 			c->rep_acks = 0;
 		}
 	}
+	bool snd_was_full = is_snd_full(c);
 	if (wraps_lte(c->pcb.snd_una, ack) &&
 	    wraps_lte(ack, snd_nxt)) {
-		bool snd_was_full = is_snd_full(c);
 		if (c->pcb.snd_una != ack)
 			c->rep_acks = 0;
 		c->pcb.snd_una = ack;
 		tcp_conn_ack(c, &q);
-		/* should we update the send window? */
-		if (wraps_lt(c->pcb.snd_wl1, seq) ||
-		    (c->pcb.snd_wl1 == seq &&
-		     wraps_lte(c->pcb.snd_wl2, ack))) {
-			c->pcb.snd_wnd = win > 1 ? win - 2 : 0; // reserve 1 byte for FIN and one byte for the sequence number on an RST packet
-			c->pcb.snd_wl1 = seq;
-			c->pcb.snd_wl2 = ack;
-			c->rep_acks = 0;
-		}
-		if (snd_was_full && !is_snd_full(c))
-			waitq_release_start(&c->tx_wq, &waiters);
 	} else if (wraps_gt(ack, snd_nxt)) {
 		do_ack = true;
 		goto done;
 	}
+	/* should we update the send window? */
+	if (wraps_lt(c->pcb.snd_wl1, seq) ||
+	    (c->pcb.snd_wl1 == seq &&
+	     wraps_lte(c->pcb.snd_wl2, ack))) {
+		c->pcb.snd_wnd = win > 1 ? win - 2 : 0; // reserve 1 byte for FIN and one byte for the sequence number on an RST packet
+		c->pcb.snd_wl1 = seq;
+		c->pcb.snd_wl2 = ack;
+		c->rep_acks = 0;
+	}
+	if (snd_was_full && !is_snd_full(c))
+		waitq_release_start(&c->tx_wq, &waiters);
+
 	if (c->pcb.state == TCP_STATE_FIN_WAIT1 &&
 	    c->pcb.snd_una == snd_nxt) {
 		tcp_conn_set_state(c, TCP_STATE_FIN_WAIT2);
@@ -382,6 +383,7 @@ void tcp_rx_conn(struct trans_entry *e, struct mbuf *m)
 			c->ack_delayed = true;
 			c->ack_ts = microtime();
 		}
+		do_ack |= !list_empty(&c->rxq_ooo);
 	}
 
 	/* step 8 - FIN */
