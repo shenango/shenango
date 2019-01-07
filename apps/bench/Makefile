@@ -72,7 +72,7 @@ LIBS_ARACHNE=-I$(ARACHNE)/include -I$(ARACHNE)/../CoreArbiter/include  -I$(ARACH
 # must be first
 all: tbench tbench_linux callibrate stress efficiency efficiency_linux \
      netbench netbench2 netbench_udp netbench_linux netperf linux_mech_bench \
-     stress_linux
+     stress_linux tbench_arachne
 
 tbench: $(tbench_obj) $(librt_libs)
 	$(LD) -o $@ $(LDFLAGS) $(tbench_obj) $(librt_libs) -lpthread
