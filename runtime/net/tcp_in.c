@@ -108,6 +108,7 @@ static bool tcp_rx_text(tcpconn_t *c, struct mbuf *m, bool *wake)
 	} else {
 		/* we got an out-of-order segment */
 		STAT(RX_TCP_OUT_OF_ORDER)++;
+		int size = 0;
 		list_for_each(&c->rxq_ooo, pos, link) {
 			if (wraps_lt(m->seg_seq, pos->seg_seq)) {
 				list_add_before(&pos->link, &m->link);
@@ -115,7 +116,12 @@ static bool tcp_rx_text(tcpconn_t *c, struct mbuf *m, bool *wake)
 			} else if (m->seg_seq == pos->seg_seq) {
 				return false;
 			}
+			size++;
 		}
+
+		if (size >= TCP_OOO_MAX_SIZE)
+			 return false;
+
  		list_add_tail(&c->rxq_ooo, &m->link);
 	}
 

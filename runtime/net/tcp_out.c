@@ -368,6 +368,7 @@ void tcp_tx_retransmit(tcpconn_t *c)
 
 	int ret;
 
+	int count = 0;
 	list_for_each(&c->txq, m, link) {
 		/* check if the timeout expired */
 		if (now - m->timestamp < TCP_RETRANSMIT_TIMEOUT)
@@ -379,6 +380,9 @@ void tcp_tx_retransmit(tcpconn_t *c)
 		m->timestamp = now;
 		ret = tcp_tx_retransmit_one(c, m);
 		if (ret)
+			break;
+
+		if (++count >= TCP_RETRANSMIT_BATCH)
 			break;
 	}
 }

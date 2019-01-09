@@ -23,6 +23,8 @@
 #define TCP_TIME_WAIT_TIMEOUT (1 * ONE_SECOND) /* FIXME: should be 8 minutes */
 #define TCP_RETRANSMIT_TIMEOUT (300 * ONE_MS) /* FIXME: should be dynamic */
 #define TCP_FAST_RETRANSMIT_THRESH 3
+#define TCP_OOO_MAX_SIZE 16
+#define TCP_RETRANSMIT_BATCH 16
 
 /* connecion states (RFC 793 Section 3.2) */
 enum {
