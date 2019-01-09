@@ -14,6 +14,7 @@ static const char *stat_names[] = {
 	"RX_UNICAST_FAIL",
 	"RX_BROADCAST_FAIL",
 	"RX_UNHANDLED",
+	"RX_JOIN_FAIL",
 	"TX_COMPLETION_OVERFLOW",
 	"TX_COMPLETION_FAIL",
 	"RX_PULLED",

@@ -84,6 +84,7 @@ struct proc {
 	DEFINE_BITMAP(available_threads, NCPU);
 	struct list_head	idle_threads;
 	unsigned int		inflight_preempts;
+	unsigned int		next_thread_rr; // for spraying join requests/overflow completions
 
 	/* network data */
 	struct eth_addr		mac;
@@ -224,6 +225,7 @@ enum {
 	RX_UNICAST_FAIL,
 	RX_BROADCAST_FAIL,
 	RX_UNHANDLED,
+	RX_JOIN_FAIL,
 
 	TX_COMPLETION_OVERFLOW,
 	TX_COMPLETION_FAIL,

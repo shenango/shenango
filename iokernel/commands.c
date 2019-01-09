@@ -36,8 +36,10 @@ static int commands_drain_queue(struct thread *t, struct rte_mbuf **bufs, int n)
 			break;
 		case TXCMD_PARKED:
 			/* notify another kthread if the park was involuntary */
-			if (cores_park_kthread(t, false) && payload != 0)
-				rx_send_to_runtime(t->p, 0, RX_JOIN, payload);
+			if (cores_park_kthread(t, false) && payload != 0) {
+				bool success = rx_send_to_runtime(t->p, t->p->next_thread_rr++, RX_JOIN, payload);
+				STAT_INC(RX_JOIN_FAIL, !success);
+			}
 			break;
 
 		default:
