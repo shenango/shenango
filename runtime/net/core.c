@@ -114,7 +114,7 @@ static struct mbuf *net_rx_alloc_mbuf(struct rx_net_hdr *hdr)
 	/* copy the payload and release the buffer back to the iokernel */
 	memcpy(buf, hdr->payload, hdr->len);
 
-	mbuf_init(m, buf, MBUF_DEFAULT_LEN, 0);
+	mbuf_init(m, buf, MBUF_DEFAULT_LEN - MBUF_RESERVED, 0);
 	m->len = hdr->len;
 	m->csum_type = hdr->csum_type;
 	m->csum = hdr->csum;

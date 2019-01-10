@@ -629,16 +629,17 @@ static ssize_t tcp_read_wait(tcpconn_t *c, size_t len,
 
 static void tcp_read_finish(tcpconn_t *c, struct mbuf *m)
 {
-	thread_t *th;
+	struct list_head waiters;
 
 	if (!m)
 		return;
 
+	list_head_init(&waiters);
 	spin_lock_np(&c->lock);
 	c->rx_exclusive = false;
-	th = waitq_signal(&c->rx_wq, &c->lock);
+	waitq_release_start(&c->rx_wq, &waiters);
 	spin_unlock_np(&c->lock);
-	waitq_signal_finish(th);
+	waitq_release_finish(&waiters);
 }
 
 /**
