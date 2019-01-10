@@ -1,11 +1,10 @@
-
+use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 use std::io;
-use std::io::{Read, Error, ErrorKind};
-use byteorder::{WriteBytesExt, ReadBytesExt, BigEndian};
+use std::io::{Error, ErrorKind, Read};
 
 use Connection;
-use Transport;
 use Packet;
+use Transport;
 
 /** Packet code from https://github.com/aisk/rust-memcache **/
 
@@ -71,7 +70,8 @@ impl PacketHeader {
     fn read<R: io::Read>(reader: &mut R) -> io::Result<PacketHeader> {
         let magic = reader.read_u8()?;
         if magic != Magic::Response as u8 {
-            return Err(Error::new(ErrorKind::Other,
+            return Err(Error::new(
+                ErrorKind::Other,
                 format!("Bad magic number in response header: {}", magic),
             ));
         }
@@ -90,10 +90,10 @@ impl PacketHeader {
     }
 }
 
-pub static NVALUES : u64 = 1000000;
-static PCT_SET : u64 = 2; // out of 1000
-static VALUE_SIZE  : usize = 2;
-static KEY_SIZE    : usize = 20;
+pub static NVALUES: u64 = 1000000;
+static PCT_SET: u64 = 2; // out of 1000
+static VALUE_SIZE: usize = 2;
+static KEY_SIZE: usize = 20;
 
 #[inline(always)]
 fn write_key(buf: &mut Vec<u8>, key: u64) {
@@ -119,7 +119,6 @@ pub struct MemcachedProtocol;
 
 impl MemcachedProtocol {
     pub fn set_request(key: u64, opaque: u32, buf: &mut Vec<u8>, tport: Transport) {
-
         if let Transport::Udp = tport {
             buf.extend_from_slice(UDP_HEADER);
         }
@@ -132,7 +131,9 @@ impl MemcachedProtocol {
             total_body_length: (8 + KEY_SIZE + VALUE_SIZE) as u32,
             opaque: opaque,
             ..Default::default()
-        }.write(buf).unwrap();
+        }
+        .write(buf)
+        .unwrap();
 
         buf.write_u64::<BigEndian>(0).unwrap();
 
@@ -143,15 +144,10 @@ impl MemcachedProtocol {
         }
     }
 
-    pub fn gen_request(
-        i: usize,
-        p: &Packet,
-        buf: &mut Vec<u8>,
-        tport: Transport
-    ) {
+    pub fn gen_request(i: usize, p: &Packet, buf: &mut Vec<u8>, tport: Transport) {
         // Use first 32 bits of randomness to determine if this is a SET or GET req
         let low32 = p.randomness & 0xffffffff;
-        let key =  (p.randomness >> 32) % NVALUES;
+        let key = (p.randomness >> 32) % NVALUES;
 
         if low32 % 1000 < PCT_SET {
             MemcachedProtocol::set_request(key, i as u32, buf, tport);
@@ -169,7 +165,9 @@ impl MemcachedProtocol {
             total_body_length: KEY_SIZE as u32,
             opaque: i as u32,
             ..Default::default()
-        }.write(buf).unwrap();
+        }
+        .write(buf)
+        .unwrap();
 
         write_key(buf, key);
     }
@@ -177,9 +175,8 @@ impl MemcachedProtocol {
     pub fn read_response(
         mut sock: &Connection,
         tport: Transport,
-        scratch: &mut [u8]
+        scratch: &mut [u8],
     ) -> io::Result<usize> {
-
         let hdr = match tport {
             Transport::Udp => {
                 let len = sock.read(&mut scratch[..32])?;
@@ -187,12 +184,13 @@ impl MemcachedProtocol {
                     return Err(Error::new(ErrorKind::UnexpectedEof, "eof"));
                 }
                 if len < 8 {
-                    return Err(Error::new(ErrorKind::Other,
+                    return Err(Error::new(
+                        ErrorKind::Other,
                         format!("Short packet received: {} bytes", len),
                     ));
                 }
                 PacketHeader::read(&mut &scratch[8..])?
-            },
+            }
             Transport::Tcp => {
                 sock.read_exact(&mut scratch[..24])?;
                 let hdr = PacketHeader::read(&mut &scratch[..])?;
@@ -202,11 +200,11 @@ impl MemcachedProtocol {
         };
 
         if hdr.vbucket_id_or_status != ResponseStatus::NoError as u16 {
-            return Err(Error::new(ErrorKind::Other,
+            return Err(Error::new(
+                ErrorKind::Other,
                 format!("Not NoError {}", hdr.vbucket_id_or_status),
             ));
         }
         Ok(hdr.opaque as usize)
     }
 }
-

@@ -1,8 +1,8 @@
 use Packet;
 
+use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 use std::io;
 use std::io::Read;
-use byteorder::{WriteBytesExt, ReadBytesExt, BigEndian};
 
 pub struct Payload {
     pub work_iterations: u64,
@@ -16,22 +16,19 @@ use Transport;
 pub struct SyntheticProtocol;
 
 impl SyntheticProtocol {
-    pub fn gen_request(
-        i: usize,
-        p: &Packet,
-        buf: &mut Vec<u8>,
-        _tport: Transport
-    ) {
+    pub fn gen_request(i: usize, p: &Packet, buf: &mut Vec<u8>, _tport: Transport) {
         Payload {
             work_iterations: p.work_iterations,
             index: i as u64,
-        }.serialize_into(buf).unwrap();
+        }
+        .serialize_into(buf)
+        .unwrap();
     }
 
     pub fn read_response(
         mut sock: &Connection,
         _tport: Transport,
-        scratch: &mut [u8]
+        scratch: &mut [u8],
     ) -> io::Result<usize> {
         sock.read_exact(&mut scratch[..16])?;
         let payload = Payload::deserialize(&mut &scratch[..])?;

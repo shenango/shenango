@@ -93,14 +93,14 @@ impl Distribution {
     }
 }
 
-arg_enum!{
+arg_enum! {
 #[derive(Copy, Clone)]
 pub enum Transport {
     Udp,
     Tcp,
 }}
 
-arg_enum!{
+arg_enum! {
 #[derive(Copy, Clone)]
 enum Protocol {
     Synthetic,
@@ -131,7 +131,7 @@ impl Protocol {
     }
 }
 
-arg_enum!{
+arg_enum! {
 #[derive(Copy, Clone)]
 enum OutputMode {
     Silent,
@@ -178,7 +178,8 @@ fn run_linux_udp_server(backend: Backend, addr: SocketAddrV4, nthreads: usize) {
                     socket.send_to(&buf[..len], remote_addr).unwrap();
                 }
             })
-        }).collect();
+        })
+        .collect();
 
     for j in join_handles {
         j.join().unwrap();
@@ -285,7 +286,8 @@ fn run_memcached_preload(backend: Backend, tport: Transport, addr: SocketAddrV4,
                     }
                 }
             })
-        }).collect();
+        })
+        .collect();
 
     for j in join_handles {
         j.join().unwrap();
@@ -336,7 +338,8 @@ fn run_client(
                     .unwrap(),
             };
             (packets, vec![None; packets_per_thread], socket)
-        }).collect();
+        })
+        .collect();
 
     if let Some(ref mut g) = *barrier_group {
         g.barrier();
@@ -421,10 +424,12 @@ fn run_client(
                 .unwrap()
                 .into_iter()
                 .zip(r.join().unwrap().into_iter())
-        }).map(|(p, r)| Packet {
+        })
+        .map(|(p, r)| Packet {
             completion_time: r,
             ..p
-        }).collect();
+        })
+        .collect();
     packets.sort_by_key(|p| p.target_start);
 
     // Discard the first 10% of the packets.
@@ -465,7 +470,8 @@ fn run_client(
         .filter_map(|p| match (p.actual_start, p.completion_time) {
             (Some(ref start), Some(ref end)) => Some(*end - *start),
             _ => None,
-        }).collect();
+        })
+        .collect();
     latencies.sort();
 
     match output {
@@ -561,7 +567,8 @@ fn run_local(
                 });
             }
             packets
-        }).collect();
+        })
+        .collect();
 
     let start_unix = SystemTime::now();
     let start = Instant::now();
@@ -619,7 +626,8 @@ fn run_local(
                 p.completion_time_ns.load(Ordering::SeqCst),
             ));
             p
-        }).collect();
+        })
+        .collect();
     packets.sort_by_key(|p| p.target_start);
 
     // Discard the first 10% of the packets.
@@ -660,7 +668,8 @@ fn run_local(
         .filter_map(|p| match (p.actual_start, p.completion_time) {
             (Some(ref start), Some(ref end)) => Some(*end - *start),
             _ => None,
-        }).collect();
+        })
+        .collect();
     latencies.sort();
 
     match output {
@@ -736,14 +745,16 @@ fn main() {
                 .index(1)
                 .help("Address and port to listen on")
                 .required(true),
-        ).arg(
+        )
+        .arg(
             Arg::with_name("threads")
                 .short("t")
                 .long("threads")
                 .value_name("T")
                 .default_value("1")
                 .help("Number of client threads"),
-        ).arg(
+        )
+        .arg(
             Arg::with_name("mode")
                 .short("m")
                 .long("mode")
@@ -756,34 +767,40 @@ fn main() {
                     "work-bench",
                     "memcached-preload",
                     "local-client",
-                ]).required(true)
+                ])
+                .required(true)
                 .requires_ifs(&[("runtime-client", "config"), ("spawner-server", "config")])
                 .help("Which mode to run in"),
-        ).arg(
+        )
+        .arg(
             Arg::with_name("runtime")
                 .short("r")
                 .long("runtime")
                 .takes_value(true)
                 .default_value("10")
                 .help("How long the application should run for"),
-        ).arg(
+        )
+        .arg(
             Arg::with_name("mpps")
                 .long("mpps")
                 .takes_value(true)
                 .default_value("0.02")
                 .help("How many *million* packets should be sent per second"),
-        ).arg(
+        )
+        .arg(
             Arg::with_name("start_mpps")
                 .long("start_mpps")
                 .takes_value(true)
                 .default_value("0.0")
                 .help("Initial rate to sample at"),
-        ).arg(
+        )
+        .arg(
             Arg::with_name("config")
                 .short("c")
                 .long("config")
                 .takes_value(true),
-        ).arg(
+        )
+        .arg(
             Arg::with_name("protocol")
                 .short("p")
                 .long("protocol")
@@ -791,12 +808,14 @@ fn main() {
                 .possible_values(&["synthetic", "memcached", "dns"])
                 .default_value("synthetic")
                 .help("Server protocol"),
-        ).arg(
+        )
+        .arg(
             Arg::with_name("warmup")
                 .long("warmup")
                 .takes_value(false)
                 .help("Run the warmup routine"),
-        ).arg(
+        )
+        .arg(
             Arg::with_name("output")
                 .short("o")
                 .long("output")
@@ -804,7 +823,8 @@ fn main() {
                 .possible_values(&["silent", "normal", "buckets", "trace"])
                 .default_value("normal")
                 .help("How to display loadgen results"),
-        ).arg(
+        )
+        .arg(
             Arg::with_name("distribution")
                 .long("distribution")
                 .short("d")
@@ -812,49 +832,57 @@ fn main() {
                 .possible_values(&["zero", "constant", "exponential", "bimodal1", "bimodal2"])
                 .default_value("zero")
                 .help("Distribution of request lengths to use"),
-        ).arg(
+        )
+        .arg(
             Arg::with_name("mean")
                 .long("mean")
                 .takes_value(true)
                 .default_value("167")
                 .help("Mean number of work iterations per request"),
-        ).arg(
+        )
+        .arg(
             Arg::with_name("barrier-peers")
                 .long("barrier-peers")
                 .requires("barrier-leader")
                 .takes_value(true)
                 .help("Number of peers in barrier group"),
-        ).arg(
+        )
+        .arg(
             Arg::with_name("barrier-leader")
                 .long("barrier-leader")
                 .requires("barrier-peers")
                 .takes_value(true)
                 .help("Leader of barrier group"),
-        ).arg(
+        )
+        .arg(
             Arg::with_name("samples")
                 .long("samples")
                 .takes_value(true)
                 .default_value("20")
                 .help("Number of samples to collect"),
-        ).arg(
+        )
+        .arg(
             Arg::with_name("strided-size")
                 .long("strided-size")
                 .takes_value(true)
                 .default_value("1024")
                 .help("Amount of memory to use for strided-memtouch fake work"),
-        ).arg(
+        )
+        .arg(
             Arg::with_name("strided-stride")
                 .long("strided-stride")
                 .takes_value(true)
                 .default_value("7")
                 .help("Stride used for strided-memtouch fake work"),
-        ).arg(
+        )
+        .arg(
             Arg::with_name("transport")
                 .long("transport")
                 .takes_value(true)
                 .default_value("udp")
                 .help("udp or tcp"),
-        ).get_matches();
+        )
+        .get_matches();
 
     let addr: SocketAddrV4 = FromStr::from_str(matches.value_of("ADDR").unwrap()).unwrap();
     let nthreads = value_t_or_exit!(matches, "threads", usize);
@@ -888,7 +916,8 @@ fn main() {
             leader,
             23232,
             value_t_or_exit!(matches, "barrier-peers", usize),
-        ).unwrap()
+        )
+        .unwrap()
     });
 
     let mut rng = rand::thread_rng();
