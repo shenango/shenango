@@ -111,7 +111,7 @@ int MainHandler() {
 
 } // anonymous namespace
 
-// Requires coreArbiter: ./coreArbiterServer --coresUsed 2
+// Requires coreArbiter: ./coreArbiterServer
 int
 main(int argc, const char** argv) {
     // Initialize the library

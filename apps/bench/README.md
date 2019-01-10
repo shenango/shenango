@@ -24,7 +24,7 @@ sudo ./CoreArbiter/bin/coreArbiterServer
 
 In this directory:
 ```
-./tbench_arachne --maxNumCores 1
+./tbench_arachne
 ```
 
 ## Shenango
