@@ -302,20 +302,22 @@ fn run_client(
 
     let mut last = 100_000_000;
     let mut send_schedule: Vec<u64> = Vec::with_capacity(packets);
+    let mut rng = rand::thread_rng();
 
     /* Climb in 100ms increments */
     for t in 1..(10 * ramp_up_seconds) {
         let rate = t * packets_per_second / (ramp_up_seconds * 10);
         let ns_per_packet = 1000_000_000 / rate;
-        for _ in 0..(rate / 10) {
-            last += ns_per_packet as u64;
+        let exp =  Exp::new(1.0 / ns_per_packet as f64);
+        let end = last + duration_to_ns(Duration::from_millis(100));
+        while last < end {
+            last += exp.ind_sample(&mut rng) as u64;
             send_schedule.push(last)
         }
     }
 
     let discard_thresh = Duration::from_nanos(last);
 
-    let mut rng = rand::thread_rng();
     let ns_per_packet = 1000_000_000 / packets_per_second;
     let exp = Exp::new(1.0 / ns_per_packet as f64);
     let end = last + duration_to_ns(runtime);
@@ -762,25 +764,6 @@ fn main() {
         "linux-client" | "runtime-client" => {
             backend.init_and_run(config, move || {
                 println!("Distribution, Target, Actual, Dropped, Never Sent, Median, 90th, 99th, 99.9th, 99.99th, Start");
-                if dowarmup {
-                    for packets_per_second in (1..3).map(|i| i * 100000) {
-                        run_client(
-                            backend,
-                            addr,
-                            Duration::from_secs(1),
-                            packets_per_second,
-                            nthreads,
-                            OutputMode::Silent,
-                            proto,
-                            tport,
-                            distribution,
-                            &mut barrier_group,
-                            0,
-                            rampup,
-                        );
-                    }
-                }
-
                 match (proto, &barrier_group) {
                     (_, Some(lockstep::Group::Client(ref _c))) => (),
                     (Protocol::Memcached, _) => {
@@ -791,8 +774,30 @@ fn main() {
                     _ => (),
                 };
 
+                if dowarmup {
+                    // Run at full pps 3 times for 20 seconds
+                    for _ in 0..3 {
+                        run_client(
+                            backend,
+                            addr,
+                            Duration::from_secs(20),
+                            packets_per_second,
+                            nthreads,
+                            OutputMode::Silent,
+                            proto,
+                            tport,
+                            distribution,
+                            &mut barrier_group,
+                            0,
+                            rampup,
+                        );
+                        backend.sleep(Duration::from_secs(5));
+                    }
+                }
+
                 let step_size = (packets_per_second - start_packets_per_second) / samples;
                 for j in 1..=samples {
+                    backend.sleep(Duration::from_secs(5));
                     run_client(
                         backend,
                         addr,
@@ -807,7 +812,6 @@ fn main() {
                         j,
                         rampup,
                     );
-                    backend.sleep(Duration::from_secs(3));
                 }
                 if let Some(ref mut g) = barrier_group {
                     g.barrier();
