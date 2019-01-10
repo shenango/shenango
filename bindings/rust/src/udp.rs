@@ -1,6 +1,6 @@
 use std::io::{self, Read, Write};
-use std::ptr;
 use std::net::SocketAddrV4;
+use std::ptr;
 
 use byteorder::{ByteOrder, NetworkEndian};
 
@@ -64,7 +64,8 @@ impl UdpConnection {
                 buf.len(),
                 &mut raddr as *mut _,
             )
-        }).map(|u| (u, SocketAddrV4::new(raddr.ip.into(), raddr.port)))
+        })
+        .map(|u| (u, SocketAddrV4::new(raddr.ip.into(), raddr.port)))
     }
 
     pub fn write_to(&self, buf: &[u8], remote_addr: SocketAddrV4) -> io::Result<usize> {

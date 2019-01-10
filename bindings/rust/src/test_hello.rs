@@ -1,4 +1,3 @@
-
 extern crate shenango;
 
 fn main() {

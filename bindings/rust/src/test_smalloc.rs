@@ -1,9 +1,8 @@
-
 extern crate libc;
 extern crate shenango;
 
-use std::ptr;
 use std::os::raw::c_void;
+use std::ptr;
 
 const SAMPLES: u32 = 200000;
 const N: usize = (1 << 10);
@@ -34,7 +33,6 @@ fn smalloc_bench(samples: u32, ptrs: &mut [*mut c_void]) {
         }
     }
 }
-
 
 fn main_handler() {
     let mut tsc;
@@ -79,7 +77,6 @@ fn main_handler() {
 
         i *= 2;
     }
-
 
     println!("testing GLIBC malloc performance");
 
