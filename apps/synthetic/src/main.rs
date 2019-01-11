@@ -1,3 +1,5 @@
+#![feature(duration_as_u128)]
+#![feature(integer_atomics)]
 #![feature(nll)]
 #![feature(test)]
 #[macro_use]
@@ -20,6 +22,7 @@ use std::io::{ErrorKind, Write};
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::slice;
 use std::str::FromStr;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -40,6 +43,7 @@ pub struct Packet {
     randomness: u64,
     target_start: Duration,
     actual_start: Option<Duration>,
+    completion_time_ns: AtomicU64,
     completion_time: Option<Duration>,
 }
 
@@ -93,14 +97,14 @@ impl Distribution {
     }
 }
 
-arg_enum!{
+arg_enum! {
 #[derive(Copy, Clone)]
 pub enum Transport {
     Udp,
     Tcp,
 }}
 
-arg_enum!{
+arg_enum! {
 #[derive(Copy, Clone)]
 enum Protocol {
     Synthetic,
@@ -131,7 +135,7 @@ impl Protocol {
     }
 }
 
-arg_enum!{
+arg_enum! {
 #[derive(Copy, Clone)]
 enum OutputMode {
     Silent,
@@ -608,6 +612,207 @@ fn run_client(
         .zip(sched_boundaries)
         .all(|(sched, (start, end))| process_result(&sched, &mut packets[start..end], start_unix))
 }
+fn run_local(
+    backend: Backend,
+    runtime: Duration,
+    packets_per_second: usize,
+    nthreads: usize,
+    output: OutputMode,
+    distribution: Distribution,
+    worker: FakeWorker,
+) -> bool {
+    let packets_per_thread =
+        duration_to_ns(runtime) as usize * packets_per_second / (1000_000_000 * nthreads);
+    let ns_per_packet = nthreads * 1000_000_000 / packets_per_second;
+
+    let exp = Exp::new(1.0 / ns_per_packet as f64);
+    let mut rng = rand::thread_rng();
+    let packet_schedules: Vec<Vec<Packet>> = (0..nthreads)
+        .map(|_| {
+            let mut last = 100_000_000;
+            let mut packets = Vec::with_capacity(packets_per_thread);
+            for _ in 0..packets_per_thread {
+                last += exp.ind_sample(&mut rng) as u64;
+                packets.push(Packet {
+                    randomness: rng.gen::<u64>(),
+                    target_start: Duration::from_nanos(last),
+                    work_iterations: distribution.sample(&mut rng),
+                    ..Default::default()
+                });
+            }
+            packets
+        })
+        .collect();
+
+    let start_unix = SystemTime::now();
+    let start = Instant::now();
+
+    struct AtomicU64Pointer(*const AtomicU64);
+    unsafe impl Send for AtomicU64Pointer {}
+
+    let mut send_threads = Vec::new();
+    for mut packets in packet_schedules {
+        let worker = worker.clone();
+        send_threads.push(backend.spawn_thread(move || {
+            let remaining = Arc::new(AtomicUsize::new(packets.len()));
+            for i in 0..packets.len() {
+                let (work_iterations, completion_time_ns) = {
+                    let packet = &mut packets[i];
+
+                    let mut t = start.elapsed();
+                    while t < packet.target_start {
+                        t = start.elapsed();
+                    }
+                    // if start.elapsed() > packet.target_start + Duration::from_micros(5) {
+                    //     continue;
+                    // }
+
+                    packet.actual_start = Some(start.elapsed());
+                    (
+                        packet.work_iterations,
+                        AtomicU64Pointer(&packet.completion_time_ns as *const AtomicU64),
+                    )
+                };
+
+                let remaining = remaining.clone();
+                let worker = worker.clone();
+                backend.spawn_thread(move || {
+                    worker.work(work_iterations);
+                    unsafe {
+                        (*completion_time_ns.0)
+                            .store(start.elapsed().as_nanos() as u64, Ordering::SeqCst);
+                    }
+                    remaining.fetch_sub(1, Ordering::SeqCst);
+                });
+            }
+
+            while remaining.load(Ordering::SeqCst) > 0 {
+                // do nothing
+            }
+
+            packets
+        }))
+    }
+
+    let mut packets: Vec<_> = send_threads
+        .into_iter()
+        .flat_map(|s| s.join().unwrap().into_iter())
+        .map(|mut p| {
+            p.completion_time = Some(Duration::from_nanos(
+                p.completion_time_ns.load(Ordering::SeqCst),
+            ));
+            p
+        })
+        .collect();
+    packets.sort_by_key(|p| p.target_start);
+
+    // Discard the first 10% of the packets.
+    let mut packets = packets.split_off(packets.len() / 10);
+
+    let never_sent = packets.iter().filter(|p| p.actual_start.is_none()).count();
+    let dropped = packets
+        .iter()
+        .filter(|p| p.completion_time.is_none())
+        .count()
+        - never_sent;
+    if packets.len() - dropped - never_sent <= 1 {
+        match output {
+            OutputMode::Silent => {}
+            OutputMode::Normal | OutputMode::Buckets | OutputMode::Trace => {
+                println!(
+                    "{}, {}, 0, {}, {}, {}",
+                    distribution.name(),
+                    packets_per_second,
+                    dropped,
+                    never_sent,
+                    start_unix.duration_since(UNIX_EPOCH).unwrap().as_secs()
+                );
+            }
+        }
+        return false;
+    }
+
+    if let OutputMode::Silent = output {
+        return true;
+    }
+
+    let first_send = packets.iter().filter_map(|p| p.actual_start).min().unwrap();
+    let last_send = packets.iter().filter_map(|p| p.actual_start).max().unwrap();
+
+    let mut latencies: Vec<_> = packets
+        .iter()
+        .filter_map(|p| match (p.actual_start, p.completion_time) {
+            (Some(ref start), Some(ref end)) => Some(*end - *start),
+            _ => None,
+        })
+        .collect();
+    latencies.sort();
+
+    match output {
+        OutputMode::Silent => {}
+        OutputMode::Normal | OutputMode::Buckets => {
+            let percentile = |p| {
+                let idx = ((packets.len() - never_sent) as f32 * p / 100.0) as usize;
+                if idx >= latencies.len() {
+                    return INFINITY;
+                }
+                duration_to_ns(latencies[idx]) as f32 / 1000.0
+            };
+
+            println!(
+                "{}, {}, {}, {}, {}, {:.1}, {:.1}, {:.1}, {:.1}, {:.1}, {}",
+                distribution.name(),
+                (packets.len() - never_sent) as u64 * 1000_000_000
+                    / duration_to_ns(last_send - first_send),
+                latencies.len() as u64 * 1000_000_000 / duration_to_ns(last_send - first_send),
+                dropped,
+                never_sent,
+                percentile(50.0),
+                percentile(90.0),
+                percentile(99.0),
+                percentile(99.9),
+                percentile(99.99),
+                start_unix.duration_since(UNIX_EPOCH).unwrap().as_secs()
+            );
+        }
+        OutputMode::Trace => {
+            packets.sort_by_key(|p| p.actual_start.unwrap_or(p.target_start));
+            for p in packets {
+                if let Some(completion_time) = p.completion_time {
+                    let actual_start = p.actual_start.unwrap();
+                    println!(
+                        "{} {} {}",
+                        duration_to_ns(actual_start),
+                        duration_to_ns(actual_start) as i64 - duration_to_ns(p.target_start) as i64,
+                        duration_to_ns(completion_time - actual_start)
+                    )
+                } else if p.actual_start.is_some() {
+                    let actual_start = p.actual_start.unwrap();
+                    println!(
+                        "{} {} -1",
+                        duration_to_ns(actual_start),
+                        duration_to_ns(actual_start) as i64 - duration_to_ns(p.target_start) as i64,
+                    )
+                } else {
+                    println!("{} -1 -1", duration_to_ns(p.target_start))
+                }
+            }
+        }
+    }
+    if let OutputMode::Buckets = output {
+        let mut buckets = BTreeMap::new();
+
+        for l in latencies {
+            *buckets.entry(duration_to_ns(l) / 1000).or_insert(0) += 1;
+        }
+        print!("Latencies: ");
+        for k in buckets.keys() {
+            print!("{}:{} ", k, buckets[k]);
+        }
+        println!("");
+    }
+    true
+}
 fn main() {
     let matches = App::new("Synthetic Workload Application")
         .version("0.1")
@@ -785,7 +990,7 @@ fn main() {
     let mode = matches.value_of("mode").unwrap();
     let backend = match mode {
         "linux-server" | "linux-client" => Backend::Linux,
-        "spawner-server" | "runtime-client" | "work-bench" => Backend::Runtime,
+        "spawner-server" | "runtime-client" | "work-bench" | "local-client" => Backend::Runtime,
         _ => unreachable!(),
     };
     let mut barrier_group = matches.value_of("barrier-leader").map(|leader| {
@@ -825,6 +1030,37 @@ fn main() {
                 backend.init_and_run(config, move || run_tcp_server(backend, addr, fakeworker))
             }
         },
+        "local-client" => {
+            backend.init_and_run(config, move || {
+                println!("Distribution, Target, Actual, Dropped, Never Sent, Median, 90th, 99th, 99.9th, 99.99th, Start");
+                if dowarmup {
+                    for packets_per_second in (1..3).map(|i| i * 100000) {
+                        run_local(
+                            backend,
+                            Duration::from_secs(1),
+                            packets_per_second,
+                            nthreads,
+                            OutputMode::Silent,
+                            distribution,
+                            fakeworker.clone(),
+                        );
+                    }
+                }
+                let step_size = (packets_per_second - start_packets_per_second) / samples;
+                for j in 1..=samples {
+                    run_local(
+                        backend,
+                        runtime,
+                        start_packets_per_second + step_size * j,
+                        nthreads,
+                        output,
+                        distribution,
+                        fakeworker.clone(),
+                    );
+                    backend.sleep(Duration::from_secs(3));
+                }
+            });
+        }
         "linux-client" | "runtime-client" => {
             backend.init_and_run(config, move || {
                 println!("Distribution, Target, Actual, Dropped, Never Sent, Median, 90th, 99th, 99.9th, 99.99th, Start");
