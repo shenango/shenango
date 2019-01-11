@@ -37,7 +37,7 @@ use backend::*;
 mod payload;
 use payload::{Payload, SyntheticProtocol};
 
-#[derive(Default, Copy, Clone)]
+#[derive(Default)]
 pub struct Packet {
     work_iterations: u64,
     randomness: u64,
@@ -473,7 +473,7 @@ fn run_client(
     index: usize,
 ) -> bool {
     let mut last = 100_000_000;
-    let mut packet_schedule: Vec<Packet> = Vec::new();
+    let mut packet_schedule: Vec<Option<Packet>> = Vec::new();
     let mut sched_boundaries: Vec<(usize, usize)> = Vec::new();
 
     let mut rng = rand::thread_rng();
@@ -483,12 +483,12 @@ fn run_client(
         let end = last + duration_to_ns(sched.runtime);
         while last < end {
             last += sched.arrival.sample(&mut rng);
-            packet_schedule.push(Packet {
+            packet_schedule.push(Some(Packet {
                 randomness: rng.gen::<u64>(),
                 target_start: Duration::from_nanos(last),
                 work_iterations: sched.service.sample(&mut rng),
                 ..Default::default()
-            });
+            }));
         }
         sched_boundaries.push((start_idx, packet_schedule.len()));
     }
@@ -497,7 +497,7 @@ fn run_client(
         .map(|tidx| {
             let thread_packets: Vec<Packet> = (tidx..packet_schedule.len())
                 .step_by(nthreads)
-                .map(|i| packet_schedule[i])
+                .map(|i| packet_schedule[i].take().unwrap())
                 .collect();
 
             let src_addr = SocketAddrV4::new(
