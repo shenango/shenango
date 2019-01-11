@@ -563,6 +563,7 @@ fn run_local(
     nthreads: usize,
     output: OutputMode,
     distribution: Distribution,
+    worker: FakeWorker,
 ) -> bool {
     let packets_per_thread =
         duration_to_ns(runtime) as usize * packets_per_second / (1000_000_000 * nthreads);
@@ -595,6 +596,7 @@ fn run_local(
 
     let mut send_threads = Vec::new();
     for mut packets in packet_schedules {
+        let worker = worker.clone();
         send_threads.push(backend.spawn_thread(move || {
             let remaining = Arc::new(AtomicUsize::new(packets.len()));
             for i in 0..packets.len() {
@@ -617,8 +619,9 @@ fn run_local(
                 };
 
                 let remaining = remaining.clone();
+                let worker = worker.clone();
                 backend.spawn_thread(move || {
-                    work(work_iterations);
+                    worker.work(work_iterations);
                     unsafe {
                         (*completion_time_ns.0)
                             .store(start.elapsed().as_nanos() as u64, Ordering::SeqCst);
@@ -975,6 +978,7 @@ fn main() {
                             nthreads,
                             OutputMode::Silent,
                             distribution,
+                            fakeworker.clone(),
                         );
                     }
                 }
@@ -987,6 +991,7 @@ fn main() {
                         nthreads,
                         output,
                         distribution,
+                        fakeworker.clone(),
                     );
                     backend.sleep(Duration::from_secs(3));
                 }
