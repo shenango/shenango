@@ -324,7 +324,25 @@ fn gen_classic_packet_schedule(
         discard_pct: 10,
     });
 
-    return sched;
+    sched
+}
+
+fn gen_loadshift_experiment(spec: &str, service: Distribution) -> Vec<RequestSchedule> {
+    spec.split(",")
+        .map(|step_spec| {
+            let s: Vec<&str> = step_spec.split(":").collect();
+            assert!(s.len() == 2);
+            let ns_per_packet = 1000_000_000 / s[0].parse::<u64>().unwrap();
+            let micros = s[1].parse().unwrap();
+            RequestSchedule {
+                arrival: Distribution::Exponential(ns_per_packet as f64),
+                service: service,
+                output: OutputMode::Trace,
+                runtime: Duration::from_micros(micros),
+                discard_pct: 0,
+            }
+        })
+        .collect()
 }
 
 fn process_result(sched: &RequestSchedule, packets: &mut [Packet], wct_start: SystemTime) -> bool {
@@ -401,26 +419,28 @@ fn process_result(sched: &RequestSchedule, packets: &mut [Packet], wct_start: Sy
 
     if let OutputMode::Trace = sched.output {
         packets.sort_by_key(|p| p.actual_start.unwrap_or(p.target_start));
+        print!("Trace: ");
         for p in packets {
             if let Some(completion_time) = p.completion_time {
                 let actual_start = p.actual_start.unwrap();
-                println!(
-                    "{} {} {}",
+                print!(
+                    "{}:{}:{} ",
                     duration_to_ns(actual_start),
                     duration_to_ns(actual_start) as i64 - duration_to_ns(p.target_start) as i64,
                     duration_to_ns(completion_time - actual_start)
                 )
             } else if p.actual_start.is_some() {
                 let actual_start = p.actual_start.unwrap();
-                println!(
-                    "{} {} -1",
+                print!(
+                    "{}:{}:-1 ",
                     duration_to_ns(actual_start),
                     duration_to_ns(actual_start) as i64 - duration_to_ns(p.target_start) as i64,
                 )
             } else {
-                println!("{} -1 -1", duration_to_ns(p.target_start))
+                print!("{}:-1:-1 ", duration_to_ns(p.target_start))
             }
         }
+        println!("");
     }
 
     if let OutputMode::Buckets = sched.output {
@@ -538,11 +558,12 @@ fn run_client(
                 payload.clear();
                 protocol.gen_request(i, packet, &mut payload, tport);
 
-                let t = start.elapsed();
-                if t < packet.target_start {
+                let mut t = start.elapsed();
+                while t + Duration::from_micros(1) < packet.target_start {
                     backend.sleep(packet.target_start - t);
+                    t = start.elapsed();
                 }
-                if start.elapsed() > packet.target_start + Duration::from_micros(5) {
+                if t > packet.target_start + Duration::from_micros(5) {
                     continue;
                 }
 
@@ -730,6 +751,13 @@ fn main() {
                 .default_value("4")
                 .help("per-sample ramp up seconds"),
         )
+        .arg(
+            Arg::with_name("loadshift")
+                .long("loadshift")
+                .takes_value(true)
+                .default_value("")
+                .help("loadshift spec"),
+        )
         .get_matches();
 
     let addr: SocketAddrV4 = FromStr::from_str(matches.value_of("ADDR").unwrap()).unwrap();
@@ -769,6 +797,7 @@ fn main() {
         .unwrap()
     });
 
+    let loadshift_spec = value_t_or_exit!(matches, "loadshift", String);
     let fakeworker = FakeWorker::create(matches.value_of("fakework").unwrap()).unwrap();
 
     match mode {
@@ -808,6 +837,21 @@ fn main() {
                     },
                     _ => (),
                 };
+
+                if !loadshift_spec.is_empty() {
+                    let sched = gen_loadshift_experiment(&loadshift_spec, distribution);
+                    run_client(
+                        backend,
+                        addr,
+                        nthreads,
+                        proto,
+                        tport,
+                        &mut barrier_group,
+                        &sched,
+                        0,
+                    );
+                    return;
+                }
 
                 if dowarmup {
                     // Run at full pps 3 times for 20 seconds
