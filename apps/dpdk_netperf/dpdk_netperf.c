@@ -23,7 +23,7 @@
 static const struct rte_eth_conf port_conf_default = {
 	.rxmode = {
 		.max_rx_pkt_len = ETHER_MAX_LEN,
-		.hw_ip_checksum = 1,
+		.offloads = DEV_RX_OFFLOAD_IPV4_CKSUM,
 		.mq_mode = ETH_MQ_RX_RSS,
 	},
 	.rx_adv_conf = {
@@ -31,6 +31,9 @@ static const struct rte_eth_conf port_conf_default = {
 			.rss_key = NULL,
 			.rss_hf = ETH_RSS_UDP,
 		},
+	},
+	.txmode = {
+		.offloads = DEV_TX_OFFLOAD_IPV4_CKSUM | DEV_TX_OFFLOAD_UDP_CKSUM,
 	},
 };
 
@@ -118,7 +121,7 @@ port_init(uint8_t port, struct rte_mempool *mbuf_pool, unsigned int n_queues)
 
 	printf("initializing with %u queues\n", n_queues);
 
-	if (port >= rte_eth_dev_count())
+	if (!rte_eth_dev_is_valid_port(port))
 		return -1;
 
 	/* Configure the Ethernet device. */
@@ -142,8 +145,6 @@ port_init(uint8_t port, struct rte_mempool *mbuf_pool, unsigned int n_queues)
 	/* Enable TX offloading */
 	rte_eth_dev_info_get(0, &dev_info);
 	txconf = &dev_info.default_txconf;
-	txconf->txq_flags &= ~(ETH_TXQ_FLAGS_NOXSUMUDP |
-			ETH_TXQ_FLAGS_NOXSUMTCP);
 
 	/* Allocate and set up 1 TX queue per Ethernet port. */
 	for (q = 0; q < tx_rings; q++) {
@@ -568,7 +569,6 @@ do_server(void *arg)
 static int dpdk_init(int argc, char *argv[])
 {
 	int args_parsed;
-	unsigned nb_ports;
 
 	/* Initialize the Environment Abstraction Layer (EAL). */
 	args_parsed = rte_eal_init(argc, argv);
@@ -576,8 +576,7 @@ static int dpdk_init(int argc, char *argv[])
 		rte_exit(EXIT_FAILURE, "Error with EAL initialization\n");
 
 	/* Check that there is a port to send/receive on. */
-	nb_ports = rte_eth_dev_count();
-	if (nb_ports < 1)
+	if (!rte_eth_dev_is_valid_port(0))
 		rte_exit(EXIT_FAILURE, "Error: no available ports\n");
 
 	/* Creates a new mempool in memory to hold the mbufs. */
