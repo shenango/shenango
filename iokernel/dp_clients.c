@@ -12,6 +12,10 @@
 
 #include "defs.h"
 
+#ifdef MLX
+#include <mlx4_custom.h>
+#endif
+
 #define MAC_TO_PROC_ENTRIES	128
 
 static struct lrpc_chan_out lrpc_data_to_control;
@@ -30,6 +34,12 @@ static void dp_clients_add_client(struct proc *p)
 	ret = rte_hash_add_key_data(dp.mac_to_proc, &p->mac.addr[0], p);
 	if (ret < 0)
 		log_err("dp_clients: failed to add MAC to hash table in add_client");
+
+#ifdef MLX
+	p->mr = mlx4_manual_reg_mr(dp.port, p->region.base, p->region.len, &p->lkey);
+	if (!p->mr)
+		log_err("dp clients: failed to register memory with MLX nic");
+#endif
 
 	cores_init_proc(p);
 }
@@ -67,6 +77,9 @@ static void dp_clients_remove_client(struct proc *p)
 	if (ret < 0)
 		log_err("dp_clients: failed to remove MAC from hash table in remove "
 				"client");
+#ifdef MLX
+	mlx4_manual_dereg_mr(p->mr);
+#endif
 
 	/* TODO: free queued packets/commands? */
 

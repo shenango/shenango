@@ -23,9 +23,7 @@ static struct rte_mempool *tx_mbuf_pool;
  */
 struct tx_pktmbuf_priv {
 #ifdef MLX
-	uintptr_t uniqid;
-	uintptr_t start_addr;
-	uintptr_t end_addr;
+	uint32_t lkey;
 #endif /* MLX */
 	struct proc	*p;
 	struct thread	*th;
@@ -84,9 +82,7 @@ static void tx_prepare_tx_mbuf(struct rte_mbuf *buf,
 
 #ifdef MLX
 	/* initialize private data used by Mellanox driver to register memory */
-	priv_data->uniqid = p->uniqid;
-	priv_data->start_addr = (uintptr_t) p->region.base;
-	priv_data->end_addr = (uintptr_t) p->region.base + p->region.len;
+	priv_data->lkey = p->lkey;
 #endif /* MLX */
 
 	/* reference count @p so it doesn't get freed before the completion */

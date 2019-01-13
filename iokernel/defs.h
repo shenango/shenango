@@ -96,6 +96,10 @@ struct proc {
 
 	/* Unique identifier -- never recycled across runtimes*/
 	uintptr_t		uniqid;
+#ifdef MLX
+	uint32_t lkey;
+	void *mr;
+#endif
 
 	/* Overfloq queue for completion data */
 	size_t max_overflows;
