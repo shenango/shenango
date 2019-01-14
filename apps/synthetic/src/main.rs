@@ -612,35 +612,40 @@ fn run_client(
         .zip(sched_boundaries)
         .all(|(sched, (start, end))| process_result(&sched, &mut packets[start..end], start_unix))
 }
+
 fn run_local(
     backend: Backend,
-    runtime: Duration,
-    packets_per_second: usize,
     nthreads: usize,
-    output: OutputMode,
-    distribution: Distribution,
     worker: FakeWorker,
+    schedules: &Vec<RequestSchedule>,
 ) -> bool {
-    let packets_per_thread =
-        duration_to_ns(runtime) as usize * packets_per_second / (1000_000_000 * nthreads);
-    let ns_per_packet = nthreads * 1000_000_000 / packets_per_second;
+    let mut last = 100_000_000;
+    let mut packet_schedule: Vec<Option<Packet>> = Vec::new();
+    let mut sched_boundaries: Vec<(usize, usize)> = Vec::new();
 
-    let exp = Exp::new(1.0 / ns_per_packet as f64);
     let mut rng = rand::thread_rng();
+
+    for sched in schedules {
+        let start_idx = packet_schedule.len();
+        let end = last + duration_to_ns(sched.runtime);
+        while last < end {
+            last += sched.arrival.sample(&mut rng);
+            packet_schedule.push(Some(Packet {
+                randomness: rng.gen::<u64>(),
+                target_start: Duration::from_nanos(last),
+                work_iterations: sched.service.sample(&mut rng),
+                ..Default::default()
+            }));
+        }
+        sched_boundaries.push((start_idx, packet_schedule.len()));
+    }
+
     let packet_schedules: Vec<Vec<Packet>> = (0..nthreads)
-        .map(|_| {
-            let mut last = 100_000_000;
-            let mut packets = Vec::with_capacity(packets_per_thread);
-            for _ in 0..packets_per_thread {
-                last += exp.ind_sample(&mut rng) as u64;
-                packets.push(Packet {
-                    randomness: rng.gen::<u64>(),
-                    target_start: Duration::from_nanos(last),
-                    work_iterations: distribution.sample(&mut rng),
-                    ..Default::default()
-                });
-            }
-            packets
+        .map(|tidx| {
+            (tidx..packet_schedule.len())
+                .step_by(nthreads)
+                .map(|i| packet_schedule[i].take().unwrap())
+                .collect()
         })
         .collect();
 
@@ -663,9 +668,6 @@ fn run_local(
                     while t < packet.target_start {
                         t = start.elapsed();
                     }
-                    // if start.elapsed() > packet.target_start + Duration::from_micros(5) {
-                    //     continue;
-                    // }
 
                     packet.actual_start = Some(start.elapsed());
                     (
@@ -706,112 +708,10 @@ fn run_local(
         .collect();
     packets.sort_by_key(|p| p.target_start);
 
-    // Discard the first 10% of the packets.
-    let mut packets = packets.split_off(packets.len() / 10);
-
-    let never_sent = packets.iter().filter(|p| p.actual_start.is_none()).count();
-    let dropped = packets
+    schedules
         .iter()
-        .filter(|p| p.completion_time.is_none())
-        .count()
-        - never_sent;
-    if packets.len() - dropped - never_sent <= 1 {
-        match output {
-            OutputMode::Silent => {}
-            OutputMode::Normal | OutputMode::Buckets | OutputMode::Trace => {
-                println!(
-                    "{}, {}, 0, {}, {}, {}",
-                    distribution.name(),
-                    packets_per_second,
-                    dropped,
-                    never_sent,
-                    start_unix.duration_since(UNIX_EPOCH).unwrap().as_secs()
-                );
-            }
-        }
-        return false;
-    }
-
-    if let OutputMode::Silent = output {
-        return true;
-    }
-
-    let first_send = packets.iter().filter_map(|p| p.actual_start).min().unwrap();
-    let last_send = packets.iter().filter_map(|p| p.actual_start).max().unwrap();
-
-    let mut latencies: Vec<_> = packets
-        .iter()
-        .filter_map(|p| match (p.actual_start, p.completion_time) {
-            (Some(ref start), Some(ref end)) => Some(*end - *start),
-            _ => None,
-        })
-        .collect();
-    latencies.sort();
-
-    match output {
-        OutputMode::Silent => {}
-        OutputMode::Normal | OutputMode::Buckets => {
-            let percentile = |p| {
-                let idx = ((packets.len() - never_sent) as f32 * p / 100.0) as usize;
-                if idx >= latencies.len() {
-                    return INFINITY;
-                }
-                duration_to_ns(latencies[idx]) as f32 / 1000.0
-            };
-
-            println!(
-                "{}, {}, {}, {}, {}, {:.1}, {:.1}, {:.1}, {:.1}, {:.1}, {}",
-                distribution.name(),
-                (packets.len() - never_sent) as u64 * 1000_000_000
-                    / duration_to_ns(last_send - first_send),
-                latencies.len() as u64 * 1000_000_000 / duration_to_ns(last_send - first_send),
-                dropped,
-                never_sent,
-                percentile(50.0),
-                percentile(90.0),
-                percentile(99.0),
-                percentile(99.9),
-                percentile(99.99),
-                start_unix.duration_since(UNIX_EPOCH).unwrap().as_secs()
-            );
-        }
-        OutputMode::Trace => {
-            packets.sort_by_key(|p| p.actual_start.unwrap_or(p.target_start));
-            for p in packets {
-                if let Some(completion_time) = p.completion_time {
-                    let actual_start = p.actual_start.unwrap();
-                    println!(
-                        "{} {} {}",
-                        duration_to_ns(actual_start),
-                        duration_to_ns(actual_start) as i64 - duration_to_ns(p.target_start) as i64,
-                        duration_to_ns(completion_time - actual_start)
-                    )
-                } else if p.actual_start.is_some() {
-                    let actual_start = p.actual_start.unwrap();
-                    println!(
-                        "{} {} -1",
-                        duration_to_ns(actual_start),
-                        duration_to_ns(actual_start) as i64 - duration_to_ns(p.target_start) as i64,
-                    )
-                } else {
-                    println!("{} -1 -1", duration_to_ns(p.target_start))
-                }
-            }
-        }
-    }
-    if let OutputMode::Buckets = output {
-        let mut buckets = BTreeMap::new();
-
-        for l in latencies {
-            *buckets.entry(duration_to_ns(l) / 1000).or_insert(0) += 1;
-        }
-        print!("Latencies: ");
-        for k in buckets.keys() {
-            print!("{}:{} ", k, buckets[k]);
-        }
-        println!("");
-    }
-    true
+        .zip(sched_boundaries)
+        .all(|(sched, (start, end))| process_result(&sched, &mut packets[start..end], start_unix))
 }
 fn main() {
     let matches = App::new("Synthetic Workload Application")
@@ -840,6 +740,7 @@ fn main() {
                     "linux-client",
                     "runtime-client",
                     "spawner-server",
+                    "local-client",
                     "work-bench",
                 ])
                 .required(true)
@@ -1035,27 +936,35 @@ fn main() {
                 println!("Distribution, Target, Actual, Dropped, Never Sent, Median, 90th, 99th, 99.9th, 99.99th, Start");
                 if dowarmup {
                     for packets_per_second in (1..3).map(|i| i * 100000) {
-                        run_local(
-                            backend,
+                        let sched = gen_classic_packet_schedule(
                             Duration::from_secs(1),
                             packets_per_second,
-                            nthreads,
                             OutputMode::Silent,
                             distribution,
+                            0,
+                        );
+                        run_local(
+                            backend,
+                            nthreads,
                             fakeworker.clone(),
+                            &sched,
                         );
                     }
                 }
                 let step_size = (packets_per_second - start_packets_per_second) / samples;
                 for j in 1..=samples {
-                    run_local(
-                        backend,
+                    let sched = gen_classic_packet_schedule(
                         runtime,
                         start_packets_per_second + step_size * j,
-                        nthreads,
                         output,
                         distribution,
+                        0,
+                    );
+                    run_local(
+                        backend,
+                        nthreads,
                         fakeworker.clone(),
+                        &sched,
                     );
                     backend.sleep(Duration::from_secs(3));
                 }
