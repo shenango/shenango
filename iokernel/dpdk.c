@@ -52,12 +52,12 @@ static const struct rte_eth_conf port_conf_default = {
 	.rxmode = {
 		.max_rx_pkt_len = ETHER_MAX_LEN,
 		.offloads = DEV_RX_OFFLOAD_IPV4_CKSUM,
-		.mq_mode = ETH_MQ_RX_RSS,
+		.mq_mode = ETH_MQ_RX_RSS | ETH_MQ_RX_RSS_FLAG,
 	},
 	.rx_adv_conf = {
 		.rss_conf = {
 			.rss_key = NULL,
-			.rss_hf = ETH_RSS_UDP,
+			.rss_hf = ETH_RSS_TCP | ETH_RSS_UDP,
 		},
 	},
 	.txmode = {
