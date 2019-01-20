@@ -285,6 +285,9 @@ static void do_client(uint8_t port)
 	uint16_t nb_tx, nb_rx, i;
 	uint64_t reqs = 0;
 	struct ether_addr server_eth;
+	struct nbench_req *control_req;
+	struct nbench_resp *control_resp;
+	bool setup_port = false;
 
 	/*
 	 * Check that the port is on the same NUMA node as the polling thread
@@ -374,6 +377,11 @@ got_mac:
 		udp_hdr->dgram_cksum = 0;
 		memset(buf_ptr + sizeof(struct udp_hdr), 0xAB, payload_len);
 
+		/* control data in case our server is running netbench_udp */
+		control_req = (struct nbench_req *) (buf_ptr + sizeof(struct udp_hdr));
+		control_req->magic = kMagic;
+		control_req->nports = 1;
+
 		buf->l2_len = ETHER_HDR_LEN;
 		buf->l3_len = sizeof(struct ipv4_hdr);
 		buf->ol_flags = PKT_TX_IP_CKSUM | PKT_TX_IPV4;
@@ -405,11 +413,24 @@ got_mac:
 				udp_hdr = rte_pktmbuf_mtod_offset(buf, struct udp_hdr *,
 						ETHER_HDR_LEN + sizeof(struct ipv4_hdr));
 				if (udp_hdr->src_port != rte_cpu_to_be_16(server_port) ||
-						udp_hdr->dst_port != rte_cpu_to_be_16(client_port) ||
-						udp_hdr->dgram_len
-								!= rte_cpu_to_be_16(
-										sizeof(struct udp_hdr) + payload_len))
+				    udp_hdr->dst_port != rte_cpu_to_be_16(client_port))
 					goto no_match;
+
+				if (!setup_port &&
+				    udp_hdr->dgram_len != rte_cpu_to_be_16(sizeof(struct udp_hdr) +
+									   payload_len)) {
+					/* use port specified by netbench_udp server */
+					control_resp = rte_pktmbuf_mtod_offset(buf, struct nbench_resp *,
+							ETHER_HDR_LEN + sizeof(struct ipv4_hdr) +
+							sizeof(struct udp_hdr));
+					if (control_resp->nports != 1)
+						goto no_match;
+					server_port = control_resp->ports[0];
+
+					/* reset start time so we don't include control message RTT */
+					start_time = rte_get_timer_cycles();
+					setup_port = true;
+				}
 
 				/* packet matches */
 				rte_pktmbuf_free(buf);
@@ -425,6 +446,9 @@ got_mac:
 		reqs++;
 	}
 	end_time = rte_get_timer_cycles();
+	if (setup_port)
+		reqs--;
+
 	printf("ran for %f seconds, sent %"PRIu64" packets\n",
 			(float) (end_time - start_time) / rte_get_timer_hz(), reqs);
 	printf("client reqs/s: %f\n",
