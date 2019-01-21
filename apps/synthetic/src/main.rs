@@ -303,6 +303,7 @@ fn gen_classic_packet_schedule(
     output: OutputMode,
     distribution: Distribution,
     ramp_up_seconds: usize,
+    nthreads: usize,
 ) -> Vec<RequestSchedule> {
     let mut sched: Vec<RequestSchedule> = Vec::new();
 
@@ -311,7 +312,7 @@ fn gen_classic_packet_schedule(
         let rate = t * packets_per_second / (ramp_up_seconds * 10);
 
         sched.push(RequestSchedule {
-            arrival: Distribution::Exponential((1000_000_000 / rate) as f64),
+            arrival: Distribution::Exponential((nthreads * 1000_000_000 / rate) as f64),
             service: distribution,
             output: OutputMode::Silent,
             runtime: Duration::from_millis(100),
@@ -319,7 +320,7 @@ fn gen_classic_packet_schedule(
         });
     }
 
-    let ns_per_packet = 1000_000_000 / packets_per_second;
+    let ns_per_packet = nthreads * 1000_000_000 / packets_per_second;
     sched.push(RequestSchedule {
         arrival: Distribution::Exponential(ns_per_packet as f64),
         service: distribution,
@@ -331,12 +332,16 @@ fn gen_classic_packet_schedule(
     sched
 }
 
-fn gen_loadshift_experiment(spec: &str, service: Distribution) -> Vec<RequestSchedule> {
+fn gen_loadshift_experiment(
+    spec: &str,
+    service: Distribution,
+    nthreads: usize,
+) -> Vec<RequestSchedule> {
     spec.split(",")
         .map(|step_spec| {
             let s: Vec<&str> = step_spec.split(":").collect();
             assert!(s.len() == 2);
-            let ns_per_packet = 1000_000_000 / s[0].parse::<u64>().unwrap();
+            let ns_per_packet = nthreads as u64 * 1000_000_000 / s[0].parse::<u64>().unwrap();
             let micros = s[1].parse().unwrap();
             RequestSchedule {
                 arrival: Distribution::Exponential(ns_per_packet as f64),
@@ -472,33 +477,24 @@ fn run_client(
     schedules: &Vec<RequestSchedule>,
     index: usize,
 ) -> bool {
-    let mut last = 100_000_000;
-    let mut packet_schedule: Vec<Option<Packet>> = Vec::new();
-    let mut sched_boundaries: Vec<(usize, usize)> = Vec::new();
-
     let mut rng = rand::thread_rng();
-
-    for sched in schedules {
-        let start_idx = packet_schedule.len();
-        let end = last + duration_to_ns(sched.runtime);
-        while last < end {
-            last += sched.arrival.sample(&mut rng);
-            packet_schedule.push(Some(Packet {
-                randomness: rng.gen::<u64>(),
-                target_start: Duration::from_nanos(last),
-                work_iterations: sched.service.sample(&mut rng),
-                ..Default::default()
-            }));
-        }
-        sched_boundaries.push((start_idx, packet_schedule.len()));
-    }
 
     let packet_schedules: Vec<(Vec<Packet>, Vec<Option<Duration>>, Connection)> = (0..nthreads)
         .map(|tidx| {
-            let thread_packets: Vec<Packet> = (tidx..packet_schedule.len())
-                .step_by(nthreads)
-                .map(|i| packet_schedule[i].take().unwrap())
-                .collect();
+            let mut last = 100_000_000;
+            let mut thread_packets: Vec<Packet> = Vec::new();
+            for sched in schedules {
+                let end = last + duration_to_ns(sched.runtime);
+                while last < end {
+                    last += sched.arrival.sample(&mut rng);
+                    thread_packets.push(Packet {
+                        randomness: rng.gen::<u64>(),
+                        target_start: Duration::from_nanos(last),
+                        work_iterations: sched.service.sample(&mut rng),
+                        ..Default::default()
+                    });
+                }
+            }
 
             let src_addr = SocketAddrV4::new(
                 Ipv4Addr::new(0, 0, 0, 0),
@@ -549,9 +545,10 @@ fn run_client(
         send_threads.push(backend.spawn_thread(move || {
             // If the send or receive thread is still running 500 ms after it should have finished,
             // then stop it by triggering a shutdown on the socket.
+            let last = packets[packets.len() - 1].target_start;
             let socket = socket2.clone();
             let timer = backend.spawn_thread(move || {
-                backend.sleep(Duration::from_nanos(last) + Duration::from_millis(500));
+                backend.sleep(last + Duration::from_millis(500));
                 if Arc::strong_count(&socket) > 1 {
                     socket.shutdown();
                 }
@@ -607,10 +604,18 @@ fn run_client(
         .collect();
     packets.sort_by_key(|p| p.target_start);
 
-    schedules
-        .iter()
-        .zip(sched_boundaries)
-        .all(|(sched, (start, end))| process_result(&sched, &mut packets[start..end], start_unix))
+    let mut start = Duration::from_nanos(100_000_000);
+    schedules.iter().all(|sched| {
+        let last_index = packets
+            .iter()
+            .position(|p| p.target_start >= start + sched.runtime)
+            .unwrap_or(packets.len());
+        let rest = packets.split_off(last_index);
+        let res = process_result(&sched, packets.as_mut_slice(), start_unix);
+        packets = rest;
+        start += sched.runtime;
+        res
+    })
 }
 
 fn run_local(
@@ -619,33 +624,25 @@ fn run_local(
     worker: FakeWorker,
     schedules: &Vec<RequestSchedule>,
 ) -> bool {
-    let mut last = 100_000_000;
-    let mut packet_schedule: Vec<Option<Packet>> = Vec::new();
-    let mut sched_boundaries: Vec<(usize, usize)> = Vec::new();
-
     let mut rng = rand::thread_rng();
 
-    for sched in schedules {
-        let start_idx = packet_schedule.len();
-        let end = last + duration_to_ns(sched.runtime);
-        while last < end {
-            last += sched.arrival.sample(&mut rng);
-            packet_schedule.push(Some(Packet {
-                randomness: rng.gen::<u64>(),
-                target_start: Duration::from_nanos(last),
-                work_iterations: sched.service.sample(&mut rng),
-                ..Default::default()
-            }));
-        }
-        sched_boundaries.push((start_idx, packet_schedule.len()));
-    }
-
     let packet_schedules: Vec<Vec<Packet>> = (0..nthreads)
-        .map(|tidx| {
-            (tidx..packet_schedule.len())
-                .step_by(nthreads)
-                .map(|i| packet_schedule[i].take().unwrap())
-                .collect()
+        .map(|_| {
+            let mut last = 100_000_000;
+            let mut thread_packets: Vec<Packet> = Vec::new();
+            for sched in schedules {
+                let end = last + duration_to_ns(sched.runtime);
+                while last < end {
+                    last += sched.arrival.sample(&mut rng);
+                    thread_packets.push(Packet {
+                        randomness: rng.gen::<u64>(),
+                        target_start: Duration::from_nanos(last),
+                        work_iterations: sched.service.sample(&mut rng),
+                        ..Default::default()
+                    });
+                }
+            }
+            thread_packets
         })
         .collect();
 
@@ -708,10 +705,18 @@ fn run_local(
         .collect();
     packets.sort_by_key(|p| p.target_start);
 
-    schedules
-        .iter()
-        .zip(sched_boundaries)
-        .all(|(sched, (start, end))| process_result(&sched, &mut packets[start..end], start_unix))
+    let mut start = Duration::from_nanos(100_000_000);
+    schedules.iter().all(|sched| {
+        let last_index = packets
+            .iter()
+            .position(|p| p.target_start >= start + sched.runtime)
+            .unwrap_or(packets.len());
+        let rest = packets.split_off(last_index);
+        let res = process_result(&sched, packets.as_mut_slice(), start_unix);
+        packets = rest;
+        start += sched.runtime;
+        res
+    })
 }
 fn main() {
     let matches = App::new("Synthetic Workload Application")
@@ -942,6 +947,7 @@ fn main() {
                             OutputMode::Silent,
                             distribution,
                             0,
+                            nthreads,
                         );
                         run_local(
                             backend,
@@ -959,6 +965,7 @@ fn main() {
                         output,
                         distribution,
                         0,
+                        nthreads,
                     );
                     run_local(
                         backend,
@@ -984,7 +991,7 @@ fn main() {
                 };
 
                 if !loadshift_spec.is_empty() {
-                    let sched = gen_loadshift_experiment(&loadshift_spec, distribution);
+                    let sched = gen_loadshift_experiment(&loadshift_spec, distribution, nthreads);
                     run_client(
                         backend,
                         addr,
@@ -1006,6 +1013,7 @@ fn main() {
                         OutputMode::Silent,
                         distribution,
                         rampup,
+                        nthreads,
                     );
 
                     for _ in 0..3 {
@@ -1032,6 +1040,7 @@ fn main() {
                         output,
                         distribution,
                         rampup,
+                        nthreads,
                     );
                     run_client(
                         backend,
