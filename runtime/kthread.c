@@ -194,23 +194,12 @@ void kthread_park(bool voluntary)
 {
 	struct kthread *k = myk();
 	unsigned long payload = 0;
-	uint64_t cmd, deadline_us;
+	uint64_t cmd = TXCMD_PARKED, deadline_us;
 
-	if (!voluntary || load_acquire(&nrks) > 1 ||
+	if (!voluntary ||
 	    !mbufq_empty(&k->txpktq_overflow) ||
 	    !mbufq_empty(&k->txcmdq_overflow)) {
-		cmd = TXCMD_PARKED;
 		payload = (unsigned long)k;
-	} else {
-		/* all timers have been merged to the local kthread */
-		cmd = TXCMD_PARKED_LAST;
-		deadline_us = timer_earliest_deadline();
-		if (deadline_us) {
-			payload = deadline_us - microtime();
-			if ((int64_t)payload <= 0)
-				/* Timer has just expired, return to scheduler */
-				return;
-		}
 	}
 
 	assert_spin_lock_held(&k->lock);
@@ -219,13 +208,32 @@ void kthread_park(bool voluntary)
 	/* atomically verify we have at least @spinks kthreads running */
 	if (atomic_read(&runningks) <= spinks)
 		return;
-	if (unlikely(atomic_sub_and_fetch(&runningks, 1) < spinks)) {
+	int remaining_ks = atomic_sub_and_fetch(&runningks, 1);
+	if (unlikely(remaining_ks < spinks)) {
 		atomic_inc(&runningks);
 		return;
 	}
 
+	uint64_t now = microtime();
+
+	if (!payload && k->timern) {
+		if (remaining_ks) {
+			payload = (unsigned long)k;
+		} else {
+			cmd = TXCMD_PARKED_LAST;
+			deadline_us = timer_earliest_deadline();
+			if (deadline_us) {
+				payload = deadline_us - now;
+				if ((int64_t)payload <= 0) {
+					cmd = TXCMD_PARKED;
+					payload = (unsigned long)k;
+				}
+			}
+		}
+	}
+
 	k->parked = true;
-	k->park_us = microtime();
+	k->park_us = now;
 	STAT(PARKS)++;
 	spin_unlock(&k->lock);
 
