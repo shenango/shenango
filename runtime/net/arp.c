@@ -51,6 +51,8 @@ struct arp_entry {
 static DEFINE_SPINLOCK(arp_lock);
 static struct rcu_hlist_head arp_tbl[ARP_TABLE_CAPACITY];
 
+static void arp_worker(void *arg);
+
 static inline int hash_ip(uint32_t ip)
 {
 	return hash_crc32c_one(ARP_SEED, ip) % ARP_TABLE_CAPACITY;
@@ -88,6 +90,19 @@ static void delete_entry(struct arp_entry *e)
 	}
 
 	rcu_free(&e->rcuh, release_entry);
+}
+
+static void insert_entry(struct arp_entry *e, int idx)
+{
+	static bool worker_running;
+
+	rcu_hlist_add_head(&arp_tbl[idx], &e->link);
+
+	if (unlikely(!worker_running && e->state != ARP_STATE_STATIC)) {
+		worker_running = true;
+		BUG_ON(thread_spawn(arp_worker, NULL));
+	}
+
 }
 
 static struct arp_entry *create_entry(uint32_t daddr)
@@ -205,7 +220,7 @@ static void arp_update(uint32_t daddr, struct eth_addr dhost)
 			return;
 		}
 
-		rcu_hlist_add_head(&arp_tbl[idx], &e->link);
+		insert_entry(e, idx);
 	} else if (load_acquire(&e->state) == ARP_STATE_STATIC) {
 		spin_unlock_np(&arp_lock);
 		return;
@@ -324,7 +339,7 @@ int arp_lookup(uint32_t daddr, struct eth_addr *dhost_out, struct mbuf *m)
 	} else if (newe) {
 		/* insert new entry */
 		e = newe;
-		rcu_hlist_add_head(&arp_tbl[idx], &newe->link);
+		insert_entry(e, idx);
 	}
 
 	/* enqueue the mbuf for later transmission */
@@ -374,10 +389,10 @@ int arp_init_late(void)
 		idx = hash_ip(static_entries[i].ip);
 		e->eth = static_entries[i].addr;
 		e->state = ARP_STATE_STATIC;
-		rcu_hlist_add_head(&arp_tbl[idx], &e->link);
+		insert_entry(e, idx);
 	}
 
 	spin_unlock_np(&arp_lock);
 
-	return thread_spawn(arp_worker, NULL);
+	return 0;
 }

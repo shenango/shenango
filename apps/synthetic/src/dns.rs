@@ -31,7 +31,7 @@ fn push_usize(mut i: usize, buf: &mut Vec<u8>) -> u8 {
 fn pull_usize(buf: &[u8]) -> usize {
     buf.iter()
         .enumerate()
-        .map(|(idx, val)| (*val as usize) * 10_usize.pow(idx as u32))
+        .map(|(idx, val)| ((*val as usize) - 48) * 10_usize.pow(idx as u32))
         .sum()
 }
 
