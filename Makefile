@@ -6,7 +6,9 @@ LD	= gcc
 CC	= gcc
 AR	= ar
 SPARSE	= sparse
-MLX=$(shell lspci | grep 'ConnectX-3' || echo "")
+# uncomment to autodetect MLX5
+# MLX5=$(shell lspci | grep 'ConnectX-5' || echo "")
+MLX4=$(shell lspci | grep 'ConnectX-3' || echo "")
 
 CHECKFLAGS = -D__CHECKER__ -Waddress-space
 
@@ -21,8 +23,12 @@ ifneq ($(TCP_RX_STATS),)
 CFLAGS += -DTCP_RX_STATS
 endif
 
-ifneq ($(MLX),)
-CFLAGS += -DMLX
+ifneq ($(MLX5),)
+CFLAGS += -DMLX5
+else
+ifneq ($(MLX4),)
+CFLAGS += -DMLX4
+endif
 endif
 
 # handy for debugging
@@ -71,8 +77,12 @@ DPDK_LIBS += -lrte_mempool
 DPDK_LIBS += -lrte_mempool_stack
 DPDK_LIBS += -lrte_ring
 # additional libs for running with Mellanox NICs
-ifneq ($(MLX),)
+ifneq ($(MLX5),)
+DPDK_LIBS +=  -lrte_pmd_mlx5 -libverbs -lmlx5 -lmnl
+else
+ifneq ($(MLX4),)
 DPDK_LIBS += -lrte_pmd_mlx4 -libverbs -lmlx4
+endif
 endif
 
 # must be first

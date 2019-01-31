@@ -12,6 +12,7 @@
 #include <iokernel/control.h>
 #include <net/ethernet.h>
 
+#include "mlx.h"
 #include "ref.h"
 
 /* #define STATS 1 */
