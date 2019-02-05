@@ -367,18 +367,6 @@ static __noreturn void schedule_start(void)
 	schedule();
 }
 
-static void thread_finish_park_and_unlock(unsigned long data)
-{
-	thread_t *myth = thread_self();
-	spinlock_t *lock = (spinlock_t *)data;
-
-	assert(myth->state == THREAD_STATE_RUNNING);
-	myth->state = THREAD_STATE_SLEEPING;
-	spin_unlock(lock);
-
-	schedule();
-}
-
 static void thread_finish_park_and_unlock_np(unsigned long data)
 {
 	thread_t *myth = thread_self();
@@ -392,16 +380,6 @@ static void thread_finish_park_and_unlock_np(unsigned long data)
 }
 
 /**
- * thread_park_and_unlock - puts a thread to sleep and unlocks when finished
- * @l: this lock will be released when the thread state is fully saved
- */
-void thread_park_and_unlock(spinlock_t *l)
-{
-	/* this will switch from the thread stack to the runtime stack */
-	jmp_runtime(thread_finish_park_and_unlock, (unsigned long)l);
-}
-
-/**
  * thread_park_and_unlock_np - puts a thread to sleep and unlocks when finished
  * and re-enables preemption
  * @l: this lock will be released when the thread state is fully saved
@@ -411,7 +389,6 @@ void thread_park_and_unlock_np(spinlock_t *l)
 	/* this will switch from the thread stack to the runtime stack */
 	jmp_runtime(thread_finish_park_and_unlock_np, (unsigned long)l);
 }
-
 
 /**
  * thread_ready - marks a thread as a runnable
