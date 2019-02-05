@@ -97,10 +97,6 @@ struct thread {
 	struct stack		*stack;
 	unsigned int		main_thread:1;
 	unsigned int		state;
-
-	/* channel state */
-	void			*chan_buf;
-	int			chan_closed;
 };
 
 typedef void (*runtime_fn_t)(unsigned long arg);
