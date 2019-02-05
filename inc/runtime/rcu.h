@@ -114,3 +114,4 @@ struct rcu_head {
 };
 
 extern void rcu_free(struct rcu_head *head, rcu_callback_t func);
+extern void synchronize_rcu(void);

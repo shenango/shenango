@@ -86,7 +86,6 @@ static void kthread_attach(void)
 	k->detached = false;
 
 	spin_lock(&klock);
-	k->rcu_gen = rcu_gen;
 	assert(nrks < maxks);
 	ks[nrks] = k;
 	store_release(&nrks, nrks + 1);
@@ -105,7 +104,6 @@ static void kthread_attach(void)
 void kthread_detach(struct kthread *r)
 {
 	struct kthread *k = myk();
-	unsigned int rgen;
 	int i;
 
 	assert_spin_lock_held(&r->lock);
@@ -132,11 +130,7 @@ void kthread_detach(struct kthread *r)
 
 found:
 	ks[i] = ks[--nrks];
-	rgen = load_acquire(&rcu_gen);
 	spin_unlock(&klock);
-
-	/* remove from the current RCU generation */
-	rcu_detach(r, rgen);
 
 	/* steal all overflow packets and completions */
 	mbufq_merge_to_tail(&k->txpktq_overflow, &r->txpktq_overflow);

@@ -26,15 +26,16 @@
  * TODO: make these configurable?
  */
 
-#define RUNTIME_MAX_THREADS	100000
-#define RUNTIME_STACK_SIZE	128 * KB
-#define RUNTIME_GUARD_SIZE	128 * KB
-#define RUNTIME_RQ_SIZE		32
-#define RUNTIME_SOFTIRQ_BUDGET	16
-#define RUNTIME_MAX_TIMERS	4096
+#define RUNTIME_MAX_THREADS		100000
+#define RUNTIME_STACK_SIZE		128 * KB
+#define RUNTIME_GUARD_SIZE		128 * KB
+#define RUNTIME_RQ_SIZE			32
+#define RUNTIME_SOFTIRQ_BUDGET		16
+#define RUNTIME_MAX_TIMERS		4096
 #define RUNTIME_SCHED_POLL_ITERS	4
 #define RUNTIME_SCHED_MIN_POLL_US	2
-#define RUNTIME_WATCHDOG_US	50
+#define RUNTIME_WATCHDOG_US		50
+
 
 /*
  * Trap frame support
@@ -374,31 +375,6 @@ extern struct cpu_record cpu_map[NCPU];
 #define STAT(counter) (myk()->stats[STAT_ ## counter])
 
 
-/*
- * RCU support
- */
-
-extern unsigned int rcu_gen;
-extern void __rcu_recurrent(struct kthread *k);
-extern void rcu_detach(struct kthread *k, unsigned int rgen);
-
-/**
- * rcu_poll - advances to the next quiescent period
- *
- * Called during each schedule() invocation.
- */
-static inline void rcu_recurrent(void)
-{
-	struct kthread *k = myk();
-
-#ifdef DEBUG
-	assert(rcu_read_count == 0);
-#endif /* DEBUG */
-
-	if (unlikely(load_acquire(&rcu_gen) != k->rcu_gen))
-		__rcu_recurrent(k);
-}
-
 
 /*
  * Softirq support
@@ -510,6 +486,7 @@ extern int ioqueues_register_iokernel(void);
 extern int arp_init_late(void);
 extern int stat_init_late(void);
 extern int tcp_init_late(void);
+extern int rcu_init_late(void);
 
 /* configuration loading */
 extern int cfg_load(const char *path);

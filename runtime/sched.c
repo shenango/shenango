@@ -162,13 +162,6 @@ done:
 		STAT(THREADS_STOLEN)++;
 	} else if (r->parked) {
 		kthread_detach(r);
-
-		/*
-		 * handle the case where kthread_detach -> rcu_detach leads to a
-		 * thread being added to the runqueue (but not returned above)
-		 */
-		if (l->rq_head != l->rq_tail)
-			th = l->rq[l->rq_head];
 	}
 
 	spin_unlock(&r->lock);
@@ -209,8 +202,9 @@ static __noreturn void schedule(void)
 	start_tsc = rdtsc();
 	STAT(PROGRAM_CYCLES) += start_tsc - last_tsc;
 
-	/* mark the end of the RCU quiescent period */
-	rcu_recurrent();
+	/* increment the RCU generation number (even is in scheduler) */
+	store_release(&l->rcu_gen, l->rcu_gen + 1);
+	assert((l->rcu_gen & 0x1) == 0x0);
 	/* drain overflow packets */
 	net_recurrent();
 
@@ -266,14 +260,6 @@ again:
 		if (ks[i] != l && steal_work(l, ks[i]))
 			goto done;
 
-	/* check for RCU reclamation */
-	if (unlikely(load_acquire(&rcu_gen) != l->rcu_gen)) {
-		spin_unlock(&l->lock);
-		__rcu_recurrent(l);
-		spin_lock(&l->lock);
-		goto again;
-	}
-
 	/* keep trying to find work until the polling timeout expires */
 	if (!preempt_needed() &&
 	    (++iters < RUNTIME_SCHED_POLL_ITERS ||
@@ -307,6 +293,11 @@ done:
 	STAT(SCHED_CYCLES) += end_tsc - start_tsc;
 	last_tsc = end_tsc;
 
+	/* increment the RCU generation number (odd is in thread) */
+	store_release(&l->rcu_gen, l->rcu_gen + 1);
+	assert((l->rcu_gen & 0x1) == 0x1);
+
+	/* and jump into the next thread */
 	jmp_thread(th);
 }
 
@@ -365,9 +356,13 @@ void join_kthread(struct kthread *k)
  */
 static __noreturn void schedule_start(void)
 {
-	/* force kthread parking (iokernel assumes all kthreads are parked
-	 * initially) */
+	/*
+	 * force kthread parking (iokernel assumes all kthreads are parked
+	 * initially). Update RCU generation so it stays even after entering
+	 * schedule().
+	 */
 	kthread_wait_to_attach();
+	store_release(&myk()->rcu_gen, 1);
 
 	schedule();
 }
