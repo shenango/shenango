@@ -1,4 +1,4 @@
-// udp.h - support for UDP networking
+// net.h - support for networking
 
 #pragma once
 

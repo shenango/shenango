@@ -4,8 +4,7 @@
 
 extern "C" {
 #include <base/assert.h>
-#include <base/lock.h>
-#include <runtime/thread.h>
+#include <runtime/sync.h>
 }
 
 #include <functional>
