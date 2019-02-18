@@ -47,9 +47,8 @@ static inline void assert_spin_lock_held(spinlock_t *l)
 static inline void spin_lock(spinlock_t *l)
 {
 	while (__sync_lock_test_and_set(&l->locked, 1)) {
-		do {
+		while (l->locked)
 			cpu_relax();
-		} while (l->locked);
 	}
 }
 

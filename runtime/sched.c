@@ -19,7 +19,7 @@
 
 #include "defs.h"
 
-/* the currently running thread, or NULL if in runtime code */
+/* the current running thread, or NULL if there isn't one */
 __thread thread_t *__self;
 /* a pointer to the top of the per-kthread (TLS) runtime stack */
 static __thread void *runtime_stack;
@@ -55,40 +55,70 @@ thread_t *thread_self(void);
  */
 static __noreturn void jmp_thread(thread_t *th)
 {
-	__self = th;
+	assert_preempt_disabled();
 	assert(th->state == THREAD_STATE_RUNNABLE);
+
+	__self = th;
 	th->state = THREAD_STATE_RUNNING;
+	if (unlikely(load_acquire(&th->stack_busy))) {
+		/* wait until the scheduler finishes switching stacks */
+		while (load_acquire(&th->stack_busy))
+			cpu_relax();
+	}
 	__jmp_thread(&th->tf);
+}
+
+/**
+ * jmp_thread_direct - runs a thread, popping its trap frame
+ * @oldth: the last thread to run
+ * @newth: the next thread to run
+ *
+ * This function restores the state of the thread and switches from the runtime
+ * stack to the thread's stack. Runtime state is not saved.
+ */
+static void jmp_thread_direct(thread_t *oldth, thread_t *newth)
+{
+	assert_preempt_disabled();
+	assert(newth->state == THREAD_STATE_RUNNABLE);
+
+	__self = newth;
+	newth->state = THREAD_STATE_RUNNING;
+	if (unlikely(load_acquire(&newth->stack_busy))) {
+		/* wait until the scheduler finishes switching stacks */
+		while (load_acquire(&newth->stack_busy))
+			cpu_relax();
+	}
+	__jmp_thread_direct(&oldth->tf, &newth->tf, &oldth->stack_busy);
 }
 
 /**
  * jmp_runtime - saves the current trap frame and jumps to a function in the
  *               runtime
  * @fn: the runtime function to call
- * @arg: an argument to pass to the runtime function
  *
  * WARNING: Only threads can call this function.
  *
  * This function saves state of the running thread and switches to the runtime
  * stack, making it safe to run the thread elsewhere.
  */
-static void jmp_runtime(runtime_fn_t fn, unsigned long arg)
+static void jmp_runtime(runtime_fn_t fn)
 {
-	preempt_disable();
+	assert_preempt_disabled();
 	assert(thread_self() != NULL);
-	__jmp_runtime(&thread_self()->tf, fn, runtime_stack, arg);
+
+	__jmp_runtime(&thread_self()->tf, fn, runtime_stack);
 }
 
 /**
  * jmp_runtime_nosave - jumps to a function in the runtime without saving the
  *			caller's state
  * @fn: the runtime function to call
- * @arg: an argument to pass to the runtime function
  */
-static __noreturn void jmp_runtime_nosave(runtime_fn_t fn, unsigned long arg)
+static __noreturn void jmp_runtime_nosave(runtime_fn_t fn)
 {
-	preempt_disable();
-	__jmp_runtime_nosave(fn, runtime_stack, arg);
+	assert_preempt_disabled();
+
+	__jmp_runtime_nosave(fn, runtime_stack);
 }
 
 static void drain_overflow(struct kthread *l)
@@ -185,7 +215,7 @@ static __noinline struct thread *do_watchdog(struct kthread *l)
 }
 
 /* the main scheduler routine, decides what to run next */
-static __noreturn void schedule(void)
+static __noreturn __noinline void schedule(void)
 {
 	struct kthread *r = NULL, *l = myk();
 	uint64_t start_tsc, end_tsc;
@@ -193,6 +223,16 @@ static __noreturn void schedule(void)
 	unsigned int last_nrks;
 	unsigned int iters = 0;
 	int i, sibling;
+
+	assert_spin_lock_held(&l->lock);
+	assert(l->parked == false);
+	assert(l->detached == false);
+
+	/* unmark busy for the stack of the last uthread */
+	if (__self != NULL) {
+		store_release(&__self->stack_busy, false);
+		__self = NULL;
+	}
 
 	/* detect misuse of preempt disable */
 	BUG_ON((preempt_cnt & ~PREEMPT_NOT_PENDING) != 1);
@@ -205,17 +245,10 @@ static __noreturn void schedule(void)
 	/* increment the RCU generation number (even is in scheduler) */
 	store_release(&l->rcu_gen, l->rcu_gen + 1);
 	assert((l->rcu_gen & 0x1) == 0x0);
-	/* drain overflow packets */
-	net_recurrent();
-
-	__self = NULL;
-	spin_lock(&l->lock);
-
-	assert(l->parked == false);
-	assert(l->detached == false);
 
 	/* if it's been too long, run the softirq handler */
-	if (unlikely(!disable_watchdog && start_tsc - last_watchdog_tsc >
+	if (!disable_watchdog &&
+	    unlikely(start_tsc - last_watchdog_tsc >
 	             cycles_per_us * RUNTIME_WATCHDOG_US)) {
 		last_watchdog_tsc = start_tsc;
 		th = do_watchdog(l);
@@ -351,43 +384,50 @@ void join_kthread(struct kthread *k)
 }
 
 /**
- * immediately park each kthread when it first starts up, only schedule it once
- * the iokernel has granted it a core
- */
-static __noreturn void schedule_start(void)
-{
-	/*
-	 * force kthread parking (iokernel assumes all kthreads are parked
-	 * initially). Update RCU generation so it stays even after entering
-	 * schedule().
-	 */
-	kthread_wait_to_attach();
-	store_release(&myk()->rcu_gen, 1);
-
-	schedule();
-}
-
-static void thread_finish_park_and_unlock_np(unsigned long data)
-{
-	thread_t *myth = thread_self();
-	spinlock_t *lock = (spinlock_t *)data;
-
-	assert(myth->state == THREAD_STATE_RUNNING);
-	myth->state = THREAD_STATE_SLEEPING;
-	spin_unlock_np(lock);
-
-	schedule();
-}
-
-/**
  * thread_park_and_unlock_np - puts a thread to sleep and unlocks when finished
  * and re-enables preemption
  * @l: this lock will be released when the thread state is fully saved
  */
 void thread_park_and_unlock_np(spinlock_t *l)
 {
-	/* this will switch from the thread stack to the runtime stack */
-	jmp_runtime(thread_finish_park_and_unlock_np, (unsigned long)l);
+	thread_t *myth = thread_self(), *th;
+	struct kthread *k = myk();
+
+	assert_preempt_disabled();
+	assert(myth->state == THREAD_STATE_RUNNING);
+
+	myth->state = THREAD_STATE_SLEEPING;
+	myth->stack_busy = true;
+	spin_unlock(l);
+
+	spin_lock(&k->lock);
+
+	/* slow path: switch from the uthread stack to the runtime stack */
+	if (k->rq_head == k->rq_tail ||
+	    (!disable_watchdog &&
+	     unlikely(rdtsc() - last_watchdog_tsc >
+		      cycles_per_us * RUNTIME_WATCHDOG_US))) {
+		jmp_runtime(schedule);
+		return;
+	}
+
+	/* fast path: switch directly to the next uthread */
+
+	/* pop the next runnable thread from the queue */
+	th = k->rq[k->rq_tail++ % RUNTIME_RQ_SIZE];
+	k->q_ptrs->rq_tail++;
+	spin_unlock(&k->lock);
+
+	/* increment the RCU generation number (odd is in thread) */
+	store_release(&k->rcu_gen, k->rcu_gen + 2);
+	assert((k->rcu_gen & 0x1) == 0x1);
+
+	/* check for misuse of preemption disabling */
+	BUG_ON((preempt_cnt & ~PREEMPT_NOT_PENDING) != 1);
+
+	/* switch stacks and enter the next thread */
+	STAT(RESCHEDULES)++;
+	jmp_thread_direct(myth, th);
 }
 
 /**
@@ -421,7 +461,7 @@ void thread_ready(thread_t *th)
 	putk();
 }
 
-static void thread_finish_yield_kthread(unsigned long data)
+static void thread_finish_yield_kthread(void)
 {
 	struct kthread *k = myk();
 	thread_t *myth = thread_self();
@@ -435,8 +475,6 @@ static void thread_finish_yield_kthread(unsigned long data)
 	spin_lock(&k->lock);
 	clear_preempt_needed();
 	kthread_park(false);
-	spin_unlock(&k->lock);
-
 	last_tsc = rdtsc();
 
 	schedule();
@@ -448,18 +486,8 @@ static void thread_finish_yield_kthread(unsigned long data)
 void thread_yield_kthread(void)
 {
 	/* this will switch from the thread stack to the runtime stack */
-	jmp_runtime(thread_finish_yield_kthread, 0);
-}
-
-static void thread_finish_yield(unsigned long data)
-{
-	thread_t *myth = thread_self();
-
-	assert(myth->state == THREAD_STATE_RUNNING);
-	myth->state = THREAD_STATE_SLEEPING;
-	thread_ready(myth);
-
-	schedule();
+	preempt_disable();
+	jmp_runtime(thread_finish_yield_kthread);
 }
 
 /**
@@ -469,11 +497,21 @@ static void thread_finish_yield(unsigned long data)
  */
 void thread_yield(void)
 {
+	struct kthread *k;
+	thread_t *myth = thread_self();
+
 	/* check for softirqs */
 	softirq_run(RUNTIME_SOFTIRQ_BUDGET);
 
+	assert(myth->state == THREAD_STATE_RUNNING);
+	myth->state = THREAD_STATE_SLEEPING;
+	store_release(&myth->stack_busy, true);
+	thread_ready(myth);
+
 	/* this will switch from the thread stack to the runtime stack */
-	jmp_runtime(thread_finish_yield, 0);
+	k = getk();
+	spin_lock(&k->lock);
+	jmp_runtime(schedule);
 }
 
 static __always_inline thread_t *__thread_create(void)
@@ -520,6 +558,7 @@ thread_t *thread_create(thread_fn_t fn, void *arg)
 	th->tf.rdi = (uint64_t)arg;
 	th->tf.rbp = (uint64_t)0; /* just in case base pointers are enabled */
 	th->tf.rip = (uint64_t)fn;
+	th->stack_busy = false;
 	return th;
 }
 
@@ -544,8 +583,8 @@ thread_t *thread_create_with_buf(thread_fn_t fn, void **buf, size_t buf_len)
 	th->tf.rdi = (uint64_t)ptr;
 	th->tf.rbp = (uint64_t)0; /* just in case base pointers are enabled */
 	th->tf.rip = (uint64_t)fn;
+	th->stack_busy = false;
 	*buf = ptr;
-
 	return th;
 }
 
@@ -590,7 +629,7 @@ int thread_spawn_main(thread_fn_t fn, void *arg)
 	return 0;
 }
 
-static void thread_finish_exit(unsigned long data)
+static void thread_finish_exit(void)
 {
 	struct thread *th = thread_self();
 
@@ -599,7 +638,9 @@ static void thread_finish_exit(unsigned long data)
 		init_shutdown(EXIT_SUCCESS);
 	stack_free(th->stack);
 	tcache_free(&perthread_get(thread_pt), th);
+	__self = NULL;
 
+	spin_lock(&myk()->lock);
 	schedule();
 }
 
@@ -609,7 +650,28 @@ static void thread_finish_exit(unsigned long data)
 void thread_exit(void)
 {
 	/* can't free the stack we're currently using, so switch */
-	jmp_runtime_nosave(thread_finish_exit, 0);
+	preempt_disable();
+	jmp_runtime_nosave(thread_finish_exit);
+}
+
+/**
+ * immediately park each kthread when it first starts up, only schedule it once
+ * the iokernel has granted it a core
+ */
+static __noreturn void schedule_start(void)
+{
+	struct kthread *k = myk();
+
+	/*
+	 * force kthread parking (iokernel assumes all kthreads are parked
+	 * initially). Update RCU generation so it stays even after entering
+	 * schedule().
+	 */
+	kthread_wait_to_attach();
+	store_release(&k->rcu_gen, 1);
+
+	spin_lock(&k->lock);
+	schedule();
 }
 
 /**
@@ -618,7 +680,8 @@ void thread_exit(void)
 void sched_start(void)
 {
 	last_tsc = rdtsc();
-	jmp_runtime_nosave((runtime_fn_t)schedule_start, 0);
+	preempt_disable();
+	jmp_runtime_nosave(schedule_start);
 }
 
 static void runtime_top_of_stack(void)

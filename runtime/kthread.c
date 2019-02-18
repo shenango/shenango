@@ -12,6 +12,7 @@
 #include <base/list.h>
 #include <base/lock.h>
 #include <base/log.h>
+#include <runtime/sync.h>
 #include <runtime/timer.h>
 
 #include "defs.h"
@@ -27,10 +28,12 @@ unsigned int spinks;
 /* the number of guaranteed kthreads (we can always have this many if we want,
  * must be >= 1) */
 unsigned int guaranteedks = 1;
-/* the number of executing kthreads */
+/* the number of active kthreads */
 static atomic_t runningks;
-/* an array of all the kthreads (for work-stealing) */
+/* an array of attached kthreads (@nrks in total) */
 struct kthread *ks[NCPU];
+/* an array of all kthreads, attached or detached (@maxks in total) */
+struct kthread *allks[NCPU];
 /* kernel thread-local data */
 __thread struct kthread *mykthread;
 /* Map of cpu to kthread */
@@ -64,9 +67,17 @@ static struct kthread *allock(void)
  */
 int kthread_init_thread(void)
 {
+	static int allksn = 0;
+
 	mykthread = allock();
 	if (!mykthread)
 		return -ENOMEM;
+
+	spin_lock_np(&klock);
+	allks[allksn++] = mykthread;
+	assert(allksn <= maxks);
+	spin_unlock_np(&klock);
+
 	return 0;
 }
 

@@ -18,7 +18,7 @@ extern void preempt(void);
  */
 static inline void preempt_disable(void)
 {
-	asm volatile("incl %%fs:preempt_cnt@tpoff" : : : "memory", "cc");
+	asm volatile("addl $1, %%fs:preempt_cnt@tpoff" : : : "memory", "cc");
 	barrier();
 }
 
@@ -30,7 +30,7 @@ static inline void preempt_disable(void)
 static inline void preempt_enable_nocheck(void)
 {
 	barrier();
-	asm volatile("decl %%fs:preempt_cnt@tpoff" : : : "memory", "cc");
+	asm volatile("subl $1, %%fs:preempt_cnt@tpoff" : : : "memory", "cc");
 }
 
 /**

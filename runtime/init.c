@@ -52,7 +52,6 @@ static const struct init_entry thread_init_handlers[] = {
 	THREAD_INITIALIZER(stack),
 	THREAD_INITIALIZER(timer),
 	THREAD_INITIALIZER(sched),
-	THREAD_INITIALIZER(stat),
 	THREAD_INITIALIZER(smalloc),
 
 	/* network stack */

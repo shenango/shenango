@@ -16,10 +16,6 @@
 /* port 40 is permanently reserved, so should be fine for now */
 #define STAT_PORT	40
 
-static struct kthread *allks[NCPU];
-static unsigned int nrallks;
-static DEFINE_SPINLOCK(stat_lock);
-
 static const char *stat_names[] = {
 	/* scheduler counters */
 	"reschedules",
@@ -62,7 +58,7 @@ static ssize_t stat_write_buf(char *buf, size_t len)
 
 	/* gather stats from each kthread */
 	/* FIXME: not correct when parked kthreads removed from @ks */
-	for (i = 0; i < nrallks; i++) {
+	for (i = 0; i < maxks; i++) {
 		for (j = 0; j < STAT_NR; j++)
 			stats[j] += allks[i]->stats[j];
 	}
@@ -126,20 +122,6 @@ static void stat_worker(void *arg)
 		ret = udp_write_to(c, buf, len, &raddr);
 		WARN_ON(ret != len);
 	}
-}
-
-/**
- * stat_init_thread - initializes per-thread state for stats
- *
- * Returns 0 (always successful).
- */
-int stat_init_thread(void)
-{
-	spin_lock(&stat_lock);
-	allks[nrallks++] = myk();
-	spin_unlock(&stat_lock);
-
-	return 0;
 }
 
 /**

@@ -8,6 +8,9 @@
  * these values without also updating defs.h.
  */
 
+.file "switch.S"
+.text
+
 /* arguments registers (can be clobbered) */
 #define RDI	(0)
 #define RSI	(8)
@@ -35,13 +38,15 @@
 
 /**
  * __jmp_thread - executes a thread from the runtime
- * @tf: the trap frame to pop (%rdi)
+ * @tf: the trap frame to restore (%rdi)
  *
  * This low-level variant isn't intended to be called directly.
  * Re-enables preemption, parking the kthread if necessary.
  * Does not return.
  */
+.align 16
 .globl __jmp_thread
+.type __jmp_thread, @function
 __jmp_thread:
 	/* restore callee regs */
 	movq    RBX(%rdi), %rbx
@@ -59,11 +64,11 @@ __jmp_thread:
 	movq    RDI(%rdi), %rdi /* ARG0 */
 
 	/* re-enable preemption */
-	decl	%fs:preempt_cnt@tpoff
+	subl	$1, %fs:preempt_cnt@tpoff
 	jz	1f
 
 	/* jump into trap frame */
-	jmpq    *%rsi
+	jmpq	*%rsi
 	nop
 
 1:	/* cold-path, save RIP and park the kthread */
@@ -75,18 +80,81 @@ __jmp_thread:
 	jmpq	*%rsi
 
 /**
+ * __jmp_thread_direct - directly switches from one thread to the next
+ * @oldtf: the trap frame to save (%rdi)
+ * @newtf: the trap frame to restore (%rsi)
+ * @stack_busy: a pointer to the busy stack flag owned by the old thread (%rdx)
+ *
+ * This low-level variant isn't intended to be called directly.
+ * Re-enables preemption, parking the kthread if necessary.
+ * Does return.
+ */
+.align 16
+.globl __jmp_thread_direct
+.type __jmp_thread_direct, @function
+__jmp_thread_direct:
+	/* save ip and stack */
+	movq    (%rsp), %r8
+	movq    %r8, RIP(%rdi)
+	leaq    8(%rsp), %r8
+	movq    %r8, RSP(%rdi)
+
+	/* clear the stack busy flag */
+	movl	$0, (%rdx)
+
+	/* save callee regs */
+	movq    %rbx, RBX(%rdi)
+	movq    %rbp, RBP(%rdi)
+	movq    %r12, R12(%rdi)
+	movq    %r13, R13(%rdi)
+	movq    %r14, R14(%rdi)
+	movq    %r15, R15(%rdi)
+
+	/* restore callee regs */
+	movq    RBX(%rsi), %rbx
+	movq    RBP(%rsi), %rbp
+	movq    R12(%rsi), %r12
+	movq    R13(%rsi), %r13
+	movq    R14(%rsi), %r14
+	movq    R15(%rsi), %r15
+
+	/* restore ip and stack */
+	movq    RSP(%rsi), %rsp
+	movq    RIP(%rsi), %rcx
+
+	/* set first argument (in case new thread) */
+	movq    RDI(%rsi), %rdi /* ARG0 */
+
+	/* re-enable preemption */
+	subl	$1, %fs:preempt_cnt@tpoff
+	jz	1f
+
+	/* jump into trap frame */
+	jmpq	*%rcx
+	nop
+
+1:	/* cold-path, save RIP and park the kthread */
+	pushq	%rcx
+	pushq	%rdi
+	call	preempt
+	popq	%rdi
+	popq	%rcx
+	jmpq	*%rcx
+
+/**
  * __jmp_runtime - saves the current trap frame and jumps to a function in the
  *                 runtime
  * @tf: the struct thread_tf to save state (%rdi)
  * @fn: the function pointer to call (%rsi)
  * @stack: the start of the runtime stack (%rdx)
- * @arg: an argument to @fn (%rcx)
  *
  * This low-level variant isn't intended to be called directly.
  * Must be called with preemption disabled.
  * No return value.
  */
+.align 16
 .globl __jmp_runtime
+.type __jmp_runtime, @function
 __jmp_runtime:
 	/* save callee regs */
 	movq    %rbx, RBX(%rdi)
@@ -104,7 +172,6 @@ __jmp_runtime:
 
 	/* jump into runtime function */
 	movq    %rdx, %rsp
-	movq	%rcx, %rdi
 
 	/* jump into runtime code */
 	jmpq    *%rsi
@@ -114,19 +181,19 @@ __jmp_runtime:
  *			  current stack frame
  * @fn: the function pointer to call (%rdi)
  * @stack: the start of the runtime stack (%rsi)
- * @arg: an argument to @fn (%rdx)
  *
  * This low-level variant isn't intended to be called directly.
  * Must be called with preemption disabled.
  * No return value.
  */
+.align 16
 .globl __jmp_runtime_nosave
+.type __jmp_runtime_nosave, @function
 __jmp_runtime_nosave:
 
 	/* jump into runtime function */
 	movq    %rsi, %rsp
 	movq	%rdi, %rsi
-	movq	%rdx, %rdi
 
 	/* jump into runtime code */
 	jmpq    *%rsi

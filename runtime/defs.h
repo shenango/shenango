@@ -97,16 +97,19 @@ struct thread {
 	struct stack		*stack;
 	unsigned int		main_thread:1;
 	unsigned int		state;
+	unsigned int		stack_busy;
 };
 
-typedef void (*runtime_fn_t)(unsigned long arg);
+typedef void (*runtime_fn_t)(void);
 
 /* assembly helper routines from switch.S */
 extern void __jmp_thread(struct thread_tf *tf) __noreturn;
+extern void __jmp_thread_direct(struct thread_tf *oldtf,
+				struct thread_tf *newtf,
+				unsigned int *stack_busy);
 extern void __jmp_runtime(struct thread_tf *tf, runtime_fn_t fn,
-			  void *stack, unsigned long arg);
-extern void __jmp_runtime_nosave(runtime_fn_t fn, void *stack,
-				 unsigned long arg) __noreturn;
+			  void *stack);
+extern void __jmp_runtime_nosave(runtime_fn_t fn, void *stack) __noreturn;
 
 
 /*
@@ -346,6 +349,7 @@ extern unsigned int spinks;
 extern unsigned int guaranteedks;
 extern unsigned int nrks;
 extern struct kthread *ks[NCPU];
+extern struct kthread *allks[NCPU];
 
 extern void kthread_detach(struct kthread *r);
 extern void kthread_park(bool voluntary);
@@ -413,20 +417,6 @@ extern struct cfg_arp_static_entry static_entries[MAX_ARP_STATIC_ENTRIES];
 
 extern void __net_recurrent(void);
 extern void net_rx_softirq(struct rx_net_hdr **hdrs, unsigned int nr);
-
-/**
- * net_recurrent - flush overflow packets
- *
- * Called during each schedule() invocation and during TX.
- */
-static inline void net_recurrent(void)
-{
-	struct kthread *k = myk();
-
-	if (!mbufq_empty(&k->txpktq_overflow) ||
-	    !mbufq_empty(&k->txcmdq_overflow))
-		__net_recurrent();
-}
 
 
 /*

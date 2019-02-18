@@ -32,44 +32,6 @@ static DEFINE_PERTHREAD(struct tcache_perthread, net_tx_buf_pt);
 
 #define MBUF_RESERVED (align_up(sizeof(struct mbuf), CACHE_LINE_SIZE))
 
-/* drains overflow queues */
-void __noinline __net_recurrent(void)
-{
-	shmptr_t shm;
-	struct mbuf *m;
-	struct kthread *k = myk();
-
-	assert_preempt_disabled();
-
-	/* drain TX packets */
-	while (!mbufq_empty(&k->txpktq_overflow)) {
-		m = mbufq_peak_head(&k->txpktq_overflow);
-		shm = ptr_to_shmptr(&netcfg.tx_region,
-				    mbuf_data(m), mbuf_length(m));
-		if (!lrpc_send(&k->txpktq, TXPKT_NET_XMIT, shm))
-			break;
-		mbufq_pop_head(&k->txpktq_overflow);
-		if (unlikely(preempt_needed()))
-			return;
-	}
-
-#if 0
-	/* drain RX completions */
-	while (!mbufq_empty(&k->txcmdq_overflow)) {
-		m = mbufq_peak_head(&k->txcmdq_overflow);
-		rxhdr = container_of((void *)m->head, struct rx_net_hdr,
-				     payload);
-		if (!lrpc_send(&k->txcmdq, TXCMD_NET_COMPLETE,
-			       rxhdr->completion_data))
-			break;
-		mbufq_pop_head(&k->txcmdq_overflow);
-		tcache_free(&perthread_get(net_mbuf_pt), m);
-		if (unlikely(preempt_needed()))
-			return;
-	}
-#endif
-}
-
 
 /*
  * RX Networking Functions
@@ -309,12 +271,35 @@ struct mbuf *net_tx_alloc_mbuf(void)
 
 	buf = (unsigned char *)m + MBUF_RESERVED;
 
-	mbuf_init(m, buf, MBUF_DEFAULT_LEN - MBUF_RESERVED, MBUF_DEFAULT_HEADROOM);
+	mbuf_init(m, buf, MBUF_DEFAULT_LEN - MBUF_RESERVED,
+		  MBUF_DEFAULT_HEADROOM);
 	m->csum_type = CHECKSUM_TYPE_NEEDED;
 	m->txflags = 0;
 	m->release_data = 0;
 	m->release = net_tx_release_mbuf;
 	return m;
+}
+
+/* drains overflow queues */
+void __noinline net_tx_drain_overflow(void)
+{
+	shmptr_t shm;
+	struct mbuf *m;
+	struct kthread *k = myk();
+
+	assert_preempt_disabled();
+
+	/* drain TX packets */
+	while (!mbufq_empty(&k->txpktq_overflow)) {
+		m = mbufq_peak_head(&k->txpktq_overflow);
+		shm = ptr_to_shmptr(&netcfg.tx_region,
+				    mbuf_data(m), mbuf_length(m));
+		if (!lrpc_send(&k->txpktq, TXPKT_NET_XMIT, shm))
+			break;
+		mbufq_pop_head(&k->txpktq_overflow);
+		if (unlikely(preempt_needed()))
+			return;
+	}
 }
 
 static void net_tx_raw(struct mbuf *m)
@@ -326,7 +311,8 @@ static void net_tx_raw(struct mbuf *m)
 
 	k = getk();
 	/* drain pending overflow packets first */
-	net_recurrent();
+	if (!mbufq_empty(&k->txpktq_overflow))
+		net_tx_drain_overflow();
 
 	STAT(TX_PACKETS)++;
 	STAT(TX_BYTES) += len;
