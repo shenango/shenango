@@ -390,7 +390,7 @@ void SteadyStateExperiment(int threads, double offered_rps,
     std::exponential_distribution<double> rd(
         1.0 / (1000000.0 / (offered_rps / static_cast<double>(threads))));
     std::exponential_distribution<double> wd(1.0 / service_time);
-    return GenerateWork(std::bind(rd, rg), std::bind(wd, dg), 0, 20000000);
+    return GenerateWork(std::bind(rd, rg), std::bind(wd, dg), 0, 2000000);
   });
 
   // Print the results.
@@ -420,8 +420,8 @@ void LoadShiftExperiment(int threads,
 }
 
 void ClientHandler(void *arg) {
-  LoadShiftExperiment(threads, rates, st);
-#if 0
+  //LoadShiftExperiment(threads, rates, st);
+#if 1
   for (double i = 50000; i <= 8000000; i += 50000) {
     SteadyStateExperiment(threads, i, st);
   }
