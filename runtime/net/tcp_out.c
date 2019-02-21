@@ -339,6 +339,9 @@ struct mbuf *tcp_tx_fast_retransmit_start(tcpconn_t *c)
 
 	assert_spin_lock_held(&c->lock);
 
+	if (c->tx_exclusive)
+		return NULL;
+
 	m = list_top(&c->txq, struct mbuf, link);
 	if (m) {
 		m->timestamp = microtime();

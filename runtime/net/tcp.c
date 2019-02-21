@@ -33,9 +33,11 @@ void tcp_timer_update(tcpconn_t *c)
 	if (c->ack_delayed)
 		next_timeout = min(next_timeout, c->ack_ts + TCP_ACK_TIMEOUT);
 
-	m = list_top(&c->txq, struct mbuf, link);
-	if (m)
-		next_timeout = min(next_timeout, m->timestamp + TCP_RETRANSMIT_TIMEOUT);
+	if (!c->tx_exclusive) {
+		m = list_top(&c->txq, struct mbuf, link);
+		if (m)
+			next_timeout = min(next_timeout, m->timestamp + TCP_RETRANSMIT_TIMEOUT);
+	}
 
 	if (!list_empty(&c->rxq_ooo))
 		next_timeout = min(next_timeout, microtime() + TCP_OOQ_ACK_TIMEOUT);
@@ -67,7 +69,7 @@ static void tcp_handle_timeouts(tcpconn_t *c, uint64_t now)
 		c->ack_delayed = false;
 		do_ack = true;
 	}
-	if (!list_empty(&c->txq)) {
+	if (!c->tx_exclusive && !list_empty(&c->txq)) {
 		struct mbuf *m = list_top(&c->txq, struct mbuf, link);
 		if (now - m->timestamp >= TCP_RETRANSMIT_TIMEOUT) {
 			log_debug("tcp: %p retransmission timeout", c);
