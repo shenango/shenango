@@ -51,11 +51,12 @@ where
 
     // Set return value.
     let d = unsafe { &mut *base.join_data.get() };
-    d.lock.lock();
+    d.lock.lock_np();
     d.data = Some(result);
 
     // If another thread called detach on this one, exit immediately.
     if d.done && d.waiter.is_null() {
+        preempt_enable();
         return;
     }
 
@@ -69,7 +70,7 @@ where
     // Don't exit until the parent thread calls join or detach.
     d.done = true;
     d.waiter = thread_self();
-    unsafe { ffi::thread_park_and_unlock(d.lock.as_raw()) };
+    unsafe { ffi::thread_park_and_unlock_np(d.lock.as_raw()) };
 }
 
 struct JoinData<T: Send + 'static> {
@@ -97,20 +98,21 @@ impl<T: Send + 'static> JoinHandle<T> {
         unsafe {
             let join_data = (&*self.join_data).get();
             self.join_data = ptr::null();
-            (&*join_data).lock.lock();
+            (&*join_data).lock.lock_np();
 
             // If the thread isn't done, block until it is.
             if !(&*join_data).done {
                 (&mut *join_data).done = true;
                 (&mut *join_data).waiter = thread_self();
-                ffi::thread_park_and_unlock((&*join_data).lock.as_raw());
-                (&*join_data).lock.lock();
+                ffi::thread_park_and_unlock_np((&*join_data).lock.as_raw());
+                (&*join_data).lock.lock_np();
             }
 
             // Extract the return value, and let the other thread exit.
             let data = (&mut *join_data).data.take().unwrap();
             assert!((&*join_data).waiter != ptr::null_mut());
             ffi::thread_ready((&*join_data).waiter);
+            preempt_enable();
             data
         }
     }
@@ -120,15 +122,15 @@ impl<T: Send + 'static> Drop for JoinHandle<T> {
         if !self.join_data.is_null() {
             let join_data: &mut JoinData<T> = unsafe { &mut *(&*self.join_data).get() };
 
-            join_data.lock.lock();
+            join_data.lock.lock_np();
             if join_data.done {
-                join_data.lock.unlock();
+                join_data.lock.unlock_np();
                 assert!(join_data.waiter != ptr::null_mut());
                 unsafe { ffi::thread_ready(join_data.waiter) };
             } else {
                 join_data.done = true;
                 join_data.waiter = ptr::null_mut();
-                join_data.lock.unlock();
+                join_data.lock.unlock_np();
             }
         }
     }

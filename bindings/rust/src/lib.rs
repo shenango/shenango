@@ -34,6 +34,25 @@ fn convert_error(ret: c_int) -> Result<(), i32> {
     }
 }
 
+#[inline]
+pub fn preempt_enable() {
+    unsafe {
+        asm!("" ::: "memory" : "volatile");
+        asm!("subl $$1, %fs:preempt_cnt@tpoff" : : : "memory", "cc" : "volatile");
+        if ffi::preempt_cnt == 0 {
+            ffi::preempt();
+        }
+    }
+}
+
+#[inline]
+pub fn preempt_disable() {
+    unsafe {
+        asm!("addl $$1, %fs:preempt_cnt@tpoff" : : : "memory", "cc" : "volatile");
+        asm!("" ::: "memory" : "volatile");
+    }
+}
+
 #[allow(unused)]
 pub(crate) fn base_init() -> Result<(), i32> {
     convert_error(unsafe { ffi::base_init() })
@@ -113,6 +132,18 @@ impl SpinLock {
     #[inline]
     fn as_raw(&self) -> *mut ffi::spinlock_t {
         self.inner.get()
+    }
+
+    #[inline]
+    pub fn lock_np(&self) {
+	preempt_disable();
+	self.lock();
+    }
+
+    #[inline]
+    pub fn unlock_np(&self) {
+	self.unlock();
+	preempt_enable();
     }
 
     #[inline]
