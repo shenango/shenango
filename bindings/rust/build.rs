@@ -6,7 +6,6 @@ use std::path::PathBuf;
 fn main() {
     // Tell cargo to tell rustc to link the library.
     println!("cargo:rustc-link-lib=static=base");
-    println!("cargo:rustc-link-lib=static=dune");
     println!("cargo:rustc-link-lib=static=net");
     println!("cargo:rustc-link-lib=static=runtime");
     println!("cargo:rustc-flags=-L ../..");

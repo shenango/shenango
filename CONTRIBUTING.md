@@ -11,8 +11,6 @@ bindings - language bindings (C++ and rust) for the runtime.
 dpdk - [DPDK](https://www.dpdk.org/) library for accessing NIC queues
 from userspace.
 
-dune - a better implementation of libdune based on the base library.
-
 iokernel - dedicated core that steers packets and reallocates cores
 across applications.
 

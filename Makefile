@@ -32,11 +32,6 @@ print-%  : ; @echo $* = $($*)
 base_src = $(wildcard base/*.c)
 base_obj = $(base_src:.c=.o)
 
-# libdune.a - the dune library
-dune_src = $(wildcard dune/*.c)
-dune_asm = $(wildcard dune/*.S)
-dune_obj = $(dune_src:.c=.o) $(dune_asm:.S=.o)
-
 #libnet.a - a packet/networking utility library
 net_src = $(wildcard net/*.c) $(wildcard net/ixgbe/*.c)
 net_obj = $(net_src:.c=.o)
@@ -76,12 +71,9 @@ DPDK_LIBS += -lrte_pmd_mlx4 -libverbs -lmlx4
 endif
 
 # must be first
-all: libbase.a libdune.a libnet.a libruntime.a iokerneld iokerneld-noht $(test_targets)
+all: libbase.a libnet.a libruntime.a iokerneld iokerneld-noht $(test_targets)
 
 libbase.a: $(base_obj)
-	$(AR) rcs $@ $^
-
-libdune.a: $(dune_obj)
 	$(AR) rcs $@ $^
 
 libnet.a: $(net_obj)
@@ -102,8 +94,8 @@ $(test_targets): $(test_obj) libbase.a libruntime.a libnet.a base/base.ld
 	$(LD) $(LDFLAGS) -o $@ $@.o libruntime.a libnet.a libbase.a -lpthread
 
 # general build rules for all targets
-src = $(base_src) $(dune_src) $(net_src) $(runtime_src) $(iokernel_src) $(test_src)
-asm = $(dune_asm) $(runtime_asm)
+src = $(base_src) $(net_src) $(runtime_src) $(iokernel_src) $(test_src)
+asm = $(runtime_asm)
 obj = $(src:.c=.o) $(asm:.S=.o) $(iokernel_src:.c=-noht.o)
 dep = $(obj:.o=.d)
 
@@ -132,5 +124,5 @@ sparse: $(src)
 
 .PHONY: clean
 clean:
-	rm -f $(obj) $(dep) libbase.a libdune.a libnet.a libruntime.a \
+	rm -f $(obj) $(dep) libbase.a libnet.a libruntime.a \
 	iokerneld iokerneld-noht $(test_targets)
