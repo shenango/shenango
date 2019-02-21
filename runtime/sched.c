@@ -503,13 +503,15 @@ void thread_yield(void)
 	/* check for softirqs */
 	softirq_run(RUNTIME_SOFTIRQ_BUDGET);
 
+	/* disable preemption before marking stack as busy */
+	k = getk();
+
 	assert(myth->state == THREAD_STATE_RUNNING);
 	myth->state = THREAD_STATE_SLEEPING;
 	store_release(&myth->stack_busy, true);
 	thread_ready(myth);
 
 	/* this will switch from the thread stack to the runtime stack */
-	k = getk();
 	spin_lock(&k->lock);
 	jmp_runtime(schedule);
 }
