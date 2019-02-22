@@ -383,22 +383,12 @@ void join_kthread(struct kthread *k)
 	}
 }
 
-/**
- * thread_park_and_unlock_np - puts a thread to sleep and unlocks when finished
- * and re-enables preemption
- * @l: this lock will be released when the thread state is fully saved
- */
-void thread_park_and_unlock_np(spinlock_t *l)
+static __always_inline void enter_schedule(thread_t *myth)
 {
-	thread_t *myth = thread_self(), *th;
 	struct kthread *k = myk();
+	thread_t *th;
 
 	assert_preempt_disabled();
-	assert(myth->state == THREAD_STATE_RUNNING);
-
-	myth->state = THREAD_STATE_SLEEPING;
-	myth->stack_busy = true;
-	spin_unlock(l);
 
 	spin_lock(&k->lock);
 
@@ -425,9 +415,56 @@ void thread_park_and_unlock_np(spinlock_t *l)
 	/* check for misuse of preemption disabling */
 	BUG_ON((preempt_cnt & ~PREEMPT_NOT_PENDING) != 1);
 
+	/* check if we're switching into the same thread as before */
+	if (unlikely(th == myth)) {
+		preempt_enable();
+		return;
+	}
+
 	/* switch stacks and enter the next thread */
 	STAT(RESCHEDULES)++;
 	jmp_thread_direct(myth, th);
+}
+
+/**
+ * thread_park_and_unlock_np - puts a thread to sleep, unlocks the lock @l,
+ * and schedules the next thread
+ * @l: the lock to be released
+ */
+void thread_park_and_unlock_np(spinlock_t *l)
+{
+	thread_t *myth = thread_self();
+
+	assert_preempt_disabled();
+	assert_spin_lock_held(l);
+	assert(myth->state == THREAD_STATE_RUNNING);
+
+	myth->state = THREAD_STATE_SLEEPING;
+	myth->stack_busy = true;
+	spin_unlock(l);
+
+	enter_schedule(myth);
+}
+
+/**
+ * thread_yield - yields the currently running thread
+ *
+ * Yielding will give other threads a chance to run.
+ */
+void thread_yield(void)
+{
+	thread_t *myth = thread_self();
+
+	/* check for softirqs */
+	softirq_run(RUNTIME_SOFTIRQ_BUDGET);
+
+	preempt_disable();
+	assert(myth->state == THREAD_STATE_RUNNING);
+	myth->state = THREAD_STATE_SLEEPING;
+	store_release(&myth->stack_busy, true);
+	thread_ready(myth);
+
+	enter_schedule(myth);
 }
 
 /**
@@ -488,32 +525,6 @@ void thread_yield_kthread(void)
 	/* this will switch from the thread stack to the runtime stack */
 	preempt_disable();
 	jmp_runtime(thread_finish_yield_kthread);
-}
-
-/**
- * thread_yield - yields the currently running thread
- *
- * Yielding will give other threads a chance to run.
- */
-void thread_yield(void)
-{
-	struct kthread *k;
-	thread_t *myth = thread_self();
-
-	/* check for softirqs */
-	softirq_run(RUNTIME_SOFTIRQ_BUDGET);
-
-	/* disable preemption before marking stack as busy */
-	k = getk();
-
-	assert(myth->state == THREAD_STATE_RUNNING);
-	myth->state = THREAD_STATE_SLEEPING;
-	store_release(&myth->stack_busy, true);
-	thread_ready(myth);
-
-	/* this will switch from the thread stack to the runtime stack */
-	spin_lock(&k->lock);
-	jmp_runtime(schedule);
 }
 
 static __always_inline thread_t *__thread_create(void)
