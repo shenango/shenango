@@ -1,4 +1,3 @@
-#![feature(duration_as_u128)]
 #![feature(integer_atomics)]
 #![feature(nll)]
 #![feature(test)]

@@ -38,7 +38,8 @@ static int commands_drain_queue(struct thread *t, struct rte_mbuf **bufs, int n)
 			/* notify another kthread if the park was involuntary */
 			if (cores_park_kthread(t, false) && payload != 0) {
 				bool success = rx_send_to_runtime(t->p, t->p->next_thread_rr++, RX_JOIN, payload);
-				STAT_INC(RX_JOIN_FAIL, !success);
+				if (unlikely(!success))
+					STAT_INC(RX_JOIN_FAIL, 1);
 			}
 			break;
 
