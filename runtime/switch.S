@@ -107,6 +107,9 @@ __jmp_thread_direct:
 	movq    %r14, R14(%rdi)
 	movq    %r15, R15(%rdi)
 
+	/* clear the stack busy flag */
+	movl	$0, (%rdx)
+
 	/* restore callee regs */
 	movq    RBX(%rsi), %rbx
 	movq    RBP(%rsi), %rbp
@@ -121,9 +124,6 @@ __jmp_thread_direct:
 
 	/* set first argument (in case new thread) */
 	movq    RDI(%rsi), %rdi /* ARG0 */
-
-	/* clear the stack busy flag */
-	movl	$0, (%rdx)
 
 	/* re-enable preemption */
 	subl	$1, %fs:preempt_cnt@tpoff
