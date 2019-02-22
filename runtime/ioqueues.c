@@ -28,7 +28,7 @@
 #define COMMAND_QUEUE_MCOUNT	4096
 /* the egress buffer pool must be large enough to fill all the TXQs entirely */
 #define EGRESS_POOL_SIZE(nks) \
-	(PACKET_QUEUE_MCOUNT * MBUF_DEFAULT_LEN * max(16, (nks)) * 32UL)
+	(PACKET_QUEUE_MCOUNT * MBUF_DEFAULT_LEN * max(16, (nks)) * 16UL)
 
 DEFINE_SPINLOCK(qlock);
 unsigned int nrqs = 0;
