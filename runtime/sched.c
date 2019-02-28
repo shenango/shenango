@@ -417,6 +417,7 @@ static __always_inline void enter_schedule(thread_t *myth)
 
 	/* check if we're switching into the same thread as before */
 	if (unlikely(th == myth)) {
+		th->state = THREAD_STATE_RUNNING;
 		preempt_enable();
 		return;
 	}
