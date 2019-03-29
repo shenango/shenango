@@ -418,6 +418,7 @@ static __always_inline void enter_schedule(thread_t *myth)
 	/* check if we're switching into the same thread as before */
 	if (unlikely(th == myth)) {
 		th->state = THREAD_STATE_RUNNING;
+		th->stack_busy = false;
 		preempt_enable();
 		return;
 	}
@@ -510,10 +511,12 @@ static void thread_finish_yield_kthread(void)
 
 	STAT(PROGRAM_CYCLES) += rdtsc() - last_tsc;
 
+	store_release(&k->rcu_gen, k->rcu_gen + 1);
 	spin_lock(&k->lock);
 	clear_preempt_needed();
 	kthread_park(false);
 	last_tsc = rdtsc();
+	store_release(&k->rcu_gen, k->rcu_gen + 1);
 
 	schedule();
 }
