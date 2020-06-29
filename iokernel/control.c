@@ -399,7 +399,7 @@ static void *control_thread(void *data)
 	int ret;
 
 	/* pin to our assigned core */
-	ret = cores_pin_thread(gettid(), core_assign.ctrl_core);
+	ret = cores_pin_thread(thread_gettid(), core_assign.ctrl_core);
 	if (ret < 0) {
 		log_err("control: failed to pin control thread to core %d",
 				core_assign.ctrl_core);

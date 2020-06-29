@@ -303,7 +303,7 @@ fail:
 int ioqueues_init_thread(void)
 {
 	int ret;
-	pid_t tid = gettid();
+	pid_t tid = thread_gettid();
 	struct shm_region *r = &netcfg.tx_region;
 
 	spin_lock(&qlock);
