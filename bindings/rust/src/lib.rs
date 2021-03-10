@@ -2,6 +2,7 @@
 #![allow(non_camel_case_types)]
 #![allow(non_snake_case)]
 #![feature(asm)]
+#![feature(llvm_asm)]
 #![feature(integer_atomics)]
 #![feature(thread_local)]
 
