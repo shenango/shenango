@@ -1,7 +1,6 @@
 #![allow(non_upper_case_globals)]
 #![allow(non_camel_case_types)]
 #![allow(non_snake_case)]
-#![feature(asm)]
 #![feature(llvm_asm)]
 #![feature(integer_atomics)]
 #![feature(thread_local)]
@@ -38,8 +37,8 @@ fn convert_error(ret: c_int) -> Result<(), i32> {
 #[inline]
 pub fn preempt_enable() {
     unsafe {
-        asm!("" ::: "memory" : "volatile");
-        asm!("subl $$1, %fs:preempt_cnt@tpoff" : : : "memory", "cc" : "volatile");
+        llvm_asm!("" ::: "memory" : "volatile");
+        llvm_asm!("subl $$1, %fs:preempt_cnt@tpoff" : : : "memory", "cc" : "volatile");
         if ffi::preempt_cnt == 0 {
             ffi::preempt();
         }
@@ -49,8 +48,8 @@ pub fn preempt_enable() {
 #[inline]
 pub fn preempt_disable() {
     unsafe {
-        asm!("addl $$1, %fs:preempt_cnt@tpoff" : : : "memory", "cc" : "volatile");
-        asm!("" ::: "memory" : "volatile");
+        llvm_asm!("addl $$1, %fs:preempt_cnt@tpoff" : : : "memory", "cc" : "volatile");
+        llvm_asm!("" ::: "memory" : "volatile");
     }
 }
 
