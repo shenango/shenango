@@ -5,6 +5,11 @@ simultaneously provide low tail latency and high CPU efficiency, by
 rapidly reallocating cores across applications, at timescales as small
 as every 5 microseconds.
 
+For similar behavior to Shenango but with higher throughput, see
+[Caladan](https://github.com/shenango/caladan), which builds on Shenango
+but enables higher throughput by moving the IOKernel off the datapath
+with [directpath](https://github.com/shenango/caladan#directpath).
+
 ## How to Run Shenango
 
 1) Clone the Shenango repository.
