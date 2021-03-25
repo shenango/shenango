@@ -86,12 +86,12 @@ static bool rx_send_pkt_to_runtime(struct proc *p, struct rx_net_hdr *hdr)
 
 static void rx_one_pkt(struct rte_mbuf *buf)
 {
-	struct ether_hdr *ptr_mac_hdr;
-	struct ether_addr *ptr_dst_addr;
+	struct rte_ether_hdr *ptr_mac_hdr;
+	struct rte_ether_addr *ptr_dst_addr;
 	struct rx_net_hdr *net_hdr;
 	int i, ret;
 
-	ptr_mac_hdr = rte_pktmbuf_mtod(buf, struct ether_hdr *);
+	ptr_mac_hdr = rte_pktmbuf_mtod(buf, struct rte_ether_hdr *);
 	ptr_dst_addr = &ptr_mac_hdr->d_addr;
 	log_debug("rx: rx packet with MAC %02" PRIx8 " %02" PRIx8 " %02"
 		  PRIx8 " %02" PRIx8 " %02" PRIx8 " %02" PRIx8,
@@ -100,7 +100,7 @@ static void rx_one_pkt(struct rte_mbuf *buf)
 		  ptr_dst_addr->addr_bytes[4], ptr_dst_addr->addr_bytes[5]);
 
 	/* handle unicast destinations (send to a single runtime) */
-	if (likely(is_unicast_ether_addr(ptr_dst_addr))) {
+	if (likely(rte_is_unicast_ether_addr(ptr_dst_addr))) {
 		void *data;
 		struct proc *p;
 
@@ -125,7 +125,7 @@ static void rx_one_pkt(struct rte_mbuf *buf)
 	}
 
 	/* handle broadcast destinations (send to all runtimes) */
-	if (is_broadcast_ether_addr(ptr_dst_addr) && dp.nr_clients > 0) {
+	if (rte_is_broadcast_ether_addr(ptr_dst_addr) && dp.nr_clients > 0) {
 		bool success;
 		int n_sent = 0;
 
