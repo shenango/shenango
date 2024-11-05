@@ -1,3 +1,6 @@
+### ⚠️ This repository is no longer maintained. ⚠️
+Please visit [Caladan](https://github.com/shenango/caladan) for the latest updates to this code, which include support for higher throughput networking, core allocation and uthread time slicing with user interrupts, support for scaling to many applications, and mitigations for microarchitectural interference.
+
 # Shenango
 
 Shenango is a system that enables servers in datacenters to
